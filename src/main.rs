@@ -68,6 +68,10 @@ enum Cmd {
         /// Create a Zeron project for a cwd that has none (else: "No project")
         #[arg(long)]
         create_project: bool,
+        /// Re-import sessions already linked to a chat: delete that chat
+        /// (including anything added in Zeron since) and import again
+        #[arg(long)]
+        replace: bool,
         #[command(flatten)]
         write: WriteOpts,
     },
@@ -111,11 +115,11 @@ enum Harness {
 }
 
 impl Harness {
-    fn source(self) -> Source {
-        match self {
+    fn source(self) -> Result<Source> {
+        Ok(match self {
             Self::Pi => Source::pi(),
-            Self::Codex => Source::codex(),
-        }
+            Self::Codex => Source::codex()?,
+        })
     }
 }
 
@@ -141,7 +145,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Cmd::Sessions { harness, all } => {
             let profile = open(false)?;
-            let source = harness.source();
+            let source = harness.source()?;
             let linked: HashMap<String, String> = profile
                 .chats()?
                 .into_iter()
@@ -190,29 +194,40 @@ async fn main() -> Result<()> {
             sessions,
             title,
             create_project,
+            replace,
             write,
         } => {
             if title.is_some() && sessions.len() > 1 {
                 bail!("--title needs exactly one session; use `rename` for batches");
             }
-            let source = harness.source();
+            let source = harness.source()?;
             let files = resolve_sessions(&source, &sessions)?;
             let mut profile = open(!write.dry_run)?;
             backup(&profile, &data_dir, &write)?;
             let mut failed = 0;
             for file in files {
                 let result = source.parse(&file).and_then(|session| {
+                    let linked = profile.linked_chat(&session.id)?;
+                    if let Some(chat) = &linked
+                        && !replace
+                    {
+                        bail!("already linked to chat {} (use --replace to re-import)", chat.id);
+                    }
                     if write.dry_run {
-                        if let Some(chat) = profile.linked_chat(&session.id)? {
-                            bail!("already linked to chat {}", chat.id);
-                        }
                         println!(
-                            "would import {}  {} messages  {}",
+                            "would import {}  {} messages  {}{}",
                             short_id(&session.id),
                             session.messages.len(),
-                            short_path(&session.cwd)
+                            short_path(&session.cwd),
+                            linked
+                                .map(|c| format!("  (replacing chat {})", short_id(&c.id)))
+                                .unwrap_or_default()
                         );
                         return Ok(());
+                    }
+                    if let Some(chat) = linked {
+                        profile.delete_chat(&chat.id)?;
+                        println!("deleted chat {} (replacing it)", chat.id);
                     }
                     let done = profile.import(&session, title.as_deref(), create_project)?;
                     // Persist per session so a later failure keeps earlier imports.

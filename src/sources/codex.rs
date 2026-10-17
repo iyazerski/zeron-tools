@@ -1,5 +1,9 @@
 //! Codex rollout files: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl`
-//! (archived threads move flat into `archived_sessions/`).
+//! (archived threads move flat into `archived_sessions/`). A long thread
+//! continues in segment files, `rollout-<ts>-<id>_<segment>.jsonl`, each with
+//! its own `session_meta` (same thread id, plus a `history_base` pointing at
+//! the previous segment) and only new lines; a thread is all of them in
+//! name order.
 //!
 //! Every line is `{timestamp, type, payload}`. The first is `session_meta`;
 //! the transcript comes from `event_msg` / `item_completed` payloads, whose
@@ -64,10 +68,26 @@ fn is_rollout(path: &Path) -> bool {
             .is_some_and(|n| n.starts_with("rollout-"))
 }
 
-/// The thread id a rollout file name ends with.
+/// The thread id in a rollout file name: `rollout-<19-char timestamp>-<id>`,
+/// optionally followed by `_<segment>`.
 pub fn file_id(path: &Path) -> Option<&str> {
-    let stem = path.file_stem()?.to_str()?;
-    stem.get(stem.len().checked_sub(36)?..)
+    let rest = path.file_stem()?.to_str()?.strip_prefix("rollout-")?;
+    rest.get(20..56)
+}
+
+/// Group rollout files by thread, each group in segment (name) order, groups
+/// ordered by their first file.
+pub fn threads(files: Vec<PathBuf>) -> HashMap<String, Vec<PathBuf>> {
+    let mut threads: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for file in files {
+        if let Some(id) = file_id(&file).map(str::to_owned) {
+            threads.entry(id).or_default().push(file);
+        }
+    }
+    for segments in threads.values_mut() {
+        segments.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    }
+    threads
 }
 
 /// Codex's generated thread names (`session_index.jsonl`, last entry wins).
@@ -99,32 +119,44 @@ fn hidden_reason(meta: &Value) -> Option<String> {
     (s(meta, "originator") == "zeron-native").then(|| "zeron leftover".into())
 }
 
-/// Read only what a listing needs (one pass, parsing only the lines it uses).
-pub fn summarize(path: &Path, names: &HashMap<String, String>) -> Result<SessionSummary> {
-    let reader = BufReader::new(
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?,
-    );
-    let mut lines = reader.lines();
-    let meta: Value = serde_json::from_str(&lines.next().context("empty rollout")??)?;
-    if meta["type"] != "session_meta" {
-        bail!("not a Codex rollout (no session_meta first)");
-    }
-    let meta = &meta["payload"];
+/// Read only what a listing needs from a thread's segments (one pass,
+/// parsing only the lines it uses).
+pub fn summarize(segments: &[PathBuf], names: &HashMap<String, String>) -> Result<SessionSummary> {
+    let path = segments.first().context("no rollout files")?;
+    let mut meta = Value::Null;
     let mut user_messages = 0;
     let mut first_user = String::new();
-    for line in lines {
-        let line = line?;
-        // Cheap substring gate before parsing: rollouts run to hundreds of MB.
-        if !line.contains(r#""item":{"type":"UserMessage""#) {
-            continue;
+    for (i, segment) in segments.iter().enumerate() {
+        let reader = BufReader::new(
+            std::fs::File::open(segment)
+                .with_context(|| format!("opening {}", segment.display()))?,
+        );
+        let mut lines = reader.lines();
+        let head: Value = serde_json::from_str(&lines.next().context("empty rollout")??)?;
+        if head["type"] != "session_meta" {
+            bail!(
+                "{} is not a Codex rollout (no session_meta first)",
+                segment.display()
+            );
         }
-        user_messages += 1;
-        if first_user.is_empty()
-            && let Ok(e) = serde_json::from_str::<Value>(&line)
-        {
-            first_user = user_text(&e["payload"]["item"]);
+        if i == 0 {
+            meta = head["payload"].clone();
+        }
+        for line in lines {
+            let line = line?;
+            // Cheap substring gate before parsing: rollouts run to hundreds of MB.
+            if !line.contains(r#""item":{"type":"UserMessage""#) {
+                continue;
+            }
+            user_messages += 1;
+            if first_user.is_empty()
+                && let Ok(e) = serde_json::from_str::<Value>(&line)
+            {
+                first_user = user_text(&e["payload"]["item"]);
+            }
         }
     }
+    let meta = &meta;
     let id = s(meta, "id").to_owned();
     Ok(SessionSummary {
         cwd: s(meta, "cwd").into(),
@@ -147,15 +179,33 @@ fn is_archived(path: &Path) -> bool {
         .any(|c| c.as_os_str() == "archived_sessions")
 }
 
-/// Parse a rollout into a [`Session`].
-pub fn parse(path: &Path, names: &HashMap<String, String>) -> Result<Session> {
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut lines = raw
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
-    let meta = lines.next().filter(|m| m["type"] == "session_meta");
+/// Parse a thread's segments into a [`Session`].
+pub fn parse(segments: &[PathBuf], names: &HashMap<String, String>) -> Result<Session> {
+    let path = segments.first().context("no rollout files")?;
+    let mut raws = vec![];
+    for segment in segments {
+        raws.push(
+            std::fs::read_to_string(segment)
+                .with_context(|| format!("reading {}", segment.display()))?,
+        );
+    }
+    let mut metas = raws.iter().map(|raw| {
+        raw.lines()
+            .next()
+            .and_then(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|m| m["type"] == "session_meta")
+    });
+    let meta = metas.next().flatten();
     let meta = &meta.context("not a Codex rollout (no session_meta first)")?["payload"];
+    if metas.any(|m| m.is_none()) {
+        bail!("a segment of {} has no session_meta", path.display());
+    }
+    // Each segment repeats session_meta as its first line; the rest continues.
+    let lines = raws.iter().flat_map(|raw| {
+        raw.lines()
+            .skip(1)
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+    });
     let id = s(meta, "id").to_owned();
     // Threads on other providers (deepseek, proxied anthropic/… ids) can't run
     // on Zeron's Codex as-is; leave the model unset so Zeron picks its default.
@@ -542,10 +592,17 @@ fn ms(v: &Value) -> Option<i64> {
 mod tests {
     use super::*;
 
-    fn fixture() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "tests/fixtures/rollout-2026-09-28T10-00-00-01a0bbbb-0000-7000-8000-000000000002.jsonl",
-        )
+    const ID: &str = "01a0bbbb-0000-7000-8000-000000000002";
+
+    /// The fixture thread: a first rollout plus one continuation segment.
+    fn fixture() -> Vec<PathBuf> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let files = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| is_rollout(p))
+            .collect();
+        threads(files).remove(ID).unwrap()
     }
 
     fn names() -> HashMap<String, String> {
@@ -557,9 +614,11 @@ mod tests {
 
     #[test]
     fn parses_turns_requests_and_settings() {
-        let session = parse(&fixture(), &names()).unwrap();
-        assert_eq!(session.id, "01a0bbbb-0000-7000-8000-000000000002");
-        assert_eq!(file_id(&fixture()), Some(session.id.as_str()));
+        let segments = fixture();
+        assert_eq!(segments.len(), 2);
+        assert!(segments.iter().all(|s| file_id(s) == Some(ID)));
+        let session = parse(&segments, &names()).unwrap();
+        assert_eq!(session.id, ID);
         assert_eq!(session.name.as_deref(), Some("Fixture Thread"));
         assert_eq!(session.model.as_deref(), Some("gpt-6-sol"));
         assert_eq!(session.reasoning, Some(zeron_proto::ReasoningLevel::High));
@@ -570,6 +629,8 @@ mod tests {
                 MessageRole::User,
                 MessageRole::Assistant,
                 MessageRole::User,
+                MessageRole::Assistant,
+                MessageRole::User,
                 MessageRole::Assistant
             ]
         );
@@ -577,6 +638,11 @@ mod tests {
         assert_eq!(session.messages[0].text(), "Fix the login bug\n[image]");
         assert_eq!(session.messages[2].text(), "Thanks");
         assert!(session.messages[3].aborted);
+        // The continuation segment's turn follows, without a repeated header.
+        assert_eq!(session.messages[4].text(), "One more thing");
+        assert_eq!(session.messages[5].text(), "Sure.\n\n");
+        let summary = summarize(&segments, &names()).unwrap();
+        assert_eq!((summary.user_messages, summary.id.as_str()), (3, ID));
     }
 
     #[test]

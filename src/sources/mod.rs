@@ -78,8 +78,9 @@ pub enum Source {
         agent_dir: PathBuf,
     },
     Codex {
-        home: PathBuf,
         names: HashMap<String, String>,
+        /// Thread id → its rollout segments, in order.
+        threads: HashMap<String, Vec<PathBuf>>,
     },
 }
 
@@ -92,17 +93,35 @@ impl Source {
     }
 
     /// Open the Codex store at `CODEX_HOME` or `~/.codex`.
-    pub fn codex() -> Self {
+    pub fn codex() -> Result<Self> {
         let home = codex::codex_home();
-        let names = codex::thread_names(&home);
-        Self::Codex { home, names }
+        Ok(Self::Codex {
+            names: codex::thread_names(&home),
+            threads: codex::threads(codex::session_files(&home)?),
+        })
     }
 
+    /// One file per session (a Codex thread's first segment), oldest first.
     pub fn files(&self) -> Result<Vec<PathBuf>> {
         match self {
             Self::Pi { agent_dir } => pi::session_files(agent_dir),
-            Self::Codex { home, .. } => codex::session_files(home),
+            Self::Codex { threads, .. } => {
+                let mut files: Vec<PathBuf> = threads
+                    .values()
+                    .filter_map(|s| s.first().cloned())
+                    .collect();
+                files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+                Ok(files)
+            }
         }
+    }
+
+    /// All files of the session `path` belongs to.
+    fn segments(threads: &HashMap<String, Vec<PathBuf>>, path: &Path) -> Vec<PathBuf> {
+        codex::file_id(path)
+            .and_then(|id| threads.get(id))
+            .cloned()
+            .unwrap_or_else(|| vec![path.to_path_buf()])
     }
 
     /// The session id encoded in a session file's name.
@@ -116,14 +135,16 @@ impl Source {
     pub fn summarize(&self, path: &Path) -> Result<SessionSummary> {
         match self {
             Self::Pi { agent_dir } => pi::summarize(agent_dir, path),
-            Self::Codex { names, .. } => codex::summarize(path, names),
+            Self::Codex { names, threads } => {
+                codex::summarize(&Self::segments(threads, path), names)
+            }
         }
     }
 
     pub fn parse(&self, path: &Path) -> Result<Session> {
         match self {
             Self::Pi { .. } => pi::parse(path),
-            Self::Codex { names, .. } => codex::parse(path, names),
+            Self::Codex { names, threads } => codex::parse(&Self::segments(threads, path), names),
         }
     }
 }

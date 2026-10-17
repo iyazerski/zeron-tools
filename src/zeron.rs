@@ -312,6 +312,21 @@ impl Profile {
             .map(|s| s.catalog.into_iter().map(|m| m.id).collect())
     }
 
+    /// Delete a chat: its registry row (a tombstone, like Zeron's own delete)
+    /// and, unlike Zeron, its transcript doc, so nothing is left behind.
+    pub fn delete_chat(&mut self, chat_id: &str) -> Result<()> {
+        if self.lock.is_none() {
+            bail!("profile was opened read-only");
+        }
+        self.registry.delete_chat(chat_id)?;
+        // Persist the tombstone first: a dangling doc is harmless, a row
+        // without its doc is not.
+        self.dirty = true;
+        self.save()?;
+        self.store.delete_snapshot(chat_id)?;
+        Ok(())
+    }
+
     pub fn rename(&mut self, chat_id: &str, title: &str) -> Result<bool> {
         let renamed = self.registry.rename_chat(chat_id, title)?;
         self.dirty |= renamed;
@@ -472,6 +487,25 @@ mod tests {
             profile.transcript(&chat_id).unwrap().len(),
             session.messages.len()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deleted_chats_free_their_session_for_reimport() {
+        let dir = data_dir(ZERON_VERSION);
+        let mut profile = open(dir.path(), true).unwrap();
+        let old = profile.import(&fixture(), None, false).unwrap().chat_id;
+        profile.delete_chat(&old).unwrap();
+        assert!(profile.linked_chat(&fixture().id).unwrap().is_none());
+        assert!(
+            profile.transcript(&old).unwrap().is_empty(),
+            "doc removed too"
+        );
+        let new = profile.import(&fixture(), None, false).unwrap().chat_id;
+        profile.save().unwrap();
+        drop(profile);
+        let profile = open(dir.path(), false).unwrap();
+        let ids: Vec<_> = profile.chats().unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, [new]);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 publish = false
 description = "Offline maintenance tools for Zeron: import harness sessions, rename chats"

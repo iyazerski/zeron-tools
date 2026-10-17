@@ -40,4 +40,5 @@ open -a Zeron
 - **Titles:** imported chats keep the harness's own name for the session (Codex's thread name, or the pi session name). Chats without one stay untitled until you run `rename --untitled`.
 - **Models:** if Zeron no longer offers a session's model, the chat uses Zeron's default model, and `import` prints a note.
 - **Missing folders:** sessions whose folder is gone are tagged `[cwd missing]`. They still import, but can't resume until the folder exists again.
+- **Re-import:** `import --replace` deletes the chat already linked to a session and imports it again, including anything added in Zeron since.
 - **Rename:** `rename` needs the `codex` CLI, logged in. Defaults: `--model gpt-6-luna --reasoning low`. Set `CODEX_BIN` or pass `--codex` if `codex` isn't on `PATH`.

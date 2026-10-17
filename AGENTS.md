@@ -24,7 +24,7 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
 - `src/zeron.rs`: profile access (lock, version check, backup, import, rename). It has no harness knowledge.
 - `src/sources/`: one reader per harness, each producing a harness-neutral `Session`. `Source` in `mod.rs` dispatches to them.
   - `pi.rs`: `~/.pi/agent/sessions/*/*.jsonl`, active branch via `parentId`. Mirrors `crates/harness/src/pi/normalize.rs`.
-  - `codex.rs`: `~/.codex/sessions/**/rollout-*.jsonl` and `archived_sessions/`. It reads `event_msg`/`item_completed` items (Codex core `TurnItem`s: PascalCase types, snake_case fields) and mirrors `crates/harness/src/codex/normalize.rs::map_item`, which reads the app-server spelling of the same items. It also strips Codex Desktop's injected prompt context and takes names from `session_index.jsonl`. Subagent, `exec`, empty and Zeron-originated threads are hidden from `sessions`.
+  - `codex.rs`: `~/.codex/sessions/**/rollout-*.jsonl` and `archived_sessions/`. A long thread continues in `rollout-<ts>-<id>_<segment>.jsonl` files; `threads()` groups them by the id in the name and they are read in order. It reads `event_msg`/`item_completed` items (Codex core `TurnItem`s: PascalCase types, snake_case fields) and mirrors `crates/harness/src/codex/normalize.rs::map_item`, which reads the app-server spelling of the same items. It also strips Codex Desktop's injected prompt context and takes names from `session_index.jsonl`. Subagent, `exec`, empty and Zeron-originated threads are hidden from `sessions`.
 - `src/rename.rs`: transcript excerpts, the Codex call, and output parsing.
 - `src/main.rs`: the CLI.
 - Tests: unit tests next to the code; fixtures in `tests/fixtures/`.
