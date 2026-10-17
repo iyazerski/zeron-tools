@@ -6,6 +6,7 @@ pub mod pi;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::Result;
 
@@ -103,6 +104,28 @@ impl Source {
             names: codex::thread_names(&home),
             threads: codex::threads(codex::session_files(&home)?),
         })
+    }
+
+    /// The store behind a Zeron harness, if zeron-tools can read it.
+    pub fn for_harness(harness: HarnessId) -> Result<Option<Self>> {
+        Ok(match harness {
+            HarnessId::Pi => Some(Self::pi()),
+            HarnessId::Codex => Some(Self::codex()?),
+            _ => None,
+        })
+    }
+
+    /// When the session at `path` was last written (a Codex thread's newest
+    /// segment).
+    pub fn modified(&self, path: &Path) -> Option<SystemTime> {
+        let files = match self {
+            Self::Pi { .. } => vec![path.to_path_buf()],
+            Self::Codex { threads, .. } => Self::segments(threads, path),
+        };
+        files
+            .iter()
+            .filter_map(|f| f.metadata().and_then(|m| m.modified()).ok())
+            .max()
     }
 
     /// One file per session (a Codex thread's first segment), oldest first.

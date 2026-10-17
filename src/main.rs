@@ -1,11 +1,13 @@
 //! zeron-tools: offline maintenance for a local Zeron profile.
 //!
 //! Commands that write require Zeron to be quit (Cmd+Q); they take Zeron's
-//! instance lock and back up `docs.sqlite3` first.
+//! instance lock and back up `docs.sqlite3` first. Each command's logic lives
+//! in its module's `run`; `sync` chains them under one lock and one backup.
 
 mod archive;
 mod delete;
 mod export;
+mod import;
 mod rename;
 mod sources;
 mod zeron;
@@ -16,12 +18,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use zeron_proto::HarnessId;
 
 use crate::export::{ExportedChat, Format};
-use crate::rename::{Codex, Excerpt};
+use crate::import::Projects;
+use crate::rename::Pi;
 use crate::sources::Source;
 use crate::zeron::Profile;
-use zeron_proto::HarnessId;
 
 #[derive(Parser)]
 #[command(
@@ -51,6 +54,35 @@ struct Global {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Keep Zeron in sync: delete orphaned sessions, import new pi and Codex
+    /// sessions, title untitled chats, and archive old ones
+    ///
+    /// Imports skip sessions whose folder is gone or excluded, and sessions
+    /// active in the last hour (they may still be running). A project is
+    /// created for a new folder only if it is a git repository root.
+    Sync {
+        /// Keep this many most recently active chats per project in the sidebar
+        #[arg(long, default_value_t = 10)]
+        keep: usize,
+        /// Don't import sessions in these folders (Codex's scratch chats and
+        /// temp folders by default)
+        #[arg(
+            long,
+            value_name = "DIR",
+            default_values = ["~/Documents/Codex", "/tmp", "/private/tmp", "/private/var/folders"]
+        )]
+        exclude: Vec<String>,
+        /// Leave untitled chats as they are
+        #[arg(long)]
+        no_rename: bool,
+        #[command(flatten)]
+        pi: PiOpts,
+        /// Codex binary (for `codex delete`)
+        #[arg(long, env = "CODEX_BIN", default_value = "codex")]
+        codex: PathBuf,
+        #[command(flatten)]
+        write: WriteOpts,
+    },
     /// List harness sessions not yet in Zeron (started by other tools)
     Sessions {
         #[arg(value_enum)]
@@ -77,6 +109,22 @@ enum Cmd {
         /// (including anything added in Zeron since) and import again
         #[arg(long)]
         replace: bool,
+        #[command(flatten)]
+        write: WriteOpts,
+    },
+    /// Title chats with a small model through pi
+    Rename {
+        /// Chat ids or id prefixes
+        #[arg(long = "chat", value_name = "ID")]
+        chats: Vec<String>,
+        /// Every chat without a title
+        #[arg(long)]
+        untitled: bool,
+        /// Every chat (archived ones too)
+        #[arg(long, conflicts_with_all = ["chats", "untitled"])]
+        all: bool,
+        #[command(flatten)]
+        pi: PiOpts,
         #[command(flatten)]
         write: WriteOpts,
     },
@@ -162,27 +210,6 @@ enum Cmd {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
-    /// Retitle chats with a Codex model
-    Rename {
-        /// Chat ids or id prefixes
-        #[arg(long = "chat", value_name = "ID")]
-        chats: Vec<String>,
-        /// Every chat without a title
-        #[arg(long)]
-        untitled: bool,
-        /// Every chat (archived ones too)
-        #[arg(long, conflicts_with_all = ["chats", "untitled"])]
-        all: bool,
-        #[arg(long, default_value = "gpt-6-luna")]
-        model: String,
-        #[arg(long, default_value = "low")]
-        reasoning: String,
-        /// Codex binary
-        #[arg(long, env = "CODEX_BIN", default_value = "codex")]
-        codex: PathBuf,
-        #[command(flatten)]
-        write: WriteOpts,
-    },
 }
 
 #[derive(Args)]
@@ -193,6 +220,30 @@ struct WriteOpts {
     /// Skip the docs.sqlite3 backup
     #[arg(long)]
     no_backup: bool,
+}
+
+/// The model that writes titles.
+#[derive(Args)]
+struct PiOpts {
+    /// Title model, as `provider/model` from `pi --list-models`
+    #[arg(long, default_value = "openai-codex/gpt-6-luna")]
+    model: String,
+    /// Thinking level for the title model
+    #[arg(long, default_value = "low")]
+    thinking: String,
+    /// Pi binary
+    #[arg(long, env = "PI_BIN", default_value = "pi")]
+    pi: PathBuf,
+}
+
+impl PiOpts {
+    fn pi(self) -> Pi {
+        Pi {
+            binary: self.pi,
+            model: self.model,
+            thinking: self.thinking,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -208,6 +259,13 @@ impl Harness {
             Self::Codex => Source::codex()?,
         })
     }
+}
+
+/// What a step did: items done, and failures it reported and kept going past.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Tally {
+    pub done: usize,
+    pub failed: usize,
 }
 
 pub(crate) fn home() -> PathBuf {
@@ -229,7 +287,78 @@ async fn main() -> Result<()> {
     let profile_dir = data_dir.join("profiles").join(&cli.global.profile);
     let open =
         |write: bool| Profile::open(&data_dir, &profile_dir, write, cli.global.ignore_version);
-    match cli.command {
+    let failed = match cli.command {
+        Cmd::Sync {
+            keep,
+            exclude,
+            no_rename,
+            pi,
+            codex,
+            write,
+        } => {
+            let mut profile = open(!write.dry_run)?;
+            backup(&profile, &data_dir, &write)?;
+            let exclude: Vec<PathBuf> = exclude.iter().map(|e| expand_tilde(e)).collect();
+            let mut failed = 0;
+            // A failing step is reported; the others still run.
+            let mut step = |name: &str, result: Result<Tally>| match result {
+                Ok(t) => {
+                    eprintln!("{name}: {} done{}", t.done, failures(t.failed));
+                    failed += t.failed;
+                }
+                Err(e) => {
+                    eprintln!("{name} FAILED: {e:#}");
+                    failed += 1;
+                }
+            };
+            eprintln!("== Deleting orphaned sessions");
+            let delete = delete::Opts {
+                chats: &[],
+                unfinished: false,
+                orphaned: true,
+                keep: &[],
+                zeron_only: false,
+                codex: &codex,
+                dry_run: write.dry_run,
+            };
+            step("orphans", delete::run(&mut profile, &delete));
+            for harness in [Harness::Pi, Harness::Codex] {
+                let name = match harness {
+                    Harness::Pi => "pi",
+                    Harness::Codex => "codex",
+                };
+                eprintln!("== Importing new {name} sessions");
+                let opts = import::Opts {
+                    title: None,
+                    projects: Projects::GitRoots,
+                    replace: false,
+                    dry_run: write.dry_run,
+                };
+                let result = harness.source().and_then(|source| {
+                    let files = import::pending(&profile, &source, &exclude)?;
+                    Ok(import::run(&mut profile, &source, &files, &opts))
+                });
+                step(&format!("{name} import"), result);
+            }
+            if !no_rename {
+                eprintln!("== Titling untitled chats");
+                let selection = rename::Selection {
+                    chats: &[],
+                    untitled: true,
+                    all: false,
+                };
+                step(
+                    "titles",
+                    rename::run(&mut profile, selection, &pi.pi(), write.dry_run),
+                );
+            }
+            eprintln!("== Archiving old chats");
+            step(
+                "archive",
+                archive::run(&mut profile, keep, None, None, write.dry_run),
+            );
+            failed
+        }
         Cmd::Sessions { harness, all } => {
             let profile = open(false)?;
             let source = harness.source()?;
@@ -275,6 +404,7 @@ async fn main() -> Result<()> {
                     tags.iter().map(|t| format!("  [{t}]")).collect::<String>(),
                 );
             }
+            0
         }
         Cmd::Import {
             harness,
@@ -291,62 +421,33 @@ async fn main() -> Result<()> {
             let files = resolve_sessions(&source, &sessions)?;
             let mut profile = open(!write.dry_run)?;
             backup(&profile, &data_dir, &write)?;
-            let mut failed = 0;
-            for file in files {
-                let result = source.parse(&file).and_then(|session| {
-                    let linked = profile.linked_chat(&session.id)?;
-                    if let Some(chat) = &linked
-                        && !replace
-                    {
-                        bail!("already linked to chat {} (use --replace to re-import)", chat.id);
-                    }
-                    if write.dry_run {
-                        println!(
-                            "would import {}  {} messages  {}{}",
-                            short_id(&session.id),
-                            session.messages.len(),
-                            short_path(&session.cwd),
-                            linked
-                                .map(|c| format!("  (replacing chat {})", short_id(&c.id)))
-                                .unwrap_or_default()
-                        );
-                        return Ok(());
-                    }
-                    if let Some(chat) = linked {
-                        profile.delete_chat(&chat.id)?;
-                        println!("deleted chat {} (replacing it)", chat.id);
-                    }
-                    let done = profile.import(&session, title.as_deref(), create_project)?;
-                    // Persist per session so a later failure keeps earlier imports.
-                    profile.save()?;
-                    println!(
-                        "imported {} -> chat {}  {} messages  {}{}",
-                        short_id(&session.id),
-                        done.chat_id,
-                        done.messages,
-                        short_path(&session.cwd),
-                        match (&done.space_id, done.created_space) {
-                            (_, true) => " (new project)",
-                            (None, _) => " (no project)",
-                            _ => "",
-                        }
-                    );
-                    if done.cwd_missing {
-                        println!("  note: {} is missing; the chat can't resume until it exists", short_path(&session.cwd));
-                    }
-                    if let Some(model) = done.dropped_model {
-                        println!("  note: Zeron no longer offers {model}; the chat uses Zeron's default model");
-                    }
-                    Ok(())
-                });
-                if let Err(e) = result {
-                    failed += 1;
-                    eprintln!("FAIL {}: {e:#}", file.display());
-                }
-            }
-            if failed > 0 {
-                bail!("{failed} session(s) failed");
-            }
+            let opts = import::Opts {
+                title: title.as_deref(),
+                projects: if create_project {
+                    Projects::Always
+                } else {
+                    Projects::Never
+                },
+                replace,
+                dry_run: write.dry_run,
+            };
+            import::run(&mut profile, &source, &files, &opts).failed
+        }
+        Cmd::Rename {
+            chats,
+            untitled,
+            all,
+            pi,
+            write,
+        } => {
+            let mut profile = open(!write.dry_run)?;
+            backup(&profile, &data_dir, &write)?;
+            let selection = rename::Selection {
+                chats: &chats,
+                untitled,
+                all,
+            };
+            rename::run(&mut profile, selection, &pi.pi(), write.dry_run)?.failed
         }
         Cmd::Delete {
             chats,
@@ -357,161 +458,21 @@ async fn main() -> Result<()> {
             codex,
             write,
         } => {
-            if chats.is_empty() && !unfinished && !orphaned {
-                bail!("pick chats with --chat, --unfinished, or --orphaned");
-            }
             // Even --orphaned needs Zeron quit: a running Zeron may not have
             // saved the row of a chat it just created, so its session would
             // look orphaned.
             let mut profile = open(!write.dry_run)?;
-            let every = profile.chats()?;
-            let spaces = profile.spaces()?;
-            let kept = |id: &str| keep.iter().any(|k| id.starts_with(k.as_str()));
-            // Chosen chats with why, in sidebar-independent creation order.
-            let mut doomed: Vec<(&zeron_proto::Chat, String)> = vec![];
-            for prefix in &chats {
-                let chat = find_chat(&every, prefix)?;
-                doomed.push((chat, "picked".into()));
-            }
-            if unfinished {
-                for chat in &every {
-                    if doomed.iter().any(|(c, _)| c.id == chat.id) {
-                        continue;
-                    }
-                    if let Some(u) = delete::unfinished(&profile.transcript(&chat.id)?) {
-                        let prompts = if u.prompts == 1 { "prompt" } else { "prompts" };
-                        doomed.push((chat, format!("{} {prompts}, {}", u.prompts, u.outcome)));
-                    }
-                }
-            }
-            doomed.retain(|(c, _)| {
-                !kept(&c.id) && !c.harness_session_id.as_deref().is_some_and(kept)
-            });
-            doomed.sort_by_key(|(c, _)| c.created_at);
-            let doomed_ids: HashSet<&str> = doomed.iter().map(|(c, _)| c.id.as_str()).collect();
-            // Sessions chats outside this run still resume: never delete those.
-            let resumed: HashSet<&str> = every
-                .iter()
-                .filter(|c| !doomed_ids.contains(c.id.as_str()))
-                .filter_map(|c| c.harness_session_id.as_deref())
-                .collect();
-            // Open only the stores this run touches (Codex lists every rollout).
-            let mut sources: HashMap<HarnessId, Source> = HashMap::new();
-            for (id, harness) in [
-                (HarnessId::Pi, Harness::Pi),
-                (HarnessId::Codex, Harness::Codex),
-            ] {
-                let used = doomed
-                    .iter()
-                    .any(|(c, _)| c.config.as_ref().is_some_and(|cfg| cfg.harness == id));
-                if orphaned || (used && !zeron_only) {
-                    sources.insert(id, harness.source()?);
-                }
-            }
             backup(&profile, &data_dir, &write)?;
-            let verb = if write.dry_run {
-                "would delete"
-            } else {
-                "deleted"
+            let opts = delete::Opts {
+                chats: &chats,
+                unfinished,
+                orphaned,
+                keep: &keep,
+                zeron_only,
+                codex: &codex,
+                dry_run: write.dry_run,
             };
-            let mut failed = 0;
-            for (chat, why) in &doomed {
-                let project = spaces
-                    .iter()
-                    .find(|s| Some(&s.id) == chat.space_id.as_ref())
-                    .map_or("no project", |s| s.display_name());
-                println!(
-                    "{verb} chat {}  {why}  {project}  {}",
-                    short_id(&chat.id),
-                    one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
-                );
-                if !write.dry_run
-                    && let Err(e) = profile.delete_chat(&chat.id)
-                {
-                    failed += 1;
-                    eprintln!("FAIL chat {}: {e:#}", chat.id);
-                    continue;
-                }
-                let harness = chat.config.as_ref().map(|c| c.harness);
-                let (Some(harness), Some(sid)) = (harness, chat.harness_session_id.as_deref())
-                else {
-                    continue;
-                };
-                if zeron_only {
-                    continue;
-                }
-                if resumed.contains(sid) {
-                    println!("  kept session {} (another chat resumes it)", short_id(sid));
-                    continue;
-                }
-                let Some(src) = sources.get(&harness) else {
-                    println!(
-                        "  kept {} session {} (not supported)",
-                        harness_name(harness),
-                        short_id(sid)
-                    );
-                    continue;
-                };
-                let session = format!("{} session {}", harness_name(harness), short_id(sid));
-                if write.dry_run {
-                    println!("  {verb} {session}");
-                    continue;
-                }
-                match src.delete_session(sid, &codex) {
-                    Ok(true) => println!("  {verb} {session}"),
-                    Ok(false) => println!("  {session} was already gone"),
-                    Err(e) => {
-                        failed += 1;
-                        eprintln!("FAIL session {sid}: {e:#}");
-                    }
-                }
-            }
-            if orphaned {
-                let linked: HashSet<&str> = every
-                    .iter()
-                    .filter_map(|c| c.harness_session_id.as_deref())
-                    .collect();
-                for harness in [HarnessId::Pi, HarnessId::Codex] {
-                    let Some(src) = sources.get(&harness) else {
-                        continue;
-                    };
-                    for file in src.files()? {
-                        // Skip linked sessions before reading them: files can be huge.
-                        if src
-                            .file_id(&file)
-                            .is_some_and(|id| linked.contains(id) || kept(id))
-                        {
-                            continue;
-                        }
-                        let s = match src.summarize(&file) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                eprintln!("skip {}: {e:#}", file.display());
-                                continue;
-                            }
-                        };
-                        if !s.started_by_zeron || linked.contains(s.id.as_str()) || kept(&s.id) {
-                            continue;
-                        }
-                        println!(
-                            "{verb} {} session {}  orphaned  {}  {}",
-                            harness_name(harness),
-                            short_id(&s.id),
-                            short_path(&s.cwd),
-                            one_line(s.name.as_deref().unwrap_or(&s.first_user), 50)
-                        );
-                        if !write.dry_run
-                            && let Err(e) = src.delete_session(&s.id, &codex)
-                        {
-                            failed += 1;
-                            eprintln!("FAIL session {}: {e:#}", s.id);
-                        }
-                    }
-                }
-            }
-            if failed > 0 {
-                bail!("{failed} deletion(s) failed");
-            }
+            delete::run(&mut profile, &opts)?.failed
         }
         Cmd::Archive {
             keep,
@@ -520,56 +481,15 @@ async fn main() -> Result<()> {
             write,
         } => {
             let mut profile = open(!write.dry_run)?;
-            let every = profile.chats()?;
-            let spaces = profile.spaces()?;
-            let space = project
-                .as_deref()
-                .map(|p| find_space(&spaces, p))
-                .transpose()?;
-            let placed = profile.sidebar_placed_chats();
-            let protected: HashSet<&str> = placed.iter().map(String::as_str).collect();
-            let stale: Vec<_> = archive::stale(&every, &spaces, keep, older_than, &protected)
-                .into_iter()
-                .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
-                .collect();
             backup(&profile, &data_dir, &write)?;
-            let verb = if write.dry_run {
-                "would archive"
-            } else {
-                "archived"
-            };
-            let mut per_project: HashMap<&str, usize> = HashMap::new();
-            for chat in &stale {
-                let name = spaces
-                    .iter()
-                    .find(|s| Some(&s.id) == chat.space_id.as_ref())
-                    .map_or("no project", |s| s.display_name());
-                *per_project.entry(name).or_default() += 1;
-                println!(
-                    "{verb} {}  {}  {name}  {}",
-                    short_id(&chat.id),
-                    date(export::last_activity(chat).timestamp_millis()),
-                    one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
-                );
-                if !write.dry_run {
-                    profile.set_archived(&chat.id, true)?;
-                }
-            }
-            profile.save()?;
-            let mut summary: Vec<_> = per_project.into_iter().collect();
-            summary.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-            let active = every
-                .iter()
-                .filter(|c| !c.archived && c.is_top_level())
-                .count();
-            eprintln!(
-                "{verb} {} of {active} sidebar chats{}",
-                stale.len(),
-                summary
-                    .iter()
-                    .map(|(p, n)| format!("\n  {n:>4}  {p}"))
-                    .collect::<String>()
-            );
+            archive::run(
+                &mut profile,
+                keep,
+                older_than,
+                project.as_deref(),
+                write.dry_run,
+            )?
+            .failed
         }
         Cmd::Export {
             chats,
@@ -644,80 +564,29 @@ async fn main() -> Result<()> {
                     .map(|d| format!(" to {}", d.display()))
                     .unwrap_or_default()
             );
+            0
         }
-        Cmd::Rename {
-            chats,
-            untitled,
-            all,
-            model,
-            reasoning,
-            codex,
-            write,
-        } => {
-            if chats.is_empty() && !untitled && !all {
-                bail!("pick chats with --chat, --untitled, or --all");
-            }
-            let mut profile = open(!write.dry_run)?;
-            let spaces = profile.spaces()?;
-            let mut picked = HashSet::new();
-            let every = profile.chats()?;
-            for prefix in &chats {
-                picked.insert(find_chat(&every, prefix)?.id.clone());
-            }
-            let selected: Vec<_> = every
-                .iter()
-                .filter(|c| all || picked.contains(&c.id) || (untitled && c.title.is_none()))
-                .collect();
-            let mut excerpts = vec![];
-            for chat in &selected {
-                let project = spaces
-                    .iter()
-                    .find(|s| Some(&s.id) == chat.space_id.as_ref())
-                    .map(|s| s.display_name().to_owned());
-                match Excerpt::from_transcript(&chat.id, project, &profile.transcript(&chat.id)?) {
-                    Some(e) => excerpts.push(e),
-                    None => eprintln!("skip {}: no user message", short_id(&chat.id)),
-                }
-            }
-            if excerpts.is_empty() {
-                println!("nothing to rename");
-                return Ok(());
-            }
-            eprintln!(
-                "asking {model} ({reasoning}) for {} titles…",
-                excerpts.len()
-            );
-            let titles = Codex {
-                binary: codex,
-                model,
-                reasoning,
-            }
-            .titles(&excerpts)?;
-            backup(&profile, &data_dir, &write)?;
-            for t in &titles {
-                let old = selected
-                    .iter()
-                    .find(|c| c.id == t.id)
-                    .and_then(|c| c.title.clone())
-                    .unwrap_or_default();
-                println!(
-                    "{}  {}  ->  {}",
-                    short_id(&t.id),
-                    one_line(&old, 40),
-                    t.title
-                );
-                if !write.dry_run {
-                    profile.rename(&t.id, &t.title)?;
-                }
-            }
-            profile.save()?;
-            let missing = excerpts.len() - titles.len();
-            if missing > 0 {
-                eprintln!("{missing} chat(s) got no title");
-            }
-        }
+    };
+    if failed > 0 {
+        bail!("{failed} failure(s); see above");
     }
     Ok(())
+}
+
+fn failures(n: usize) -> String {
+    if n == 0 {
+        String::new()
+    } else {
+        format!(", {n} failed")
+    }
+}
+
+/// Expand a leading `~/` to the home folder.
+fn expand_tilde(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None => PathBuf::from(path),
+    }
 }
 
 /// Back up docs.sqlite3 before a write, unless dry-run or opted out.
@@ -752,10 +621,7 @@ fn find_chat<'a>(chats: &'a [zeron_proto::Chat], prefix: &str) -> Result<&'a zer
 
 /// The project named `arg` (case-insensitive) or at folder `arg`.
 fn find_space<'a>(spaces: &'a [zeron_proto::Space], arg: &str) -> Result<&'a zeron_proto::Space> {
-    let folder = match arg.strip_prefix("~/") {
-        Some(rest) => home().join(rest),
-        None => PathBuf::from(arg),
-    };
+    let folder = expand_tilde(arg);
     let folder = folder.canonicalize().unwrap_or(folder);
     spaces
         .iter()

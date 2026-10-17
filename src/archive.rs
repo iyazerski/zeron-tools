@@ -7,10 +7,71 @@
 
 use std::collections::{HashMap, HashSet};
 
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use zeron_proto::{Chat, Space, view::project_key};
 
 use crate::export::last_activity;
+use crate::zeron::Profile;
+use crate::{Tally, date, find_space, one_line, short_id};
+
+/// Archive [`stale`] chats (only those of `project`, if given; a name or
+/// folder), skipping pinned and sectioned ones, and print a per-project
+/// summary.
+pub fn run(
+    profile: &mut Profile,
+    keep: usize,
+    idle_before: Option<DateTime<Utc>>,
+    project: Option<&str>,
+    dry_run: bool,
+) -> Result<Tally> {
+    let every = profile.chats()?;
+    let spaces = profile.spaces()?;
+    let space = project.map(|p| find_space(&spaces, p)).transpose()?;
+    let placed = profile.sidebar_placed_chats();
+    let protected: HashSet<&str> = placed.iter().map(String::as_str).collect();
+    let chosen: Vec<_> = stale(&every, &spaces, keep, idle_before, &protected)
+        .into_iter()
+        .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
+        .collect();
+    let verb = if dry_run { "would archive" } else { "archived" };
+    let mut per_project: HashMap<&str, usize> = HashMap::new();
+    for chat in &chosen {
+        let name = spaces
+            .iter()
+            .find(|s| Some(&s.id) == chat.space_id.as_ref())
+            .map_or("no project", |s| s.display_name());
+        *per_project.entry(name).or_default() += 1;
+        println!(
+            "{verb} {}  {}  {name}  {}",
+            short_id(&chat.id),
+            date(last_activity(chat).timestamp_millis()),
+            one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
+        );
+        if !dry_run {
+            profile.set_archived(&chat.id, true)?;
+        }
+    }
+    profile.save()?;
+    let mut summary: Vec<_> = per_project.into_iter().collect();
+    summary.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let active = every
+        .iter()
+        .filter(|c| !c.archived && c.is_top_level())
+        .count();
+    eprintln!(
+        "{verb} {} of {active} sidebar chats{}",
+        chosen.len(),
+        summary
+            .iter()
+            .map(|(p, n)| format!("\n  {n:>4}  {p}"))
+            .collect::<String>()
+    );
+    Ok(Tally {
+        done: chosen.len(),
+        failed: 0,
+    })
+}
 
 /// Unarchived top-level chats beyond the `keep` most recently active in their
 /// project (project-less chats form one group), optionally only those idle
