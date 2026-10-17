@@ -3,7 +3,7 @@
 Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile. It assumes the user does not sync with Zeron's server (the `local` profile), so local writes are final.
 
 - `sessions`: list harness sessions that no Zeron chat resumes yet.
-- `import`: turn native harness sessions (pi today, Codex later) into Zeron chats. Each chat shows the history and stores `harnessSessionId`/`harnessSessionCwd`, so Zeron resumes the original session.
+- `import`: turn native pi sessions and Codex threads into Zeron chats. Each chat shows the history and stores `harnessSessionId`/`harnessSessionCwd`, so Zeron resumes the original session.
 - `rename`: retitle chats with a Codex model (`codex exec` with structured output).
 
 ## How it works
@@ -16,11 +16,15 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
 - Imports mirror the engine's "born chat2" path (`crates/engine/src/local_import.rs`): save the chat doc with cursor 0 and epoch 2, then upsert the row with `room_gen` 2. Tool outputs are dropped and tool inputs go through `sanitize_tool_call`, same as Zeron's render-parts policy.
 - Zeron keeps the registry in memory and would overwrite offline writes. So writes take Zeron's `engine.lock` flock, which fails while Zeron runs, and back up `docs.sqlite3` to `~/.zeron/zeron-tools-backups/` first. Read-only commands and `--dry-run` work while Zeron runs.
 - Writes are refused if the device row's `version` (what Zeron last booted) differs from `ZERON_VERSION`.
+- A session's model is kept only if Zeron's cached catalog for that harness (`~/.zeron/model-catalogs/<harness>/`, newest fetch) still lists it. Otherwise the chat gets no model and Zeron uses its default. Zeron passes the chat's model on resume, and a retired one breaks it.
+- Sessions whose folder is gone still import (the history is readable), but never get a project, and can't resume until the folder exists.
 
 ## Layout
 
 - `src/zeron.rs`: profile access (lock, version check, backup, import, rename). It has no harness knowledge.
-- `src/sources/`: one reader per harness, each producing a harness-neutral `Session`. `pi.rs` mirrors `crates/harness/src/pi/normalize.rs`.
+- `src/sources/`: one reader per harness, each producing a harness-neutral `Session`. `Source` in `mod.rs` dispatches to them.
+  - `pi.rs`: `~/.pi/agent/sessions/*/*.jsonl`, active branch via `parentId`. Mirrors `crates/harness/src/pi/normalize.rs`.
+  - `codex.rs`: `~/.codex/sessions/**/rollout-*.jsonl` and `archived_sessions/`. It reads `event_msg`/`item_completed` items (Codex core `TurnItem`s: PascalCase types, snake_case fields) and mirrors `crates/harness/src/codex/normalize.rs::map_item`, which reads the app-server spelling of the same items. It also strips Codex Desktop's injected prompt context and takes names from `session_index.jsonl`. Subagent, `exec`, empty and Zeron-originated threads are hidden from `sessions`.
 - `src/rename.rs`: transcript excerpts, the Codex call, and output parsing.
 - `src/main.rs`: the CLI.
 - Tests: unit tests next to the code; fixtures in `tests/fixtures/`.
@@ -43,18 +47,22 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
    - `crates/harness/src/pi/`:
      - `normalize.rs`: the tool mapping to copy into `sources/pi.rs`
      - `sessions.rs`: resume by id, the `zeron-sessions` map
-   - `crates/harness/src/codex/`: once a Codex source exists
+   - `crates/harness/src/codex/`:
+     - `normalize.rs`: `map_item`, `file_change_call`, `ReasoningStream` separators, to mirror in `sources/codex.rs`
+     - `mod.rs`: `thread/resume` by `harnessSessionId`, and which items become text (`contextCompaction`, `exitedReviewMode`)
+   - `crates/engine/src/model_catalogs.rs`: the catalog cache format read by `Profile::model_catalog`
 3. Bump the tag in all `zeron-*` deps in `Cargo.toml` and in `zeron_version!` in `src/zeron.rs`. Then run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto`. Match `loro`/`rusqlite`/`tokio` versions to Zeron's workspace `Cargo.toml`.
-4. Port relevant changes. Typical ones: new required fields, renamed APIs, changed doc epochs or room generations, and new pi tool mappings.
+4. Port relevant changes. Typical ones: new required fields, renamed APIs, changed doc epochs or room generations, and new tool mappings.
+   - The rollout format belongs to Codex, not Zeron. If Codex was updated too, run `zeron-tools sessions codex` and `import codex <ids> --dry-run` on everything, and look for new item types: `rg -o --no-filename '"item":\{"type":"[A-Za-z]+"' ~/.codex/sessions | sort | uniq -c`.
 5. Verify:
    - `cargo clippy --all-targets` and `cargo test`
-   - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>` and `rename --chat <id> --dry-run`.
+   - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>`, `import codex <id>`, and `rename --chat <id> --dry-run`. Copy `~/.zeron/model-catalogs` too, so the model check runs.
    - Real import: quit Zeron, import one session, reopen Zeron, check that the chat shows and that a new message resumes the old context.
 6. Release: bump `version` in `Cargo.toml` (minor for a new Zeron release), commit, then push a matching tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). `release.yml` checks that the tag matches the version, builds the macOS arm64 binary, and publishes it with a checksum. `install.sh` installs the latest release.
 
-## Adding a source (e.g. Codex)
+## Adding a source
 
-- Add `src/sources/<harness>.rs` with `session_files`, `summarize`, `parse` → `Session`, plus a `Harness` CLI variant.
-- `Session.id` must be the id Zeron hands back to the harness for resume.
-- Check against Zeron's harness code before relying on it. For Codex, Zeron resumes through app-server `thread/resume` (`crates/harness/src/codex/mod.rs`). Confirm which id and cwd rules that needs, and where Codex stores rollouts, before writing the reader.
+- Add `src/sources/<harness>.rs` with `session_files`, `file_id`, `summarize`, `parse` → `Session`. Then add a `Source` variant and a `Harness` CLI variant.
+- `Session.id` must be the id Zeron hands back to the harness for resume. Check Zeron's harness code for how it resumes (id, cwd, which home dir) before relying on it.
 - Reuse Zeron's normalizer mapping for that harness, so imported tool chips look native.
+- Mark sessions that aren't someone's conversation (subagents, scripted runs, Zeron's own leftovers) with `hidden_reason`.

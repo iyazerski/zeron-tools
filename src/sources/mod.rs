@@ -1,9 +1,13 @@
 //! Harness session readers. Each source turns its native session files into a
 //! harness-neutral [`Session`]; [`crate::zeron`] writes that into Zeron.
 
+pub mod codex;
 pub mod pi;
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
 
 use zeron_doc::{MessagePart, MessageRole};
 use zeron_proto::{HarnessId, ReasoningLevel};
@@ -24,6 +28,8 @@ pub struct Session {
     pub reasoning: Option<ReasoningLevel>,
     /// A name the harness itself stored for the session, if any.
     pub name: Option<String>,
+    /// Archived in the harness; imported as an archived chat.
+    pub archived: bool,
     pub messages: Vec<Message>,
 }
 
@@ -59,4 +65,65 @@ pub struct SessionSummary {
     pub created_ms: i64,
     pub user_messages: usize,
     pub first_user: String,
+    pub name: Option<String>,
+    /// Why this is not a conversation worth importing (empty, a subagent, a
+    /// scripted run, Zeron's own leftover); hidden from listings by default.
+    pub hidden_reason: Option<String>,
+    pub archived: bool,
+}
+
+/// A harness's session store, opened once per command.
+pub enum Source {
+    Pi {
+        agent_dir: PathBuf,
+    },
+    Codex {
+        home: PathBuf,
+        names: HashMap<String, String>,
+    },
+}
+
+impl Source {
+    /// Open the Pi store at `PI_CODING_AGENT_DIR` or `~/.pi/agent`.
+    pub fn pi() -> Self {
+        Self::Pi {
+            agent_dir: pi::agent_dir(),
+        }
+    }
+
+    /// Open the Codex store at `CODEX_HOME` or `~/.codex`.
+    pub fn codex() -> Self {
+        let home = codex::codex_home();
+        let names = codex::thread_names(&home);
+        Self::Codex { home, names }
+    }
+
+    pub fn files(&self) -> Result<Vec<PathBuf>> {
+        match self {
+            Self::Pi { agent_dir } => pi::session_files(agent_dir),
+            Self::Codex { home, .. } => codex::session_files(home),
+        }
+    }
+
+    /// The session id encoded in a session file's name.
+    pub fn file_id<'a>(&self, path: &'a Path) -> Option<&'a str> {
+        match self {
+            Self::Pi { .. } => pi::file_id(path),
+            Self::Codex { .. } => codex::file_id(path),
+        }
+    }
+
+    pub fn summarize(&self, path: &Path) -> Result<SessionSummary> {
+        match self {
+            Self::Pi { agent_dir } => pi::summarize(agent_dir, path),
+            Self::Codex { names, .. } => codex::summarize(path, names),
+        }
+    }
+
+    pub fn parse(&self, path: &Path) -> Result<Session> {
+        match self {
+            Self::Pi { .. } => pi::parse(path),
+            Self::Codex { names, .. } => codex::parse(path, names),
+        }
+    }
 }

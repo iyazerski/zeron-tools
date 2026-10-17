@@ -56,16 +56,27 @@ pub fn session_files(agent_dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+/// The session id a file name (`<timestamp>_<id>.jsonl`) ends with.
+pub fn file_id(path: &Path) -> Option<&str> {
+    path.file_stem()?.to_str()?.rsplit('_').next()
+}
+
 /// Read only what a listing needs.
-pub fn summarize(path: &Path) -> Result<SessionSummary> {
+pub fn summarize(agent_dir: &Path, path: &Path) -> Result<SessionSummary> {
     let entries = read_entries(path)?;
     let header = header(&entries)?;
     let users: Vec<&Value> = entries
         .iter()
         .filter(|e| e["type"] == "message" && e["message"]["role"] == "user")
         .collect();
+    let id = s(header, "id");
+    let hidden_reason = if users.is_empty() {
+        Some("empty".into())
+    } else {
+        started_by_zeron(agent_dir, id).then(|| "zeron leftover".into())
+    };
     Ok(SessionSummary {
-        id: s(header, "id").into(),
+        id: id.into(),
         cwd: s(header, "cwd").into(),
         created_ms: ms(&header["timestamp"]).unwrap_or(0),
         user_messages: users.len(),
@@ -73,6 +84,14 @@ pub fn summarize(path: &Path) -> Result<SessionSummary> {
             .first()
             .map(|e| user_text(&e["message"]))
             .unwrap_or_default(),
+        name: entries
+            .iter()
+            .rev()
+            .find(|e| e["type"] == "session_info")
+            .and_then(|e| e["name"].as_str())
+            .map(str::to_owned),
+        hidden_reason,
+        archived: false,
     })
 }
 
@@ -89,6 +108,7 @@ pub fn parse(path: &Path) -> Result<Session> {
         model: None,
         reasoning: None,
         name: None,
+        archived: false,
         messages: vec![],
     };
     let mut tools: HashMap<String, (String, Value)> = HashMap::new();

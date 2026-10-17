@@ -7,6 +7,7 @@
 //! registry. Zeron keeps the registry in memory while running and would
 //! overwrite our writes, so [`Profile::open`] takes Zeron's instance lock.
 
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,7 @@ use zeron_doc::{
     MessagePart, MessageStatus, REGISTRY_DOC_ID, RegistryDoc, SessionDoc, SessionMessageEntry,
     sanitize_tool_call,
 };
-use zeron_proto::{Chat, ChatConfig, SandboxLevel, Space};
+use zeron_proto::{Chat, ChatConfig, HarnessId, Model, SandboxLevel, Space};
 use zeron_sync::DocsStore;
 
 use crate::sources::Session;
@@ -46,6 +47,7 @@ pub fn data_dir() -> PathBuf {
 }
 
 pub struct Profile {
+    data_dir: PathBuf,
     dir: PathBuf,
     store: DocsStore,
     registry: RegistryDoc,
@@ -62,6 +64,12 @@ pub struct Imported {
     pub space_id: Option<String>,
     pub created_space: bool,
     pub messages: usize,
+    /// The session's model, when Zeron no longer offers it (the chat then
+    /// runs on Zeron's default model).
+    pub dropped_model: Option<String>,
+    /// The session's folder is gone: the history shows, but resuming fails
+    /// until it exists again. No project is created for it.
+    pub cwd_missing: bool,
 }
 
 impl Profile {
@@ -92,6 +100,7 @@ impl Profile {
         // without a sync transport.
         registry.set_local_only(true);
         let profile = Self {
+            data_dir: data_dir.into(),
             dir: profile_dir.into(),
             store,
             registry,
@@ -185,7 +194,8 @@ impl Profile {
             .into_iter()
             .find(|s| s.device_id == self.device && Path::new(&s.path) == session.cwd)
             .map(|s| s.id);
-        if space_id.is_none() && create_project {
+        let cwd_missing = !session.cwd.is_dir();
+        if space_id.is_none() && create_project && !cwd_missing {
             let space = Space {
                 id: uuid::Uuid::new_v4().to_string(),
                 device_id: self.device.clone(),
@@ -202,6 +212,12 @@ impl Profile {
             created_space = true;
         }
 
+        // Zeron passes the chat's model to the harness on resume; a retired
+        // one would fail the turn (or, for Codex, the resume itself).
+        let (model, dropped_model) = match (&session.model, self.model_catalog(session.harness)) {
+            (Some(m), Some(known)) if !known.contains(m) => (None, Some(m.clone())),
+            (m, _) => (m.clone(), None),
+        };
         let chat_id = uuid::Uuid::new_v4().to_string();
         let doc = SessionDoc::init(&chat_id)?;
         for message in &session.messages {
@@ -232,7 +248,7 @@ impl Profile {
             id: chat_id.clone(),
             device_id: self.device.clone(),
             title: title.map(str::to_owned).or_else(|| session.name.clone()),
-            archived: false,
+            archived: session.archived,
             // Zeron renders project-less cwds home-relative.
             cwd: Some(
                 match (
@@ -248,7 +264,7 @@ impl Profile {
             source_context: None,
             config: Some(ChatConfig {
                 harness: session.harness,
-                model: session.model.clone(),
+                model: model.clone(),
                 reasoning: session.reasoning,
                 model_options: Default::default(),
                 sandbox: SandboxLevel::WorkspaceWrite,
@@ -270,7 +286,30 @@ impl Profile {
             space_id,
             created_space,
             messages: session.messages.len(),
+            dropped_model,
+            cwd_missing,
         })
+    }
+
+    /// Model ids Zeron last listed for `harness` (its catalog cache, newest
+    /// fetch wins); `None` when Zeron has cached none.
+    fn model_catalog(&self, harness: HarnessId) -> Option<HashSet<String>> {
+        // `zeron_engine::model_catalogs::Saved` (the engine isn't a dependency).
+        #[derive(serde::Deserialize)]
+        struct Saved {
+            schema_version: u32,
+            fetched_at: u64,
+            catalog: Vec<Model>,
+        }
+        let name = serde_json::to_value(harness).ok()?.as_str()?.to_owned();
+        std::fs::read_dir(self.data_dir.join("model-catalogs").join(name))
+            .ok()?
+            .filter_map(|e| {
+                serde_json::from_slice::<Saved>(&std::fs::read(e.ok()?.path()).ok()?).ok()
+            })
+            .filter(|s| s.schema_version == 1 && !s.catalog.is_empty())
+            .max_by_key(|s| s.fetched_at)
+            .map(|s| s.catalog.into_iter().map(|m| m.id).collect())
     }
 
     pub fn rename(&mut self, chat_id: &str, title: &str) -> Result<bool> {
@@ -399,11 +438,19 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn import_then_rename_survives_reopen() {
         let dir = data_dir(ZERON_VERSION);
-        let session = fixture();
+        let mut session = fixture();
+        // The fixture's folder doesn't exist: never a project, but still imported.
+        let mut missing = session.clone();
+        missing.id = "01a0aaaa-0000-7000-8000-00000000000f".into();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        session.cwd = repo.clone();
         let chat_id = {
             let mut profile = open(dir.path(), true).unwrap();
+            let gone = profile.import(&missing, None, true).unwrap();
+            assert!(gone.cwd_missing && !gone.created_space && gone.space_id.is_none());
             let done = profile.import(&session, None, true).unwrap();
-            assert!(done.created_space);
+            assert!(done.created_space && !done.cwd_missing);
             assert!(
                 profile.import(&session, None, true).is_err(),
                 "double import must fail"
@@ -417,10 +464,7 @@ mod tests {
         let chat = profile.linked_chat(&session.id).unwrap().expect("chat row");
         assert_eq!(chat.id, chat_id);
         assert_eq!(chat.title.as_deref(), Some("Renamed"));
-        assert_eq!(
-            chat.harness_session_cwd.as_deref(),
-            Some("/tmp/zeron-tools-fixture")
-        );
+        assert_eq!(chat.harness_session_cwd.as_deref(), repo.to_str());
         assert_eq!(chat.room_gen, Some(CHAT2_ROOM_GEN));
         let space = profile.spaces().unwrap().pop().expect("created project");
         assert_eq!(chat.space_id.as_ref(), Some(&space.id));
@@ -428,6 +472,37 @@ mod tests {
             profile.transcript(&chat_id).unwrap().len(),
             session.messages.len()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn models_zeron_no_longer_offers_are_dropped() {
+        let dir = data_dir(ZERON_VERSION);
+        let catalogs = dir.path().join("model-catalogs/pi");
+        std::fs::create_dir_all(&catalogs).unwrap();
+        let catalog = |fetched_at: u64, id: &str| {
+            serde_json::json!({"schema_version": 1, "fetched_at": fetched_at, "binary_version": null,
+                "catalog": [{"id": id, "label": id, "reasoningLevels": [], "options": []}]})
+            .to_string()
+        };
+        // The newest fetch wins: the fixture's model was listed only before.
+        std::fs::write(
+            catalogs.join("old.json"),
+            catalog(1, "anthropic/claude-opus-5-5"),
+        )
+        .unwrap();
+        std::fs::write(
+            catalogs.join("new.json"),
+            catalog(2, "anthropic/claude-opus-6"),
+        )
+        .unwrap();
+        let mut profile = open(dir.path(), true).unwrap();
+        let done = profile.import(&fixture(), None, false).unwrap();
+        assert_eq!(
+            done.dropped_model.as_deref(),
+            Some("anthropic/claude-opus-5-5")
+        );
+        let chat = profile.linked_chat(&fixture().id).unwrap().unwrap();
+        assert_eq!(chat.config.unwrap().model, None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -7,7 +7,7 @@ mod rename;
 mod sources;
 mod zeron;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
@@ -15,7 +15,7 @@ use chrono::{Local, TimeZone};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::rename::{Codex, Excerpt};
-use crate::sources::pi;
+use crate::sources::Source;
 use crate::zeron::Profile;
 
 #[derive(Parser)]
@@ -48,9 +48,10 @@ struct Global {
 enum Cmd {
     /// List harness sessions not yet in Zeron (started by other tools)
     Sessions {
-        #[arg(value_enum, default_value = "pi")]
+        #[arg(value_enum)]
         harness: Harness,
-        /// Also list sessions linked to a chat, and ones Zeron started itself
+        /// Also list sessions linked to a chat, and hidden ones (empty,
+        /// subagents, scripted runs, Zeron's own leftovers)
         #[arg(long)]
         all: bool,
     },
@@ -106,6 +107,16 @@ struct WriteOpts {
 #[derive(Clone, Copy, ValueEnum)]
 enum Harness {
     Pi,
+    Codex,
+}
+
+impl Harness {
+    fn source(self) -> Source {
+        match self {
+            Self::Pi => Source::pi(),
+            Self::Codex => Source::codex(),
+        }
+    }
 }
 
 pub(crate) fn home() -> PathBuf {
@@ -128,27 +139,40 @@ async fn main() -> Result<()> {
     let open =
         |write: bool| Profile::open(&data_dir, &profile_dir, write, cli.global.ignore_version);
     match cli.command {
-        Cmd::Sessions {
-            harness: Harness::Pi,
-            all,
-        } => {
+        Cmd::Sessions { harness, all } => {
             let profile = open(false)?;
-            let agent_dir = pi::agent_dir();
-            for file in pi::session_files(&agent_dir)? {
-                let s = match pi::summarize(&file) {
+            let source = harness.source();
+            let linked: HashMap<String, String> = profile
+                .chats()?
+                .into_iter()
+                .filter_map(|c| Some((c.harness_session_id?, c.id)))
+                .collect();
+            for file in source.files()? {
+                // Skip linked sessions before reading them: files can be huge.
+                let chat = source.file_id(&file).and_then(|id| linked.get(id));
+                if chat.is_some() && !all {
+                    continue;
+                }
+                let s = match source.summarize(&file) {
                     Ok(s) => s,
                     Err(e) => {
                         eprintln!("skip {}: {e:#}", file.display());
                         continue;
                     }
                 };
-                let status = match profile.linked_chat(&s.id)? {
-                    Some(chat) => format!("  [chat {}]", short_id(&chat.id)),
-                    None if pi::started_by_zeron(&agent_dir, &s.id) => "  [zeron leftover]".into(),
-                    None => String::new(),
-                };
-                if !status.is_empty() && !all {
+                let mut tags = vec![];
+                match chat.or_else(|| linked.get(&s.id)) {
+                    Some(chat) => tags.push(format!("chat {}", short_id(chat))),
+                    None => tags.extend(s.hidden_reason.clone()),
+                }
+                if !tags.is_empty() && !all {
                     continue;
+                }
+                if s.archived {
+                    tags.push("archived".into());
+                }
+                if !s.cwd.is_dir() {
+                    tags.push("cwd missing".into());
                 }
                 println!(
                     "{}  {}  {:>3} prompts  {}  {}{}",
@@ -156,13 +180,13 @@ async fn main() -> Result<()> {
                     date(s.created_ms),
                     s.user_messages,
                     short_path(&s.cwd),
-                    one_line(&s.first_user, 70),
-                    status,
+                    one_line(s.name.as_deref().unwrap_or(&s.first_user), 70),
+                    tags.iter().map(|t| format!("  [{t}]")).collect::<String>(),
                 );
             }
         }
         Cmd::Import {
-            harness: Harness::Pi,
+            harness,
             sessions,
             title,
             create_project,
@@ -171,12 +195,13 @@ async fn main() -> Result<()> {
             if title.is_some() && sessions.len() > 1 {
                 bail!("--title needs exactly one session; use `rename` for batches");
             }
-            let files = resolve_pi_sessions(&sessions)?;
+            let source = harness.source();
+            let files = resolve_sessions(&source, &sessions)?;
             let mut profile = open(!write.dry_run)?;
             backup(&profile, &data_dir, &write)?;
             let mut failed = 0;
             for file in files {
-                let result = pi::parse(&file).and_then(|session| {
+                let result = source.parse(&file).and_then(|session| {
                     if write.dry_run {
                         if let Some(chat) = profile.linked_chat(&session.id)? {
                             bail!("already linked to chat {}", chat.id);
@@ -204,6 +229,12 @@ async fn main() -> Result<()> {
                             _ => "",
                         }
                     );
+                    if done.cwd_missing {
+                        println!("  note: {} is missing; the chat can't resume until it exists", short_path(&session.cwd));
+                    }
+                    if let Some(model) = done.dropped_model {
+                        println!("  note: Zeron no longer offers {model}; the chat uses Zeron's default model");
+                    }
                     Ok(())
                 });
                 if let Err(e) = result {
@@ -311,7 +342,7 @@ fn backup(profile: &Profile, data_dir: &Path, opts: &WriteOpts) -> Result<()> {
 }
 
 /// Accept session files or id prefixes; refuse ambiguous prefixes.
-fn resolve_pi_sessions(args: &[String]) -> Result<Vec<PathBuf>> {
+fn resolve_sessions(source: &Source, args: &[String]) -> Result<Vec<PathBuf>> {
     let mut files = None;
     let mut out = vec![];
     for arg in args {
@@ -321,21 +352,20 @@ fn resolve_pi_sessions(args: &[String]) -> Result<Vec<PathBuf>> {
             continue;
         }
         if files.is_none() {
-            files = Some(pi::session_files(&pi::agent_dir())?);
+            files = Some(source.files()?);
         }
         let hits: Vec<_> = files
             .iter()
             .flatten()
             .filter(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .and_then(|s| s.rsplit('_').next())
+                source
+                    .file_id(f)
                     .is_some_and(|id| id.starts_with(arg.as_str()))
             })
             .collect();
         match hits.as_slice() {
             [one] => out.push((*one).clone()),
-            [] => bail!("no Pi session file or id matches {arg}"),
+            [] => bail!("no session file or id matches {arg}"),
             _ => bail!("{arg} matches {} sessions; use a longer prefix", hits.len()),
         }
     }
