@@ -1,9 +1,9 @@
 [package]
 name = "zeron-tools"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 publish = false
-description = "Offline maintenance tools for Zeron: import, export, rename, and delete chats"
+description = "Offline maintenance tools for Zeron: import, export, rename, archive, and delete chats"
 
 [dependencies]
 # Zeron's crates are not on crates.io; pin them to the release we target

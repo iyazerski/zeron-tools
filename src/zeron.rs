@@ -327,6 +327,30 @@ impl Profile {
         Ok(())
     }
 
+    /// Archive or unarchive a chat, like Zeron's `setChatArchived`. The row is
+    /// persisted by [`Self::save`].
+    pub fn set_archived(&mut self, chat_id: &str, archived: bool) -> Result<bool> {
+        if self.lock.is_none() {
+            bail!("profile was opened read-only");
+        }
+        let changed = self.registry.set_chat_archived(chat_id, archived)?;
+        self.dirty |= changed;
+        Ok(changed)
+    }
+
+    /// Chats the user pinned or placed in a sidebar section.
+    pub fn sidebar_placed_chats(&self) -> HashSet<String> {
+        self.registry
+            .sidebar_preferences()
+            .map(|p| {
+                p.pinned_session_ids
+                    .into_iter()
+                    .chain(p.sections.into_iter().flat_map(|s| s.session_ids))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn rename(&mut self, chat_id: &str, title: &str) -> Result<bool> {
         let renamed = self.registry.rename_chat(chat_id, title)?;
         self.dirty |= renamed;

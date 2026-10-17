@@ -5,6 +5,7 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
 - `sessions`: list harness sessions that no Zeron chat resumes yet.
 - `import`: turn native pi sessions and Codex threads into Zeron chats. Each chat shows the history and stores `harnessSessionId`/`harnessSessionCwd`, so Zeron resumes the original session.
 - `rename`: retitle chats with a Codex model (`codex exec` with structured output).
+- `archive`: archive all but the N most recently active chats per project, so the sidebar stays short.
 - `delete`: delete chats (picked, or every unfinished one) and the harness sessions they resume, plus orphaned sessions Zeron started.
 - `export`: write chats (picked by id, project, date window, limit) as Markdown or JSONL, for people or agents to review.
 
@@ -28,6 +29,7 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
   - `pi.rs`: `~/.pi/agent/sessions/*/*.jsonl`, active branch via `parentId`. Mirrors `crates/harness/src/pi/normalize.rs`.
   - `codex.rs`: `~/.codex/sessions/**/rollout-*.jsonl` and `archived_sessions/`. A long thread continues in `rollout-<ts>-<id>_<segment>.jsonl` files; `threads()` groups them by the id in the name and they are read in order. It reads `event_msg`/`item_completed` items (Codex core `TurnItem`s: PascalCase types, snake_case fields) and mirrors `crates/harness/src/codex/normalize.rs::map_item`, which reads the app-server spelling of the same items. It also strips Codex Desktop's injected prompt context and takes names from `session_index.jsonl`. Subagent, `exec`, empty and Zeron-originated threads are hidden from `sessions`.
 - `src/rename.rs`: transcript excerpts, the Codex call, and output parsing.
+- `src/archive.rs`: which chats to archive. It mirrors the sidebar: unarchived top-level chats (`Chat::is_top_level`), grouped by `view::project_key`, ordered by last activity. Pinned and sectioned chats (`RegistryDoc::sidebar_preferences`) are skipped. Writing uses `set_chat_archived`, like Zeron's `setChatArchived`.
 - `src/delete.rs`: the unfinished-chat rule: no assistant turn (continuations folded by `render_entries`) completed with text and no error. Harness-side deletion lives in the sources: `pi::delete_session` trashes the file like Pi's session picker and removes Zeron's `zeron-sessions/<sha256(id)>.json` record; `codex::delete_thread` runs `codex delete --force`. Deleting a chat mirrors Zeron's `DeleteChat` (row tombstone + `purge_chat` snapshot delete); Zeron itself never deletes harness sessions.
 - `src/export.rs`: chat metadata plus rendered messages, Markdown/JSONL output, file names, and the `--since`/`--until` window. Headings inside message bodies are demoted two levels so `#` (chat) and `##` (message) stay unambiguous.
 - `src/main.rs`: the CLI.
@@ -57,13 +59,14 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
    - `crates/engine/src/model_catalogs.rs`: the catalog cache format read by `Profile::model_catalog`
    - `crates/engine/src/rpc.rs` `MutateParams::DeleteChat` and `doc_host.rs` `purge_chat`: what deleting a chat removes (mirrored by `Profile::delete_chat`)
    - `crates/harness/src/pi/sessions.rs`: the `zeron-sessions` record that `pi::delete_session` removes
+   - `crates/ui/src/state.rs` `visible_chats`/`sidebar_chats` and `crates/ui/src/shell/spaces.rs` `compare_sidebar_chats`: which chats the sidebar lists and how it orders them (mirrored by `archive`); `crates/doc/src/registry/sidebar_*.rs`: pins and sections
    - `crates/mcp/src/transcript.rs`: `render_entries`, `RenderOptions`, `RenderedMessage` (used by `export`)
 3. Bump the tag in all `zeron-*` deps in `Cargo.toml` and in `zeron_version!` in `src/zeron.rs`. Then run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto -p zeron-mcp`. Match `loro`/`rusqlite`/`tokio` versions to Zeron's workspace `Cargo.toml`.
 4. Port relevant changes. Typical ones: new required fields, renamed APIs, changed doc epochs or room generations, and new tool mappings.
    - The rollout format belongs to Codex, not Zeron. If Codex was updated too, run `zeron-tools sessions codex` and `import codex <ids> --dry-run` on everything, and look for new item types: `rg -o --no-filename '"item":\{"type":"[A-Za-z]+"' ~/.codex/sessions | sort | uniq -c`.
 5. Verify:
    - `cargo clippy --all-targets` and `cargo test`
-   - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>`, `import codex <id>`, `rename --chat <id> --dry-run`, and `export --chat <id>`, and `delete --unfinished --orphaned --dry-run`. Copy `~/.zeron/model-catalogs` too, so the model check runs.
+   - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>`, `import codex <id>`, `rename --chat <id> --dry-run`, and `export --chat <id>`, and `delete --unfinished --orphaned --dry-run`, and `archive --dry-run`. Copy `~/.zeron/model-catalogs` too, so the model check runs.
    - Real import: quit Zeron, import one session, reopen Zeron, check that the chat shows and that a new message resumes the old context.
 6. Release: bump `version` in `Cargo.toml` (minor for a new Zeron release), commit, then push a matching tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). `release.yml` checks that the tag matches the version, builds the macOS arm64 binary, and publishes it with a checksum. `install.sh` installs the latest release.
 

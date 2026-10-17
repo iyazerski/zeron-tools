@@ -3,6 +3,7 @@
 //! Commands that write require Zeron to be quit (Cmd+Q); they take Zeron's
 //! instance lock and back up `docs.sqlite3` first.
 
+mod archive;
 mod delete;
 mod export;
 mod rename;
@@ -103,6 +104,25 @@ enum Cmd {
         /// Codex binary (for `codex delete`)
         #[arg(long, env = "CODEX_BIN", default_value = "codex")]
         codex: PathBuf,
+        #[command(flatten)]
+        write: WriteOpts,
+    },
+    /// Archive older chats so the sidebar lists only recent ones
+    ///
+    /// Zeron's sidebar draws every unarchived chat; archived ones move to its
+    /// Archived shelf (hidden unless enabled) and stay searchable and
+    /// resumable. Pinned chats and chats in sidebar sections are left alone.
+    Archive {
+        /// Keep this many most recently active chats per project
+        #[arg(long, default_value_t = 10)]
+        keep: usize,
+        /// Only archive chats inactive since before this local date
+        /// (YYYY-MM-DD) or for this long (30d, 4w)
+        #[arg(long, value_parser = export::parse_since)]
+        older_than: Option<DateTime<Utc>>,
+        /// Only this project (name or folder)
+        #[arg(long)]
+        project: Option<String>,
         #[command(flatten)]
         write: WriteOpts,
     },
@@ -492,6 +512,64 @@ async fn main() -> Result<()> {
             if failed > 0 {
                 bail!("{failed} deletion(s) failed");
             }
+        }
+        Cmd::Archive {
+            keep,
+            older_than,
+            project,
+            write,
+        } => {
+            let mut profile = open(!write.dry_run)?;
+            let every = profile.chats()?;
+            let spaces = profile.spaces()?;
+            let space = project
+                .as_deref()
+                .map(|p| find_space(&spaces, p))
+                .transpose()?;
+            let placed = profile.sidebar_placed_chats();
+            let protected: HashSet<&str> = placed.iter().map(String::as_str).collect();
+            let stale: Vec<_> = archive::stale(&every, &spaces, keep, older_than, &protected)
+                .into_iter()
+                .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
+                .collect();
+            backup(&profile, &data_dir, &write)?;
+            let verb = if write.dry_run {
+                "would archive"
+            } else {
+                "archived"
+            };
+            let mut per_project: HashMap<&str, usize> = HashMap::new();
+            for chat in &stale {
+                let name = spaces
+                    .iter()
+                    .find(|s| Some(&s.id) == chat.space_id.as_ref())
+                    .map_or("no project", |s| s.display_name());
+                *per_project.entry(name).or_default() += 1;
+                println!(
+                    "{verb} {}  {}  {name}  {}",
+                    short_id(&chat.id),
+                    date(export::last_activity(chat).timestamp_millis()),
+                    one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
+                );
+                if !write.dry_run {
+                    profile.set_archived(&chat.id, true)?;
+                }
+            }
+            profile.save()?;
+            let mut summary: Vec<_> = per_project.into_iter().collect();
+            summary.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+            let active = every
+                .iter()
+                .filter(|c| !c.archived && c.is_top_level())
+                .count();
+            eprintln!(
+                "{verb} {} of {active} sidebar chats{}",
+                stale.len(),
+                summary
+                    .iter()
+                    .map(|(p, n)| format!("\n  {n:>4}  {p}"))
+                    .collect::<String>()
+            );
         }
         Cmd::Export {
             chats,
