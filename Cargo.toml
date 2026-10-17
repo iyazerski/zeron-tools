@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 publish = false
 description = "Offline maintenance tools for Zeron: import harness sessions, rename chats"
@@ -11,6 +11,7 @@ description = "Offline maintenance tools for Zeron: import harness sessions, ren
 zeron-doc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
 zeron-sync = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
 zeron-proto = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
+zeron-mcp = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
 # Versions match Zeron's workspace so cargo unifies them.
 loro = "1.13"
 rusqlite = { version = "0.32", features = ["bundled"] }

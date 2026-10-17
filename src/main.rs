@@ -3,6 +3,7 @@
 //! Commands that write require Zeron to be quit (Cmd+Q); they take Zeron's
 //! instance lock and back up `docs.sqlite3` first.
 
+mod export;
 mod rename;
 mod sources;
 mod zeron;
@@ -10,10 +11,11 @@ mod zeron;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
-use chrono::{Local, TimeZone};
+use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+use crate::export::{ExportedChat, Format};
 use crate::rename::{Codex, Excerpt};
 use crate::sources::Source;
 use crate::zeron::Profile;
@@ -74,6 +76,42 @@ enum Cmd {
         replace: bool,
         #[command(flatten)]
         write: WriteOpts,
+    },
+    /// Export chats as plain text (works while Zeron runs)
+    ///
+    /// Without --chat or --project, every chat is exported. Filters combine.
+    /// Chats come out oldest first, with whole transcripts.
+    Export {
+        /// Chat ids or id prefixes
+        #[arg(long = "chat", value_name = "ID")]
+        chats: Vec<String>,
+        /// Project name or folder (every chat in it)
+        #[arg(long)]
+        project: Option<String>,
+        /// Only chats active on or after this local date (YYYY-MM-DD) or
+        /// within this age (30d, 4w)
+        #[arg(long, value_parser = export::parse_since)]
+        since: Option<DateTime<Utc>>,
+        /// Only chats started on or before this local date (YYYY-MM-DD)
+        #[arg(long, value_parser = export::parse_until)]
+        until: Option<DateTime<Utc>>,
+        /// At most this many chats, the most recently active ones
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Leave out archived chats
+        #[arg(long)]
+        skip_archived: bool,
+        #[arg(long, value_enum, default_value = "markdown")]
+        format: Format,
+        /// Include the model's reasoning
+        #[arg(long)]
+        reasoning: bool,
+        /// Leave out the one-line-per-call tool log
+        #[arg(long)]
+        no_tools: bool,
+        /// Write one file per chat into this folder (default: all to stdout)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
     },
     /// Retitle chats with a Codex model
     Rename {
@@ -261,6 +299,80 @@ async fn main() -> Result<()> {
                 bail!("{failed} session(s) failed");
             }
         }
+        Cmd::Export {
+            chats,
+            project,
+            since,
+            until,
+            limit,
+            skip_archived,
+            format,
+            reasoning,
+            no_tools,
+            output,
+        } => {
+            let profile = open(false)?;
+            let spaces = profile.spaces()?;
+            let every = profile.chats()?;
+            let space = project
+                .as_deref()
+                .map(|p| find_space(&spaces, p))
+                .transpose()?;
+            let picked = chats
+                .iter()
+                .map(|prefix| find_chat(&every, prefix).map(|c| c.id.as_str()))
+                .collect::<Result<HashSet<_>>>()?;
+            let mut selected: Vec<_> = every
+                .iter()
+                .filter(|c| picked.is_empty() || picked.contains(c.id.as_str()))
+                .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
+                .filter(|c| export::active_between(c, since, until))
+                .filter(|c| !(skip_archived && c.archived))
+                .collect();
+            selected.sort_by_key(|c| std::cmp::Reverse(export::last_activity(c)));
+            selected.truncate(limit.unwrap_or(usize::MAX));
+            selected.sort_by_key(|c| c.created_at);
+            if let Some(dir) = &output {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("creating {}", dir.display()))?;
+            }
+            let options = zeron_mcp::RenderOptions {
+                include_reasoning: reasoning,
+                include_tools: !no_tools,
+            };
+            let (mut written, mut messages) = (0, 0);
+            let mut stdout = std::io::stdout().lock();
+            for chat in selected {
+                let space = spaces
+                    .iter()
+                    .find(|s| Some(&s.id) == chat.space_id.as_ref());
+                let exported =
+                    ExportedChat::new(chat, space, &profile.transcript(&chat.id)?, options);
+                if exported.messages.is_empty() {
+                    continue;
+                }
+                let text = exported.render(format)?;
+                match &output {
+                    Some(dir) => std::fs::write(dir.join(exported.file_name(format)), text)?,
+                    None => {
+                        use std::io::Write;
+                        // Separate markdown documents with a rule.
+                        if written > 0 && format == Format::Markdown {
+                            stdout.write_all(b"\n---\n\n")?;
+                        }
+                        stdout.write_all(text.as_bytes())?;
+                    }
+                }
+                written += 1;
+                messages += exported.messages.len();
+            }
+            eprintln!(
+                "exported {written} chat(s), {messages} message(s){}",
+                output
+                    .map(|d| format!(" to {}", d.display()))
+                    .unwrap_or_default()
+            );
+        }
         Cmd::Rename {
             chats,
             untitled,
@@ -278,15 +390,7 @@ async fn main() -> Result<()> {
             let mut picked = HashSet::new();
             let every = profile.chats()?;
             for prefix in &chats {
-                let hits: Vec<_> = every
-                    .iter()
-                    .filter(|c| c.id.starts_with(prefix.as_str()))
-                    .collect();
-                match hits.as_slice() {
-                    [one] => picked.insert(one.id.clone()),
-                    [] => bail!("no chat matches {prefix}"),
-                    _ => bail!("{prefix} matches {} chats; use a longer prefix", hits.len()),
-                };
+                picked.insert(find_chat(&every, prefix)?.id.clone());
             }
             let selected: Vec<_> = every
                 .iter()
@@ -354,6 +458,34 @@ fn backup(profile: &Profile, data_dir: &Path, opts: &WriteOpts) -> Result<()> {
         .join(Local::now().format("%Y%m%d-%H%M%S").to_string());
     eprintln!("backup: {}", profile.backup(&dest)?.display());
     Ok(())
+}
+
+/// The one chat whose id starts with `prefix`.
+fn find_chat<'a>(chats: &'a [zeron_proto::Chat], prefix: &str) -> Result<&'a zeron_proto::Chat> {
+    let hits: Vec<_> = chats.iter().filter(|c| c.id.starts_with(prefix)).collect();
+    match hits.as_slice() {
+        [one] => Ok(one),
+        [] => bail!("no chat matches {prefix}"),
+        _ => bail!("{prefix} matches {} chats; use a longer prefix", hits.len()),
+    }
+}
+
+/// The project named `arg` (case-insensitive) or at folder `arg`.
+fn find_space<'a>(spaces: &'a [zeron_proto::Space], arg: &str) -> Result<&'a zeron_proto::Space> {
+    let folder = match arg.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None => PathBuf::from(arg),
+    };
+    let folder = folder.canonicalize().unwrap_or(folder);
+    spaces
+        .iter()
+        .find(|s| s.display_name().eq_ignore_ascii_case(arg))
+        .or_else(|| spaces.iter().find(|s| Path::new(&s.path) == folder))
+        .with_context(|| {
+            let mut names: Vec<_> = spaces.iter().map(|s| s.display_name()).collect();
+            names.sort_unstable();
+            format!("no project {arg:?}; projects: {}", names.join(", "))
+        })
 }
 
 /// Accept session files or id prefixes; refuse ambiguous prefixes.
