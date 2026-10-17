@@ -44,6 +44,7 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
 2. Clone Zeron (or fetch both tags) and read `git diff <old>..<new> --stat` and the diffs for these paths:
    - `crates/proto/src/entities.rs`: `Chat`, `Space`, `ChatConfig`, `Device` fields
    - `crates/proto/src/` events: `AgentEvent`, `ToolCall`, `ToolDiff`, `HarnessId`, `ReasoningLevel`
+   - `crates/doc/src/parts.rs` `MessagePart::Fork` (the fork seam), `crates/mcp/src/tools.rs` `attribute` and `crates/ui/src/transcript.rs` `agent_message_display` (the "[Message from Zeron chat …]" header): `export.rs` depends on both.
    - `crates/doc/src/registry.rs`: `upsert_chat`, `upsert_space`, `rename_chat`, `read_*`, `set_local_only`, `to_bytes`/`from_bytes`, `REGISTRY_DOC_ID`
    - `crates/doc/src/schema.rs`: `SessionDoc`, `SessionMessageEntry`, `MessagePart`, `fold_event_into_parts`, `sanitize_tool_call`
    - `crates/sync/src/store.rs`: `DocsStore::open`, `load_snapshot`, `save_snapshot(_with_cursor)`, and the `snapshots` schema

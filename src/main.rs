@@ -532,6 +532,8 @@ async fn main() -> Result<()> {
                 include_reasoning: reasoning,
                 include_tools: !no_tools,
             };
+            // A fork's copied history is left out when its source is exported too.
+            let ids: HashSet<&str> = selected.iter().map(|c| c.id.as_str()).collect();
             let (mut written, mut messages) = (0, 0);
             let mut stdout = std::io::stdout().lock();
             for chat in selected {
@@ -539,7 +541,7 @@ async fn main() -> Result<()> {
                     .iter()
                     .find(|s| Some(&s.id) == chat.space_id.as_ref());
                 let exported =
-                    ExportedChat::new(chat, space, &profile.transcript(&chat.id)?, options);
+                    ExportedChat::new(chat, space, &profile.transcript(&chat.id)?, options, &ids);
                 if exported.messages.is_empty() {
                     continue;
                 }

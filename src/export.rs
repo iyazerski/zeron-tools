@@ -4,14 +4,20 @@
 //! (`zeron_mcp::render_entries`, what its `read_chat` MCP tool returns):
 //! continuation entries fold into their turn, prose parts join, and every
 //! tool call becomes one capped line.
+//!
+//! Two things are made explicit for readers: a forked chat starts with a copy
+//! of its source's history (left out when the source is in the same export),
+//! and a "user" message may come from another chat through Zeron's
+//! `send_message` tool rather than from the person.
 
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use clap::ValueEnum;
 use serde::Serialize;
-use zeron_doc::{MessageRole, SessionMessageEntry};
+use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
 use zeron_mcp::{RenderOptions, RenderedMessage, render_entries};
 use zeron_proto::{Chat, HarnessId, Space};
 
@@ -45,18 +51,86 @@ pub struct ExportedChat {
     pub archived: bool,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
-    pub messages: Vec<RenderedMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<Fork>,
+    pub messages: Vec<ExportedMessage>,
+}
+
+/// Another chat, by id and title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChatRef {
+    pub id: String,
+    pub title: String,
+}
+
+/// Where a forked chat came from, and what happened to the copied history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fork {
+    pub chat: ChatRef,
+    /// Messages copied from the source when the fork was made.
+    pub copied_messages: usize,
+    /// Whether they are in `messages` (marked `copied`). They are left out
+    /// when the source chat is in the same export, so nothing repeats.
+    pub copies_included: bool,
+}
+
+/// One message, plus who really sent it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportedMessage {
+    #[serde(flatten)]
+    pub message: RenderedMessage,
+    /// A user-role message another agent sent from this chat (Zeron's
+    /// `send_message` tool), not something the person typed. `text` has
+    /// the routing header removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_chat: Option<ChatRef>,
+    /// Copied from the source chat of a fork.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub copied: bool,
 }
 
 impl ExportedChat {
     /// Render `entries` of `chat` (in `space`, if any) with Zeron's renderer.
+    /// A fork's copied history is left out when its source is in `exported`
+    /// (the ids of all chats in this export).
     pub fn new(
         chat: &Chat,
         space: Option<&Space>,
         entries: &[SessionMessageEntry],
         options: RenderOptions,
+        exported: &HashSet<&str>,
     ) -> Self {
+        let (forked_from, messages) = match fork_seam(entries) {
+            Some((seam, source)) => {
+                let copied = render_entries(&entries[..seam], options);
+                let include = !exported.contains(source.id.as_str());
+                let fork = Fork {
+                    chat: source,
+                    copied_messages: copied.len(),
+                    copies_included: include,
+                };
+                let copied = copied
+                    .into_iter()
+                    .filter(|_| include)
+                    .map(|m| ExportedMessage::new(m, true));
+                let own = render_entries(&entries[seam + 1..], options)
+                    .into_iter()
+                    .map(|m| ExportedMessage::new(m, false));
+                (Some(fork), copied.chain(own).collect())
+            }
+            None => (
+                None,
+                render_entries(entries, options)
+                    .into_iter()
+                    .map(|m| ExportedMessage::new(m, false))
+                    .collect(),
+            ),
+        };
         Self {
+            forked_from,
+            messages,
             id: chat.id.clone(),
             title: chat.title.clone(),
             project: space.map(|s| s.display_name().to_owned()),
@@ -70,7 +144,6 @@ impl ExportedChat {
             archived: chat.archived,
             created_at: chat.created_at,
             last_activity: last_activity(chat),
-            messages: render_entries(entries, options),
         }
     }
 
@@ -132,18 +205,47 @@ impl ExportedChat {
         if self.archived {
             meta.push("- Archived".into());
         }
+        if let Some(fork) = &self.forked_from {
+            let source = format!("{} ({})", fork.chat.title, fork.chat.id);
+            meta.push(if fork.copies_included {
+                format!(
+                    "- Forked from: {source}. The first {} messages are copied from it.",
+                    fork.copied_messages
+                )
+            } else {
+                format!(
+                    "- Forked from: {source}. The {} messages copied from it are left out; they are in that chat's export.",
+                    fork.copied_messages
+                )
+            });
+        }
         out.push_str(&meta.join("\n"));
         out.push('\n');
-        for m in &self.messages {
-            let role = match m.role {
-                MessageRole::User => "User",
-                MessageRole::Assistant => "Assistant",
-                MessageRole::System => "System",
+        let mut copied_before = false;
+        for em in &self.messages {
+            let m = &em.message;
+            // One blank line between blocks, however the previous one ended.
+            out.truncate(out.trim_end().len());
+            out.push_str("\n\n");
+            if copied_before && !em.copied {
+                out.push_str("---\n\n*Forked here. Messages below are this chat's own.*\n\n");
+            }
+            copied_before = em.copied;
+            let role = match (&em.from_chat, m.role) {
+                (Some(from), _) => format!(
+                    "Message from chat {} ({})",
+                    from.title,
+                    crate::short_id(&from.id)
+                ),
+                (None, MessageRole::User) => "User".into(),
+                (None, MessageRole::Assistant) => "Assistant".into(),
+                (None, MessageRole::System) => "System".into(),
             };
             let at = DateTime::from_timestamp_millis(m.created_at)
                 .map(local)
                 .unwrap_or_default();
-            let _ = write!(out, "\n## {role} ({at})\n\n");
+            let copied = if em.copied { ", copied" } else { "" };
+            let _ = write!(out, "## {role} ({at}{copied})\n\n");
             if let Some(reasoning) = &m.reasoning {
                 out.push_str("Reasoning:\n\n");
                 for line in reasoning.lines() {
@@ -169,6 +271,70 @@ impl ExportedChat {
         }
         out.trim_end().to_owned() + "\n"
     }
+}
+
+impl ExportedMessage {
+    fn new(mut message: RenderedMessage, copied: bool) -> Self {
+        let mut from_chat = None;
+        if message.role == MessageRole::User
+            && let Some((from, body)) = split_agent_message(&message.text)
+        {
+            message.text = body.to_owned();
+            from_chat = Some(from);
+        }
+        Self {
+            message,
+            from_chat,
+            copied,
+        }
+    }
+}
+
+/// The fork seam (Zeron's fork RPC writes one entry with a `Fork` part:
+/// everything above it was copied from the source chat), as its index and
+/// the source.
+fn fork_seam(entries: &[SessionMessageEntry]) -> Option<(usize, ChatRef)> {
+    entries.iter().enumerate().find_map(|(i, e)| {
+        e.parts.iter().find_map(|p| match p {
+            MessagePart::Fork {
+                source_chat_id,
+                source_title,
+                ..
+            } => Some((
+                i,
+                ChatRef {
+                    id: source_chat_id.clone(),
+                    title: source_title.clone(),
+                },
+            )),
+            _ => None,
+        })
+    })
+}
+
+/// Split a message another chat sent through Zeron's `send_message` into the
+/// sender and the body. Zeron stores no sender field: `crates/mcp/src/tools.rs`
+/// `attribute` prefixes the text, and the desktop transcript parses it back
+/// (`crates/ui/src/transcript.rs` `agent_message_display`), as here.
+fn split_agent_message(text: &str) -> Option<(ChatRef, &str)> {
+    let rest = text.strip_prefix("[Message from Zeron chat ")?;
+    let (header, body) = rest.split_once("]\n\n")?;
+    let (label, id) =
+        header.rsplit_once(". Reply to it with the Zeron `send_message` tool, chat ")?;
+    let id = id.strip_suffix('.')?;
+    // The label is "<title> (<short id>)", or just the short id when untitled.
+    let title = match label.rsplit_once(" (") {
+        Some((title, short)) if short.strip_suffix(')').is_some_and(|s| id.starts_with(s)) => title,
+        _ if id.starts_with(label) => "",
+        _ => label,
+    };
+    Some((
+        ChatRef {
+            id: id.to_owned(),
+            title: title.to_owned(),
+        },
+        body,
+    ))
 }
 
 /// A chat's last activity: its newest message, else its creation.
@@ -329,7 +495,81 @@ mod tests {
                 cont,
             ],
             options,
+            &HashSet::new(),
         )
+    }
+
+    /// A fork of chat `src`: two copied messages, the seam, then its own turn,
+    /// which another chat sent.
+    fn fork(exported: &[&str]) -> ExportedChat {
+        let seam = MessagePart::Fork {
+            id: "f".into(),
+            source_chat_id: "src-chat-id".into(),
+            source_title: "Review Rollout".into(),
+        };
+        let peer = "[Message from Zeron chat Fault Injector (127d9f07). Reply to it with the Zeron `send_message` tool, chat 127d9f07-dbd0-4c3e.]\n\nOver to you.";
+        ExportedChat::new(
+            &chat(),
+            None,
+            &[
+                entry("u1", MessageRole::User, vec![text("Review the rollout")]),
+                entry("a1", MessageRole::Assistant, vec![text("Looks fine.")]),
+                entry("fork:x", MessageRole::System, vec![seam]),
+                entry("u2", MessageRole::User, vec![text(peer)]),
+                entry("a2", MessageRole::Assistant, vec![text("Thanks.")]),
+            ],
+            RenderOptions::default(),
+            &exported.iter().copied().collect(),
+        )
+    }
+
+    #[test]
+    fn fork_drops_copies_only_when_its_source_is_exported() {
+        let alone = fork(&[]);
+        let fork_of = alone.forked_from.clone().unwrap();
+        assert_eq!(
+            (fork_of.chat.id.as_str(), fork_of.copied_messages),
+            ("src-chat-id", 2)
+        );
+        assert!(fork_of.copies_included);
+        let copied: Vec<bool> = alone.messages.iter().map(|m| m.copied).collect();
+        assert_eq!(copied, [true, true, false, false]);
+        let md = alone.render(Format::Markdown).unwrap();
+        assert!(
+            md.contains("- Forked from: Review Rollout (src-chat-id). The first 2 messages"),
+            "{md}"
+        );
+        assert!(
+            md.contains("Looks fine.\n\n---\n\n*Forked here. Messages below are this chat's own.*\n\n## Message from"),
+            "{md}"
+        );
+
+        let with_source = fork(&["src-chat-id"]);
+        assert!(!with_source.forked_from.unwrap().copies_included);
+        assert_eq!(with_source.messages.len(), 2);
+        assert!(with_source.messages.iter().all(|m| !m.copied));
+    }
+
+    #[test]
+    fn messages_from_other_chats_are_attributed() {
+        let e = fork(&["src-chat-id"]);
+        let from = e.messages[0].from_chat.clone().unwrap();
+        assert_eq!(
+            (from.id.as_str(), from.title.as_str()),
+            ("127d9f07-dbd0-4c3e", "Fault Injector")
+        );
+        assert_eq!(e.messages[0].message.text, "Over to you.");
+        let md = e.render(Format::Markdown).unwrap();
+        assert!(
+            md.contains("## Message from chat Fault Injector (127d9f07-dbd0)"),
+            "{md}"
+        );
+        assert!(!md.contains("## User"), "{md}");
+        let v: serde_json::Value = serde_json::from_str(&e.render(Format::Jsonl).unwrap()).unwrap();
+        assert_eq!(v["messages"][0]["role"], "user");
+        assert_eq!(v["messages"][0]["fromChat"]["title"], "Fault Injector");
+        assert!(v["messages"][1].get("fromChat").is_none());
+        assert!(v["messages"][1].get("copied").is_none());
     }
 
     #[test]
