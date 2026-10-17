@@ -116,7 +116,26 @@ fn hidden_reason(meta: &Value) -> Option<String> {
         _ => return Some("unknown source".into()),
     }
     // Zeron's own threads (title runs, failed first attempts, deleted chats).
-    (s(meta, "originator") == "zeron-native").then(|| "zeron leftover".into())
+    (s(meta, "originator") == ZERON_ORIGINATOR).then(|| "zeron leftover".into())
+}
+
+/// The `originator` Zeron's Codex driver stamps on threads it starts.
+const ZERON_ORIGINATOR: &str = "zeron-native";
+
+/// Delete a thread with `codex delete --force`, which removes every rollout
+/// segment and Codex's own index and state rows.
+pub fn delete_thread(codex: &Path, id: &str) -> Result<()> {
+    let out = std::process::Command::new(codex)
+        .args(["delete", "--force", id])
+        .output()
+        .with_context(|| format!("running {}", codex.display()))?;
+    if !out.status.success() {
+        bail!(
+            "codex delete failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 /// Read only what a listing needs from a thread's segments (one pass,
@@ -169,6 +188,7 @@ pub fn summarize(segments: &[PathBuf], names: &HashMap<String, String>) -> Resul
         } else {
             hidden_reason(meta)
         },
+        started_by_zeron: s(meta, "originator") == ZERON_ORIGINATOR,
         archived: is_archived(path),
         id,
     })

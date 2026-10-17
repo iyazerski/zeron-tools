@@ -69,6 +69,10 @@ pub struct SessionSummary {
     /// Why this is not a conversation worth importing (empty, a subagent, a
     /// scripted run, Zeron's own leftover); hidden from listings by default.
     pub hidden_reason: Option<String>,
+    /// Zeron itself started the session (Pi: Zeron's session record; Codex:
+    /// the `zeron-native` originator). Unlinked, it's a leftover of a
+    /// deleted chat or a failed first attempt.
+    pub started_by_zeron: bool,
     pub archived: bool,
 }
 
@@ -137,6 +141,22 @@ impl Source {
             Self::Pi { agent_dir } => pi::summarize(agent_dir, path),
             Self::Codex { names, threads } => {
                 codex::summarize(&Self::segments(threads, path), names)
+            }
+        }
+    }
+
+    /// Delete session `id` from the harness's own store. Codex threads go
+    /// through `codex` (the CLI). Returns false if the session was not found.
+    pub fn delete_session(&self, id: &str, codex: &Path) -> Result<bool> {
+        match self {
+            Self::Pi { agent_dir } => pi::delete_session(agent_dir, id),
+            Self::Codex { threads, .. } => {
+                // `codex delete` can't tell "gone" from other failures.
+                if !threads.contains_key(id) {
+                    return Ok(false);
+                }
+                codex::delete_thread(codex, id)?;
+                Ok(true)
             }
         }
     }

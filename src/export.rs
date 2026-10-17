@@ -119,11 +119,7 @@ impl ExportedChat {
             (None, Some(cwd)) => meta.push(format!("- Folder: {}", tilde(cwd))),
             (None, None) => {}
         }
-        let harness = self
-            .harness
-            .and_then(|h| serde_json::to_value(h).ok())
-            .and_then(|v| v.as_str().map(str::to_owned));
-        match (harness, &self.model) {
+        match (self.harness.map(crate::harness_name), &self.model) {
             (Some(h), Some(m)) => meta.push(format!("- Agent: {h}, {m}")),
             (Some(h), None) => meta.push(format!("- Agent: {h}")),
             _ => {}

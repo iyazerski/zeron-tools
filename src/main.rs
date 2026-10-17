@@ -3,6 +3,7 @@
 //! Commands that write require Zeron to be quit (Cmd+Q); they take Zeron's
 //! instance lock and back up `docs.sqlite3` first.
 
+mod delete;
 mod export;
 mod rename;
 mod sources;
@@ -19,6 +20,7 @@ use crate::export::{ExportedChat, Format};
 use crate::rename::{Codex, Excerpt};
 use crate::sources::Source;
 use crate::zeron::Profile;
+use zeron_proto::HarnessId;
 
 #[derive(Parser)]
 #[command(
@@ -74,6 +76,33 @@ enum Cmd {
         /// (including anything added in Zeron since) and import again
         #[arg(long)]
         replace: bool,
+        #[command(flatten)]
+        write: WriteOpts,
+    },
+    /// Delete chats and the harness sessions they resume
+    ///
+    /// Pi session files go to the Trash; Codex threads are deleted with
+    /// `codex delete`. A session another chat still resumes is kept.
+    Delete {
+        /// Chat ids or id prefixes
+        #[arg(long = "chat", value_name = "ID")]
+        chats: Vec<String>,
+        /// Every chat whose agent never finished a turn with an answer (you
+        /// interrupted it, it failed, or it never replied)
+        #[arg(long)]
+        unfinished: bool,
+        /// Pi and Codex sessions Zeron started that no chat resumes anymore
+        #[arg(long)]
+        orphaned: bool,
+        /// Never delete these chats or sessions (ids or id prefixes)
+        #[arg(long, value_name = "ID")]
+        keep: Vec<String>,
+        /// Delete chats from Zeron only; keep their harness sessions
+        #[arg(long)]
+        zeron_only: bool,
+        /// Codex binary (for `codex delete`)
+        #[arg(long, env = "CODEX_BIN", default_value = "codex")]
+        codex: PathBuf,
         #[command(flatten)]
         write: WriteOpts,
     },
@@ -299,6 +328,171 @@ async fn main() -> Result<()> {
                 bail!("{failed} session(s) failed");
             }
         }
+        Cmd::Delete {
+            chats,
+            unfinished,
+            orphaned,
+            keep,
+            zeron_only,
+            codex,
+            write,
+        } => {
+            if chats.is_empty() && !unfinished && !orphaned {
+                bail!("pick chats with --chat, --unfinished, or --orphaned");
+            }
+            // Even --orphaned needs Zeron quit: a running Zeron may not have
+            // saved the row of a chat it just created, so its session would
+            // look orphaned.
+            let mut profile = open(!write.dry_run)?;
+            let every = profile.chats()?;
+            let spaces = profile.spaces()?;
+            let kept = |id: &str| keep.iter().any(|k| id.starts_with(k.as_str()));
+            // Chosen chats with why, in sidebar-independent creation order.
+            let mut doomed: Vec<(&zeron_proto::Chat, String)> = vec![];
+            for prefix in &chats {
+                let chat = find_chat(&every, prefix)?;
+                doomed.push((chat, "picked".into()));
+            }
+            if unfinished {
+                for chat in &every {
+                    if doomed.iter().any(|(c, _)| c.id == chat.id) {
+                        continue;
+                    }
+                    if let Some(u) = delete::unfinished(&profile.transcript(&chat.id)?) {
+                        let prompts = if u.prompts == 1 { "prompt" } else { "prompts" };
+                        doomed.push((chat, format!("{} {prompts}, {}", u.prompts, u.outcome)));
+                    }
+                }
+            }
+            doomed.retain(|(c, _)| {
+                !kept(&c.id) && !c.harness_session_id.as_deref().is_some_and(kept)
+            });
+            doomed.sort_by_key(|(c, _)| c.created_at);
+            let doomed_ids: HashSet<&str> = doomed.iter().map(|(c, _)| c.id.as_str()).collect();
+            // Sessions chats outside this run still resume: never delete those.
+            let resumed: HashSet<&str> = every
+                .iter()
+                .filter(|c| !doomed_ids.contains(c.id.as_str()))
+                .filter_map(|c| c.harness_session_id.as_deref())
+                .collect();
+            // Open only the stores this run touches (Codex lists every rollout).
+            let mut sources: HashMap<HarnessId, Source> = HashMap::new();
+            for (id, harness) in [
+                (HarnessId::Pi, Harness::Pi),
+                (HarnessId::Codex, Harness::Codex),
+            ] {
+                let used = doomed
+                    .iter()
+                    .any(|(c, _)| c.config.as_ref().is_some_and(|cfg| cfg.harness == id));
+                if orphaned || (used && !zeron_only) {
+                    sources.insert(id, harness.source()?);
+                }
+            }
+            backup(&profile, &data_dir, &write)?;
+            let verb = if write.dry_run {
+                "would delete"
+            } else {
+                "deleted"
+            };
+            let mut failed = 0;
+            for (chat, why) in &doomed {
+                let project = spaces
+                    .iter()
+                    .find(|s| Some(&s.id) == chat.space_id.as_ref())
+                    .map_or("no project", |s| s.display_name());
+                println!(
+                    "{verb} chat {}  {why}  {project}  {}",
+                    short_id(&chat.id),
+                    one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
+                );
+                if !write.dry_run
+                    && let Err(e) = profile.delete_chat(&chat.id)
+                {
+                    failed += 1;
+                    eprintln!("FAIL chat {}: {e:#}", chat.id);
+                    continue;
+                }
+                let harness = chat.config.as_ref().map(|c| c.harness);
+                let (Some(harness), Some(sid)) = (harness, chat.harness_session_id.as_deref())
+                else {
+                    continue;
+                };
+                if zeron_only {
+                    continue;
+                }
+                if resumed.contains(sid) {
+                    println!("  kept session {} (another chat resumes it)", short_id(sid));
+                    continue;
+                }
+                let Some(src) = sources.get(&harness) else {
+                    println!(
+                        "  kept {} session {} (not supported)",
+                        harness_name(harness),
+                        short_id(sid)
+                    );
+                    continue;
+                };
+                let session = format!("{} session {}", harness_name(harness), short_id(sid));
+                if write.dry_run {
+                    println!("  {verb} {session}");
+                    continue;
+                }
+                match src.delete_session(sid, &codex) {
+                    Ok(true) => println!("  {verb} {session}"),
+                    Ok(false) => println!("  {session} was already gone"),
+                    Err(e) => {
+                        failed += 1;
+                        eprintln!("FAIL session {sid}: {e:#}");
+                    }
+                }
+            }
+            if orphaned {
+                let linked: HashSet<&str> = every
+                    .iter()
+                    .filter_map(|c| c.harness_session_id.as_deref())
+                    .collect();
+                for harness in [HarnessId::Pi, HarnessId::Codex] {
+                    let Some(src) = sources.get(&harness) else {
+                        continue;
+                    };
+                    for file in src.files()? {
+                        // Skip linked sessions before reading them: files can be huge.
+                        if src
+                            .file_id(&file)
+                            .is_some_and(|id| linked.contains(id) || kept(id))
+                        {
+                            continue;
+                        }
+                        let s = match src.summarize(&file) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                eprintln!("skip {}: {e:#}", file.display());
+                                continue;
+                            }
+                        };
+                        if !s.started_by_zeron || linked.contains(s.id.as_str()) || kept(&s.id) {
+                            continue;
+                        }
+                        println!(
+                            "{verb} {} session {}  orphaned  {}  {}",
+                            harness_name(harness),
+                            short_id(&s.id),
+                            short_path(&s.cwd),
+                            one_line(s.name.as_deref().unwrap_or(&s.first_user), 50)
+                        );
+                        if !write.dry_run
+                            && let Err(e) = src.delete_session(&s.id, &codex)
+                        {
+                            failed += 1;
+                            eprintln!("FAIL session {}: {e:#}", s.id);
+                        }
+                    }
+                }
+            }
+            if failed > 0 {
+                bail!("{failed} deletion(s) failed");
+            }
+        }
         Cmd::Export {
             chats,
             project,
@@ -458,6 +652,14 @@ fn backup(profile: &Profile, data_dir: &Path, opts: &WriteOpts) -> Result<()> {
         .join(Local::now().format("%Y%m%d-%H%M%S").to_string());
     eprintln!("backup: {}", profile.backup(&dest)?.display());
     Ok(())
+}
+
+/// A harness's id as Zeron spells it (`codex`, `pi`, `claude-code`).
+fn harness_name(h: HarnessId) -> String {
+    serde_json::to_value(h)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{h:?}"))
 }
 
 /// The one chat whose id starts with `prefix`.

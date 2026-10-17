@@ -28,11 +28,56 @@ pub fn agent_dir() -> PathBuf {
 /// (`crates/harness/src/pi/sessions.rs::key`). Such a session with no chat
 /// is a leftover (a failed first attempt or a deleted chat), not foreign work.
 pub fn started_by_zeron(agent_dir: &Path, id: &str) -> bool {
+    zeron_record(agent_dir, id).is_file()
+}
+
+/// Zeron's record of a session it started (`crates/harness/src/pi/sessions.rs::key`).
+fn zeron_record(agent_dir: &Path, id: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
     agent_dir
         .join("zeron-sessions")
         .join(format!("{:x}.json", Sha256::digest(id.as_bytes())))
-        .is_file()
+}
+
+/// Delete session `id` the way Pi's session picker does (move the file to the
+/// Trash, else unlink it), plus Zeron's record of it. Returns whether
+/// anything existed.
+pub fn delete_session(agent_dir: &Path, id: &str) -> Result<bool> {
+    let record = zeron_record(agent_dir, id);
+    let mut files: Vec<PathBuf> = session_files(agent_dir)?
+        .into_iter()
+        .filter(|f| file_id(f) == Some(id))
+        .collect();
+    // Zeron may have recorded a file outside the default sessions dir.
+    if let Ok(raw) = std::fs::read(&record)
+        && let Some(file) = serde_json::from_slice::<Value>(&raw)?["sessionFile"].as_str()
+        && Path::new(file).is_file()
+        && !files.iter().any(|f| f == Path::new(file))
+    {
+        files.push(file.into());
+    }
+    for file in &files {
+        trash(file)?;
+    }
+    let had_record = record.is_file();
+    if had_record {
+        std::fs::remove_file(&record)?;
+    }
+    Ok(!files.is_empty() || had_record)
+}
+
+/// Move `path` to the Trash with macOS's `trash` CLI; unlink it if that fails.
+fn trash(path: &Path) -> Result<()> {
+    let trashed = std::process::Command::new("trash")
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !trashed && path.exists() {
+        std::fs::remove_file(path).with_context(|| format!("deleting {}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// Every session file under `<agent_dir>/sessions`, oldest first.
@@ -70,10 +115,11 @@ pub fn summarize(agent_dir: &Path, path: &Path) -> Result<SessionSummary> {
         .filter(|e| e["type"] == "message" && e["message"]["role"] == "user")
         .collect();
     let id = s(header, "id");
+    let by_zeron = started_by_zeron(agent_dir, id);
     let hidden_reason = if users.is_empty() {
         Some("empty".into())
     } else {
-        started_by_zeron(agent_dir, id).then(|| "zeron leftover".into())
+        by_zeron.then(|| "zeron leftover".into())
     };
     Ok(SessionSummary {
         id: id.into(),
@@ -91,6 +137,7 @@ pub fn summarize(agent_dir: &Path, path: &Path) -> Result<SessionSummary> {
             .and_then(|e| e["name"].as_str())
             .map(str::to_owned),
         hidden_reason,
+        started_by_zeron: by_zeron,
         archived: false,
     })
 }
