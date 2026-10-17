@@ -21,9 +21,17 @@ use zeron_sync::DocsStore;
 
 use crate::sources::Session;
 
-/// The Zeron release this build reads and writes. Must match the git tag of
-/// the zeron-* dependencies in Cargo.toml (see AGENTS.md).
-pub const ZERON_VERSION: &str = "0.2.113";
+/// The Zeron release this build reads and writes, as a literal so `--version`
+/// can embed it. Must match the git tag of the zeron-* dependencies in
+/// Cargo.toml (see AGENTS.md).
+macro_rules! zeron_version {
+    () => {
+        "0.2.113"
+    };
+}
+pub(crate) use zeron_version;
+
+pub const ZERON_VERSION: &str = zeron_version!();
 
 /// `zeron_engine::chat2_host::CHAT2_DOC_EPOCH` (engine crate is not a dependency).
 const CHAT2_DOC_EPOCH: u32 = 2;
@@ -83,7 +91,14 @@ impl Profile {
         // Fold writes straight into rows, like the engine does for a profile
         // without a sync transport.
         registry.set_local_only(true);
-        let profile = Self { dir: profile_dir.into(), store, registry, device, dirty: false, lock };
+        let profile = Self {
+            dir: profile_dir.into(),
+            store,
+            registry,
+            device,
+            dirty: false,
+            lock,
+        };
         let version = profile.zeron_version()?;
         if !ignore_version && version.as_deref() != Some(ZERON_VERSION) {
             bail!(
@@ -157,7 +172,11 @@ impl Profile {
             bail!("profile was opened read-only");
         }
         if let Some(chat) = self.linked_chat(&session.id)? {
-            bail!("session {} is already linked to chat {}", session.id, chat.id);
+            bail!(
+                "session {} is already linked to chat {}",
+                session.id,
+                chat.id
+            );
         }
         let cwd = session.cwd.to_string_lossy().into_owned();
         let mut created_space = false;
@@ -194,9 +213,13 @@ impl Profile {
         reread.import(&bytes)?;
         let count = SessionDoc::from_doc(reread).read_entries()?.len();
         if count != session.messages.len() {
-            bail!("round-trip mismatch: wrote {} messages, read {count}", session.messages.len());
+            bail!(
+                "round-trip mismatch: wrote {} messages, read {count}",
+                session.messages.len()
+            );
         }
-        self.store.save_snapshot_with_cursor(&chat_id, &bytes, 0, CHAT2_DOC_EPOCH)?;
+        self.store
+            .save_snapshot_with_cursor(&chat_id, &bytes, 0, CHAT2_DOC_EPOCH)?;
 
         let preview = session
             .messages
@@ -211,10 +234,15 @@ impl Profile {
             title: title.map(str::to_owned).or_else(|| session.name.clone()),
             archived: false,
             // Zeron renders project-less cwds home-relative.
-            cwd: Some(match (&space_id, cwd.strip_prefix(&*crate::home().to_string_lossy())) {
-                (None, Some(rest)) => format!("~{rest}"),
-                _ => cwd.clone(),
-            }),
+            cwd: Some(
+                match (
+                    &space_id,
+                    cwd.strip_prefix(&*crate::home().to_string_lossy()),
+                ) {
+                    (None, Some(rest)) => format!("~{rest}"),
+                    _ => cwd.clone(),
+                },
+            ),
             branch: None,
             checkout_id: None,
             source_context: None,
@@ -237,7 +265,12 @@ impl Profile {
             parent_chat_id: None,
         })?;
         self.dirty = true;
-        Ok(Imported { chat_id, space_id, created_space, messages: session.messages.len() })
+        Ok(Imported {
+            chat_id,
+            space_id,
+            created_space,
+            messages: session.messages.len(),
+        })
     }
 
     pub fn rename(&mut self, chat_id: &str, title: &str) -> Result<bool> {
@@ -252,7 +285,8 @@ impl Profile {
             if self.lock.is_none() {
                 bail!("profile was opened read-only");
             }
-            self.store.save_snapshot(REGISTRY_DOC_ID, &self.registry.to_bytes()?)?;
+            self.store
+                .save_snapshot(REGISTRY_DOC_ID, &self.registry.to_bytes()?)?;
             self.dirty = false;
         }
         Ok(())
@@ -279,7 +313,11 @@ impl Profile {
                 .collect(),
             created_at: m.created_ms,
             device_id: self.device.clone(),
-            status: Some(if m.aborted { MessageStatus::Aborted } else { MessageStatus::Complete }),
+            status: Some(if m.aborted {
+                MessageStatus::Aborted
+            } else {
+                MessageStatus::Complete
+            }),
             continuation_of: None,
             duration_ms: m.duration_ms,
         }
@@ -301,14 +339,19 @@ fn lock(data_dir: &Path) -> Result<File> {
     {
         use std::os::unix::io::AsRawFd;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            bail!("Zeron is running (it holds {}); quit it first", path.display());
+            bail!(
+                "Zeron is running (it holds {}); quit it first",
+                path.display()
+            );
         }
     }
     Ok(file)
 }
 
 fn at(ms: i64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(ms).single().unwrap_or_else(Utc::now)
+    Utc.timestamp_millis_opt(ms)
+        .single()
+        .unwrap_or_else(Utc::now)
 }
 
 #[cfg(test)]
@@ -361,7 +404,10 @@ mod tests {
             let mut profile = open(dir.path(), true).unwrap();
             let done = profile.import(&session, None, true).unwrap();
             assert!(done.created_space);
-            assert!(profile.import(&session, None, true).is_err(), "double import must fail");
+            assert!(
+                profile.import(&session, None, true).is_err(),
+                "double import must fail"
+            );
             assert!(profile.rename(&done.chat_id, "Renamed").unwrap());
             profile.save().unwrap();
             done.chat_id
@@ -371,23 +417,40 @@ mod tests {
         let chat = profile.linked_chat(&session.id).unwrap().expect("chat row");
         assert_eq!(chat.id, chat_id);
         assert_eq!(chat.title.as_deref(), Some("Renamed"));
-        assert_eq!(chat.harness_session_cwd.as_deref(), Some("/tmp/zeron-tools-fixture"));
+        assert_eq!(
+            chat.harness_session_cwd.as_deref(),
+            Some("/tmp/zeron-tools-fixture")
+        );
         assert_eq!(chat.room_gen, Some(CHAT2_ROOM_GEN));
         let space = profile.spaces().unwrap().pop().expect("created project");
         assert_eq!(chat.space_id.as_ref(), Some(&space.id));
-        assert_eq!(profile.transcript(&chat_id).unwrap().len(), session.messages.len());
+        assert_eq!(
+            profile.transcript(&chat_id).unwrap().len(),
+            session.messages.len()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn writes_need_zeron_quit_and_matching_version() {
         let dir = data_dir(ZERON_VERSION);
         let _zeron = lock(dir.path()).unwrap();
-        assert!(open(dir.path(), true).is_err(), "lock held by a running Zeron");
+        assert!(
+            open(dir.path(), true).is_err(),
+            "lock held by a running Zeron"
+        );
         assert!(open(dir.path(), false).is_ok(), "reads don't need the lock");
 
         let other = data_dir("0.0.1");
         let err = open(other.path(), false).err().expect("version mismatch");
         assert!(err.to_string().contains("0.0.1"));
-        assert!(Profile::open(other.path(), &other.path().join("profiles/local"), false, true).is_ok());
+        assert!(
+            Profile::open(
+                other.path(),
+                &other.path().join("profiles/local"),
+                false,
+                true
+            )
+            .is_ok()
+        );
     }
 }

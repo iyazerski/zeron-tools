@@ -44,12 +44,13 @@ Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) pr
      - `normalize.rs`: the tool mapping to copy into `sources/pi.rs`
      - `sessions.rs`: resume by id, the `zeron-sessions` map
    - `crates/harness/src/codex/`: once a Codex source exists
-3. Bump the tag in all `zeron-*` deps and `[package.metadata.zeron]` in `Cargo.toml`, and `ZERON_VERSION` in `src/zeron.rs`. Then run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto`. Match `loro`/`rusqlite`/`tokio` versions to Zeron's workspace `Cargo.toml`.
+3. Bump the tag in all `zeron-*` deps in `Cargo.toml` and in `zeron_version!` in `src/zeron.rs`. Then run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto`. Match `loro`/`rusqlite`/`tokio` versions to Zeron's workspace `Cargo.toml`.
 4. Port relevant changes. Typical ones: new required fields, renamed APIs, changed doc epochs or room generations, and new pi tool mappings.
 5. Verify:
    - `cargo clippy --all-targets` and `cargo test`
    - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>` and `rename --chat <id> --dry-run`.
    - Real import: quit Zeron, import one session, reopen Zeron, check that the chat shows and that a new message resumes the old context.
+6. Release: bump `version` in `Cargo.toml` (minor for a new Zeron release), commit, then push a matching tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). `release.yml` checks that the tag matches the version, builds the macOS arm64 binary, and publishes it with a checksum. `install.sh` installs the latest release.
 
 ## Adding a source (e.g. Codex)
 

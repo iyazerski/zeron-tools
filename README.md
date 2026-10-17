@@ -1,10 +1,28 @@
 # zeron-tools
 
-Offline tools for a local Zeron profile: import pi sessions created outside Zeron, and retitle chats with a Codex model. Built against Zeron 0.2.113. See `AGENTS.md` for how it works and how to update it for a new Zeron release.
+Offline tools for a local [Zeron](https://github.com/zeronsh/zeron) profile:
+- import pi sessions that were created outside Zeron
+- retitle chats with a Codex model
+
+Supports macOS on Apple silicon, the same as Zeron. See `AGENTS.md` for how it works and how to update it for a new Zeron release.
+
+## Installation
 
 ```sh
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | sh
+```
 
+This installs the latest release to `~/.local/bin/zeron-tools`. Each release targets one Zeron version, shown by `zeron-tools --version`. If your Zeron is older, pin a matching release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | ZERON_TOOLS_VERSION=v0.1.0 sh
+```
+
+To build from source instead, run `make install`.
+
+## Usage
+
+```sh
 zeron-tools sessions                       # pi sessions not in Zeron yet (works while Zeron runs)
 zeron-tools import pi 01a0f866-31fb --dry-run
 

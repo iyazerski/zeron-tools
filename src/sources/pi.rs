@@ -69,7 +69,10 @@ pub fn summarize(path: &Path) -> Result<SessionSummary> {
         cwd: s(header, "cwd").into(),
         created_ms: ms(&header["timestamp"]).unwrap_or(0),
         user_messages: users.len(),
-        first_user: users.first().map(|e| user_text(&e["message"])).unwrap_or_default(),
+        first_user: users
+            .first()
+            .map(|e| user_text(&e["message"]))
+            .unwrap_or_default(),
     })
 }
 
@@ -97,8 +100,7 @@ pub fn parse(path: &Path) -> Result<Session> {
                 session.model = Some(format!("{}/{}", s(entry, "provider"), s(entry, "modelId")))
             }
             "thinking_level_change" => {
-                session.reasoning =
-                    serde_json::from_value(entry["thinkingLevel"].clone()).ok()
+                session.reasoning = serde_json::from_value(entry["thinkingLevel"].clone()).ok()
             }
             "session_info" if entry["name"].is_string() => {
                 session.name = Some(s(entry, "name").into())
@@ -112,7 +114,10 @@ pub fn parse(path: &Path) -> Result<Session> {
                         close_turn(&mut turn, &mut session.messages);
                         session.messages.push(Message {
                             role: MessageRole::User,
-                            parts: vec![MessagePart::Text { id: "t0".into(), text: user_text(m) }],
+                            parts: vec![MessagePart::Text {
+                                id: "t0".into(),
+                                text: user_text(m),
+                            }],
                             created_ms: at,
                             duration_ms: None,
                             aborted: false,
@@ -132,11 +137,13 @@ pub fn parse(path: &Path) -> Result<Session> {
                         }
                         for block in m["content"].as_array().into_iter().flatten() {
                             let event = match s(block, "type") {
-                                "text" if !s(block, "text").is_empty() => {
-                                    AgentEvent::TextDelta { text: s(block, "text").into() }
-                                }
+                                "text" if !s(block, "text").is_empty() => AgentEvent::TextDelta {
+                                    text: s(block, "text").into(),
+                                },
                                 "thinking" if !s(block, "thinking").is_empty() => {
-                                    AgentEvent::ReasoningDelta { text: s(block, "thinking").into() }
+                                    AgentEvent::ReasoningDelta {
+                                        text: s(block, "thinking").into(),
+                                    }
                                 }
                                 "toolCall" => {
                                     let id = s(block, "id").to_owned();
@@ -175,7 +182,12 @@ pub fn parse(path: &Path) -> Result<Session> {
                             // Outputs never enter Zeron docs; only error state and diff stats do.
                             fold_event_into_parts(
                                 &mut t.parts,
-                                &AgentEvent::ToolResult { id, is_error, output: None, diff },
+                                &AgentEvent::ToolResult {
+                                    id,
+                                    is_error,
+                                    output: None,
+                                    diff,
+                                },
                             );
                         }
                     }
@@ -199,8 +211,12 @@ fn close_turn(turn: &mut Option<Message>, out: &mut Vec<Message>) {
 }
 
 fn read_entries(path: &Path) -> Result<Vec<Value>> {
-    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    Ok(raw.lines().filter_map(|l| serde_json::from_str(l).ok()).collect())
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(raw
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect())
 }
 
 fn header(entries: &[Value]) -> Result<&Value> {
@@ -217,7 +233,10 @@ fn active_branch(entries: &[Value]) -> Vec<&Value> {
         .filter_map(|e| e["id"].as_str().map(|id| (id, e)))
         .collect();
     let mut path = vec![];
-    let mut cur = entries.iter().rev().find(|e| e["id"].is_string() && e["type"] != "session");
+    let mut cur = entries
+        .iter()
+        .rev()
+        .find(|e| e["id"].is_string() && e["type"] != "session");
     while let Some(e) = cur {
         path.push(e);
         cur = e["parentId"].as_str().and_then(|p| by_id.get(p).copied());
@@ -247,8 +266,12 @@ fn user_text(message: &Value) -> String {
 /// Zeron's Pi tool mapping (`normalize.rs::tool`).
 fn tool(name: &str, args: &Value) -> ToolCall {
     match name {
-        "bash" => ToolCall::Exec { command: s(args, "command").into() },
-        "read" => ToolCall::ReadFile { path: s(args, "path").into() },
+        "bash" => ToolCall::Exec {
+            command: s(args, "command").into(),
+        },
+        "read" => ToolCall::ReadFile {
+            path: s(args, "path").into(),
+        },
         "write" => ToolCall::WriteFile {
             path: s(args, "path").into(),
             content: args["content"].as_str().map(str::to_owned),
@@ -263,13 +286,18 @@ fn tool(name: &str, args: &Value) -> ToolCall {
             pattern: s(args, "pattern").into(),
             path: args["path"].as_str().map(str::to_owned),
         },
-        "find" => ToolCall::Glob { pattern: s(args, "pattern").into() },
+        "find" => ToolCall::Glob {
+            pattern: s(args, "pattern").into(),
+        },
         n if n.starts_with("zeron_") => ToolCall::Mcp {
             server: "zeron".into(),
             tool: n["zeron_".len()..].into(),
             input: Some(args.clone()),
         },
-        _ => ToolCall::Unknown { name: name.into(), input: Some(args.clone()) },
+        _ => ToolCall::Unknown {
+            name: name.into(),
+            input: Some(args.clone()),
+        },
     }
 }
 
@@ -281,14 +309,30 @@ fn diff(name: &str, args: &Value) -> Option<ToolDiff> {
         "edit" => {
             let (old, new) = match args["edits"].as_array() {
                 Some(edits) => (
-                    edits.iter().map(|e| s(e, "oldText")).collect::<Vec<_>>().join("\n"),
-                    edits.iter().map(|e| s(e, "newText")).collect::<Vec<_>>().join("\n"),
+                    edits
+                        .iter()
+                        .map(|e| s(e, "oldText"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    edits
+                        .iter()
+                        .map(|e| s(e, "newText"))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                 ),
                 None => (s(args, "oldText").into(), s(args, "newText").into()),
             };
-            Some(ToolDiff { path, old_text: Some(old), new_text: new })
+            Some(ToolDiff {
+                path,
+                old_text: Some(old),
+                new_text: new,
+            })
         }
-        "write" => Some(ToolDiff { path, old_text: None, new_text: s(args, "content").into() }),
+        "write" => Some(ToolDiff {
+            path,
+            old_text: None,
+            new_text: s(args, "content").into(),
+        }),
         _ => None,
     }
 }
@@ -325,10 +369,20 @@ mod tests {
         let roles: Vec<_> = session.messages.iter().map(|m| m.role).collect();
         assert_eq!(
             roles,
-            [MessageRole::User, MessageRole::Assistant, MessageRole::User, MessageRole::Assistant]
+            [
+                MessageRole::User,
+                MessageRole::Assistant,
+                MessageRole::User,
+                MessageRole::Assistant
+            ]
         );
         // The abandoned branch's prompt must not leak into the transcript.
-        assert!(session.messages.iter().all(|m| !m.text().contains("abandoned")));
+        assert!(
+            session
+                .messages
+                .iter()
+                .all(|m| !m.text().contains("abandoned"))
+        );
         assert_eq!(session.messages[3].text(), "Second answer.");
     }
 
@@ -336,8 +390,16 @@ mod tests {
     fn tool_calls_fold_into_resolved_chips_with_diff_stats() {
         let session = parse(&fixture()).unwrap();
         let turn = &session.messages[1];
-        assert!(matches!(&turn.parts[0], MessagePart::Reasoning { text, .. } if text == "Let me edit."));
-        let MessagePart::Tool { call, resolved, diff_stats, .. } = &turn.parts[1] else {
+        assert!(
+            matches!(&turn.parts[0], MessagePart::Reasoning { text, .. } if text == "Let me edit.")
+        );
+        let MessagePart::Tool {
+            call,
+            resolved,
+            diff_stats,
+            ..
+        } = &turn.parts[1]
+        else {
             panic!("expected a tool part, got {:?}", turn.parts[1]);
         };
         assert!(matches!(call, ToolCall::EditFile { path, .. } if path == "a.txt"));

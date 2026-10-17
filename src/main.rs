@@ -19,7 +19,11 @@ use crate::sources::pi;
 use crate::zeron::Profile;
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(
+    version = concat!(env!("CARGO_PKG_VERSION"), " (Zeron ", zeron::zeron_version!(), ")"),
+    about,
+    long_about = None
+)]
 struct Cli {
     #[command(flatten)]
     global: Global,
@@ -105,7 +109,9 @@ enum Harness {
 }
 
 pub(crate) fn home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| "/".into())
 }
 
 // zeron-sync's store runs SQLite through tokio's blocking pool.
@@ -119,11 +125,13 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let data_dir = cli.global.data_dir.clone().unwrap_or_else(zeron::data_dir);
     let profile_dir = data_dir.join("profiles").join(&cli.global.profile);
-    let open = |write: bool| {
-        Profile::open(&data_dir, &profile_dir, write, cli.global.ignore_version)
-    };
+    let open =
+        |write: bool| Profile::open(&data_dir, &profile_dir, write, cli.global.ignore_version);
     match cli.command {
-        Cmd::Sessions { harness: Harness::Pi, all } => {
+        Cmd::Sessions {
+            harness: Harness::Pi,
+            all,
+        } => {
             let profile = open(false)?;
             let agent_dir = pi::agent_dir();
             for file in pi::session_files(&agent_dir)? {
@@ -153,7 +161,13 @@ async fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Import { harness: Harness::Pi, sessions, title, create_project, write } => {
+        Cmd::Import {
+            harness: Harness::Pi,
+            sessions,
+            title,
+            create_project,
+            write,
+        } => {
             if title.is_some() && sessions.len() > 1 {
                 bail!("--title needs exactly one session; use `rename` for batches");
             }
@@ -201,7 +215,15 @@ async fn main() -> Result<()> {
                 bail!("{failed} session(s) failed");
             }
         }
-        Cmd::Rename { chats, untitled, all, model, reasoning, codex, write } => {
+        Cmd::Rename {
+            chats,
+            untitled,
+            all,
+            model,
+            reasoning,
+            codex,
+            write,
+        } => {
             if chats.is_empty() && !untitled && !all {
                 bail!("pick chats with --chat, --untitled, or --all");
             }
@@ -210,7 +232,10 @@ async fn main() -> Result<()> {
             let mut picked = HashSet::new();
             let every = profile.chats()?;
             for prefix in &chats {
-                let hits: Vec<_> = every.iter().filter(|c| c.id.starts_with(prefix.as_str())).collect();
+                let hits: Vec<_> = every
+                    .iter()
+                    .filter(|c| c.id.starts_with(prefix.as_str()))
+                    .collect();
                 match hits.as_slice() {
                     [one] => picked.insert(one.id.clone()),
                     [] => bail!("no chat matches {prefix}"),
@@ -236,8 +261,16 @@ async fn main() -> Result<()> {
                 println!("nothing to rename");
                 return Ok(());
             }
-            eprintln!("asking {model} ({reasoning}) for {} titles…", excerpts.len());
-            let titles = Codex { binary: codex, model, reasoning }.titles(&excerpts)?;
+            eprintln!(
+                "asking {model} ({reasoning}) for {} titles…",
+                excerpts.len()
+            );
+            let titles = Codex {
+                binary: codex,
+                model,
+                reasoning,
+            }
+            .titles(&excerpts)?;
             backup(&profile, &data_dir, &write)?;
             for t in &titles {
                 let old = selected
@@ -245,7 +278,12 @@ async fn main() -> Result<()> {
                     .find(|c| c.id == t.id)
                     .and_then(|c| c.title.clone())
                     .unwrap_or_default();
-                println!("{}  {}  ->  {}", short_id(&t.id), one_line(&old, 40), t.title);
+                println!(
+                    "{}  {}  ->  {}",
+                    short_id(&t.id),
+                    one_line(&old, 40),
+                    t.title
+                );
                 if !write.dry_run {
                     profile.rename(&t.id, &t.title)?;
                 }
@@ -332,4 +370,3 @@ fn one_line(text: &str, max: usize) -> String {
         None => flat,
     }
 }
-

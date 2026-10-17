@@ -5,12 +5,9 @@ edition = "2024"
 publish = false
 description = "Offline maintenance tools for Zeron: import harness sessions, rename chats"
 
-[package.metadata.zeron]
-# The Zeron release this build targets. Keep in sync with the `tag` below.
-version = "0.2.113"
-
 [dependencies]
-# Zeron's crates are not on crates.io; pin them to the release we target.
+# Zeron's crates are not on crates.io; pin them to the release we target
+# (the same version as `zeron_version!` in src/zeron.rs).
 zeron-doc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
 zeron-sync = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
 zeron-proto = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }

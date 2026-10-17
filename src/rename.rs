@@ -50,7 +50,10 @@ impl Excerpt {
             id: id.into(),
             project,
             first_user: clip(&first_user),
-            first_reply: texts(MessageRole::Assistant).next().map(|t| clip(&t)).unwrap_or_default(),
+            first_reply: texts(MessageRole::Assistant)
+                .next()
+                .map(|t| clip(&t))
+                .unwrap_or_default(),
             later_user: users.next().map(|t| clip(&t)).unwrap_or_default(),
         })
     }
@@ -94,7 +97,14 @@ impl Codex {
         let prompt = format!("{INSTRUCTIONS}\n\n{}", serde_json::to_string_pretty(chats)?);
 
         let mut child = Command::new(&self.binary)
-            .args(["exec", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-m"])
+            .args([
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "-s",
+                "read-only",
+                "-m",
+            ])
             .arg(&self.model)
             .arg("-c")
             .arg(format!("model_reasoning_effort={}", self.reasoning))
@@ -109,7 +119,11 @@ impl Codex {
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("running {}", self.binary.display()))?;
-        child.stdin.take().context("codex stdin")?.write_all(prompt.as_bytes())?;
+        child
+            .stdin
+            .take()
+            .context("codex stdin")?
+            .write_all(prompt.as_bytes())?;
         let run = child.wait_with_output()?;
         let result = if run.status.success() {
             std::fs::read_to_string(&output)
@@ -194,7 +208,10 @@ mod tests {
         ]}"#;
         let titles = parse(raw, &[excerpt("a"), excerpt("b")]).unwrap();
         assert_eq!(titles.len(), 1);
-        assert_eq!((titles[0].id.as_str(), titles[0].title.as_str()), ("a", "Fix Login Bug"));
+        assert_eq!(
+            (titles[0].id.as_str(), titles[0].title.as_str()),
+            ("a", "Fix Login Bug")
+        );
     }
 
     #[test]
