@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Result, bail};
 
 use crate::sources::Source;
-use crate::zeron::Profile;
+use crate::zeron::{ImportAs, Profile};
 use crate::{Tally, short_id, short_path};
 
 /// When an import creates a Zeron project for a cwd that has none.
@@ -75,12 +75,21 @@ fn import_one(profile: &mut Profile, source: &Source, file: &Path, opts: &Opts) 
         profile.delete_chat(&chat.id)?;
         println!("deleted chat {} (replacing it)", chat.id);
     }
-    let create_project = match opts.projects {
-        Projects::Never => false,
-        Projects::Always => true,
-        Projects::GitRoots => session.cwd.join(".git").exists(),
+    let project = match opts.projects {
+        Projects::Never => None,
+        Projects::Always => Some(session.cwd.as_path()),
+        Projects::GitRoots => session
+            .cwd
+            .join(".git")
+            .exists()
+            .then_some(session.cwd.as_path()),
     };
-    let done = profile.import(&session, opts.title, create_project)?;
+    let how = ImportAs {
+        title: opts.title,
+        project,
+        sandbox: None,
+    };
+    let done = profile.import(&session, &how)?;
     profile.save()?;
     println!(
         "imported {} -> chat {}  {} messages  {}{}",

@@ -14,13 +14,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeZone, Utc};
 use zeron_doc::{
-    MessagePart, MessageStatus, REGISTRY_DOC_ID, RegistryDoc, SessionDoc, SessionMessageEntry,
-    sanitize_tool_call,
+    MessagePart, MessageRole, MessageStatus, REGISTRY_DOC_ID, RegistryDoc, SessionDoc,
+    SessionMessageEntry, sanitize_tool_call,
 };
 use zeron_proto::{Chat, ChatConfig, HarnessId, Model, SandboxLevel, Space};
 use zeron_sync::DocsStore;
 
-use crate::sources::Session;
+use crate::sources::{Message, Seen, Session};
 
 /// The Zeron release this build reads and writes, as a literal so `--version`
 /// can embed it. Must match the git tag of the zeron-* dependencies in
@@ -55,6 +55,18 @@ pub struct Profile {
     dirty: bool,
     /// Held for the profile's lifetime; `None` for read-only opens.
     lock: Option<File>,
+}
+
+/// How [`Profile::import`] files a session.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImportAs<'a> {
+    /// Chat title (default: the session's own name).
+    pub title: Option<&'a str>,
+    /// The chat's project folder, made a project if Zeron has none there.
+    /// `None`: the project at the session's cwd, if any, else "No project".
+    pub project: Option<&'a Path>,
+    /// Default: workspace-write, what Zeron gives new chats.
+    pub sandbox: Option<SandboxLevel>,
 }
 
 /// What [`Profile::import`] created.
@@ -167,16 +179,80 @@ impl Profile {
         Ok(SessionDoc::from_doc(doc).read_entries()?)
     }
 
+    /// How much of its session the chat's transcript shows: its prompts, and
+    /// when its newest entry ended (a turn's start plus its duration).
+    pub fn seen(&self, chat_id: &str) -> Result<Seen> {
+        let entries = self.transcript(chat_id)?;
+        Ok(Seen {
+            prompts: entries
+                .iter()
+                .filter(|e| e.role == MessageRole::User)
+                .count(),
+            end: entries
+                .iter()
+                .map(|e| e.created_at + e.duration_ms.unwrap_or(0))
+                .max(),
+        })
+    }
+
+    /// Append `messages` to an existing chat's transcript and bump its row's
+    /// last activity. The doc keeps its cursor and epoch, like the engine's
+    /// own saves; the row is persisted by [`Self::save`].
+    pub fn append(&mut self, chat_id: &str, messages: &[Message]) -> Result<()> {
+        if self.lock.is_none() {
+            bail!("profile was opened read-only");
+        }
+        let Some(last) = messages.last() else {
+            return Ok(());
+        };
+        let mut chat = self
+            .chats()?
+            .into_iter()
+            .find(|c| c.id == chat_id)
+            .with_context(|| format!("no chat {chat_id}"))?;
+        let (bytes, cursor, epoch) = self
+            .store
+            .load_snapshot_with_cursor(chat_id)?
+            .with_context(|| format!("chat {chat_id} has no transcript doc"))?;
+        let doc = loro::LoroDoc::new();
+        doc.import(&bytes)?;
+        let doc = SessionDoc::from_doc(doc);
+        let before = doc.read_entries()?.len();
+        for message in messages {
+            doc.push_message(&self.entry(message))?;
+        }
+        let bytes = doc.export_snapshot()?;
+        let reread = loro::LoroDoc::new();
+        reread.import(&bytes)?;
+        let count = SessionDoc::from_doc(reread).read_entries()?.len();
+        if count != before + messages.len() {
+            bail!(
+                "round-trip mismatch: had {before} messages, added {}, read {count}",
+                messages.len()
+            );
+        }
+        if self.store.snapshot_cursor_verified(chat_id)? {
+            self.store
+                .save_verified_snapshot_with_cursor(chat_id, &bytes, cursor, epoch)?;
+        } else {
+            self.store
+                .save_snapshot_with_cursor(chat_id, &bytes, cursor, epoch)?;
+        }
+        let end = at(last.created_ms + last.duration_ms.unwrap_or(0));
+        chat.last_message_at = Some(chat.last_message_at.map_or(end, |t| t.max(end)));
+        chat.last_seen_at = chat.last_message_at;
+        if let Some(preview) = preview(messages) {
+            chat.last_message_preview = Some(preview);
+        }
+        self.registry.upsert_chat(&chat)?;
+        self.dirty = true;
+        Ok(())
+    }
+
     /// Write `session` as a new chat. The chat doc is saved immediately; the
-    /// registry row is persisted by [`Self::save`]. With `create_project`, a
-    /// cwd that matches no project becomes one (Zeron stamps its git fields
-    /// on next boot); otherwise the chat lands under "No project".
-    pub fn import(
-        &mut self,
-        session: &Session,
-        title: Option<&str>,
-        create_project: bool,
-    ) -> Result<Imported> {
+    /// registry row is persisted by [`Self::save`]. A new project gets no
+    /// git fields; Zeron stamps them on next boot.
+    pub fn import(&mut self, session: &Session, how: &ImportAs) -> Result<Imported> {
         if self.lock.is_none() {
             bail!("profile was opened read-only");
         }
@@ -189,17 +265,18 @@ impl Profile {
         }
         let cwd = session.cwd.to_string_lossy().into_owned();
         let mut created_space = false;
+        let folder = how.project.unwrap_or(&session.cwd);
         let mut space_id = self
             .spaces()?
             .into_iter()
-            .find(|s| s.device_id == self.device && Path::new(&s.path) == session.cwd)
+            .find(|s| s.device_id == self.device && Path::new(&s.path) == folder)
             .map(|s| s.id);
         let cwd_missing = !session.cwd.is_dir();
-        if space_id.is_none() && create_project && !cwd_missing {
+        if space_id.is_none() && how.project.is_some() && folder.is_dir() {
             let space = Space {
                 id: uuid::Uuid::new_v4().to_string(),
                 device_id: self.device.clone(),
-                path: cwd.clone(),
+                path: folder.to_string_lossy().into_owned(),
                 name: None,
                 git_detected: false,
                 git_checked_at: None,
@@ -237,17 +314,13 @@ impl Profile {
         self.store
             .save_snapshot_with_cursor(&chat_id, &bytes, 0, CHAT2_DOC_EPOCH)?;
 
-        let preview = session
-            .messages
-            .iter()
-            .rev()
-            .map(|m| m.text())
-            .find(|t| !t.trim().is_empty())
-            .map(|t| t.chars().take(120).collect());
         self.registry.upsert_chat(&Chat {
             id: chat_id.clone(),
             device_id: self.device.clone(),
-            title: title.map(str::to_owned).or_else(|| session.name.clone()),
+            title: how
+                .title
+                .map(str::to_owned)
+                .or_else(|| session.name.clone()),
             archived: session.archived,
             // Zeron renders project-less cwds home-relative.
             cwd: Some(
@@ -267,9 +340,9 @@ impl Profile {
                 model: model.clone(),
                 reasoning: session.reasoning,
                 model_options: Default::default(),
-                sandbox: SandboxLevel::WorkspaceWrite,
+                sandbox: how.sandbox.unwrap_or(SandboxLevel::WorkspaceWrite),
             }),
-            last_message_preview: preview,
+            last_message_preview: preview(&session.messages),
             last_message_at: Some(at(session.last_ms)),
             created_at: at(session.created_ms),
             harness_session_id: Some(session.id.clone()),
@@ -426,6 +499,16 @@ fn lock(data_dir: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// The sidebar preview: the newest message with prose, cut to 120 characters.
+fn preview(messages: &[Message]) -> Option<String> {
+    messages
+        .iter()
+        .rev()
+        .map(|m| m.text())
+        .find(|t| !t.trim().is_empty())
+        .map(|t| t.chars().take(120).collect())
+}
+
 fn at(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms)
         .single()
@@ -469,6 +552,54 @@ mod tests {
         Profile::open(dir, &dir.join("profiles/local"), write, false)
     }
 
+    fn project(folder: &Path) -> ImportAs<'_> {
+        ImportAs {
+            project: Some(folder),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn append_extends_the_transcript_and_last_activity() {
+        let dir = data_dir(ZERON_VERSION);
+        let session = fixture();
+        let (head, tail) = session.messages.split_at(2);
+        let mut first = session.clone();
+        first.messages = head.to_vec();
+        let chat_id = {
+            let mut profile = open(dir.path(), true).unwrap();
+            let chat_id = profile
+                .import(&first, &ImportAs::default())
+                .unwrap()
+                .chat_id;
+            let seen = profile.seen(&chat_id).unwrap();
+            assert_eq!(
+                seen.end,
+                head.iter()
+                    .map(|m| m.created_ms + m.duration_ms.unwrap_or(0))
+                    .max()
+            );
+            assert_eq!(
+                seen.prompts,
+                head.iter().filter(|m| m.role == MessageRole::User).count()
+            );
+            profile.append(&chat_id, tail).unwrap();
+            profile.save().unwrap();
+            chat_id
+        };
+        let profile = open(dir.path(), false).unwrap();
+        assert_eq!(
+            profile.transcript(&chat_id).unwrap().len(),
+            session.messages.len()
+        );
+        let chat = profile.linked_chat(&session.id).unwrap().unwrap();
+        let last = session.messages.last().unwrap();
+        assert_eq!(
+            chat.last_message_at.unwrap().timestamp_millis(),
+            last.created_ms + last.duration_ms.unwrap_or(0)
+        );
+    }
+
     fn fixture() -> Session {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi-session.jsonl");
         crate::sources::pi::parse(&path).unwrap()
@@ -486,12 +617,12 @@ mod tests {
         session.cwd = repo.clone();
         let chat_id = {
             let mut profile = open(dir.path(), true).unwrap();
-            let gone = profile.import(&missing, None, true).unwrap();
+            let gone = profile.import(&missing, &project(&missing.cwd)).unwrap();
             assert!(gone.cwd_missing && !gone.created_space && gone.space_id.is_none());
-            let done = profile.import(&session, None, true).unwrap();
+            let done = profile.import(&session, &project(&repo)).unwrap();
             assert!(done.created_space && !done.cwd_missing);
             assert!(
-                profile.import(&session, None, true).is_err(),
+                profile.import(&session, &project(&repo)).is_err(),
                 "double import must fail"
             );
             assert!(profile.rename(&done.chat_id, "Renamed").unwrap());
@@ -517,14 +648,20 @@ mod tests {
     async fn deleted_chats_free_their_session_for_reimport() {
         let dir = data_dir(ZERON_VERSION);
         let mut profile = open(dir.path(), true).unwrap();
-        let old = profile.import(&fixture(), None, false).unwrap().chat_id;
+        let old = profile
+            .import(&fixture(), &ImportAs::default())
+            .unwrap()
+            .chat_id;
         profile.delete_chat(&old).unwrap();
         assert!(profile.linked_chat(&fixture().id).unwrap().is_none());
         assert!(
             profile.transcript(&old).unwrap().is_empty(),
             "doc removed too"
         );
-        let new = profile.import(&fixture(), None, false).unwrap().chat_id;
+        let new = profile
+            .import(&fixture(), &ImportAs::default())
+            .unwrap()
+            .chat_id;
         profile.save().unwrap();
         drop(profile);
         let profile = open(dir.path(), false).unwrap();
@@ -554,7 +691,7 @@ mod tests {
         )
         .unwrap();
         let mut profile = open(dir.path(), true).unwrap();
-        let done = profile.import(&fixture(), None, false).unwrap();
+        let done = profile.import(&fixture(), &ImportAs::default()).unwrap();
         assert_eq!(
             done.dropped_model.as_deref(),
             Some("anthropic/claude-opus-5-5")

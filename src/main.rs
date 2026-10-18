@@ -8,6 +8,8 @@ mod archive;
 mod delete;
 mod export;
 mod import;
+mod monocode;
+mod refresh;
 mod rename;
 mod sources;
 mod zeron;
@@ -22,13 +24,21 @@ use zeron_proto::HarnessId;
 
 use crate::export::{ExportedChat, Format};
 use crate::import::Projects;
+use crate::monocode::Monocode;
 use crate::rename::Pi;
 use crate::sources::Source;
 use crate::zeron::Profile;
 
 #[derive(Parser)]
 #[command(
-    version = concat!(env!("CARGO_PKG_VERSION"), " (Zeron ", zeron::zeron_version!(), ")"),
+    version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (Zeron ",
+        zeron::zeron_version!(),
+        ", MonoCode ",
+        monocode::monocode_version!(),
+        ")"
+    ),
     about,
     long_about = None
 )]
@@ -47,7 +57,7 @@ struct Global {
     /// Profile to operate on (Zeron's offline profile is `local`)
     #[arg(long, global = true, default_value = "local")]
     profile: String,
-    /// Run even if Zeron last booted a version this build doesn't target
+    /// Run even if Zeron or MonoCode is at a version this build doesn't target
     #[arg(long, global = true)]
     ignore_version: bool,
 }
@@ -55,11 +65,13 @@ struct Global {
 #[derive(Subcommand)]
 enum Cmd {
     /// Keep Zeron in sync: delete orphaned sessions, import new pi and Codex
-    /// sessions, title untitled chats, and archive old ones
+    /// sessions, add turns made elsewhere, title untitled chats, archive old
+    /// ones, and copy chats to MonoCode
     ///
     /// Imports skip sessions whose folder is gone or excluded, and sessions
     /// active in the last hour (they may still be running). A project is
-    /// created for a new folder only if it is a git repository root.
+    /// created for a new folder only if it is a git repository root. The
+    /// MonoCode step runs when MonoCode is installed; quit it too.
     Sync {
         /// Keep this many most recently active chats per project in the sidebar
         #[arg(long, default_value_t = 10)]
@@ -75,11 +87,31 @@ enum Cmd {
         /// Leave untitled chats as they are
         #[arg(long)]
         no_rename: bool,
+        /// Skip the MonoCode step
+        #[arg(long)]
+        no_monocode: bool,
         #[command(flatten)]
         pi: PiOpts,
         /// Codex binary (for `codex delete`)
         #[arg(long, env = "CODEX_BIN", default_value = "codex")]
         codex: PathBuf,
+        #[command(flatten)]
+        write: WriteOpts,
+    },
+    /// Add turns made outside Zeron (MonoCode, the pi CLI, Codex's apps) to
+    /// the chats that resume those sessions
+    Refresh {
+        #[command(flatten)]
+        write: WriteOpts,
+    },
+    /// Copy Zeron's pi and Codex chats to MonoCode, with their projects
+    ///
+    /// Creates a MonoCode chat, resuming the same session, for every Zeron
+    /// chat in a project that MonoCode doesn't have, and adds turns made
+    /// elsewhere to MonoCode chats. Chats started in MonoCode reach Zeron
+    /// through `sync` (they are plain pi and Codex sessions). A chat deleted
+    /// in MonoCode is not copied again. Quit MonoCode first.
+    Monocode {
         #[command(flatten)]
         write: WriteOpts,
     },
@@ -292,12 +324,24 @@ async fn main() -> Result<()> {
             keep,
             exclude,
             no_rename,
+            no_monocode,
             pi,
             codex,
             write,
         } => {
             let mut profile = open(!write.dry_run)?;
-            backup(&profile, &data_dir, &write)?;
+            // Check MonoCode before any step writes, so a running one fails fast.
+            let mono = match monocode::Paths::installed()? {
+                Some(paths) if !no_monocode => {
+                    Some(open_monocode(&paths, &write, cli.global.ignore_version)?)
+                }
+                _ => None,
+            };
+            let resumed = monocode_sessions()?;
+            let dest = backup(&profile, &data_dir, &write)?;
+            if let (Some(mono), Some(dest)) = (&mono, &dest) {
+                mono.backup(dest)?;
+            }
             let exclude: Vec<PathBuf> = exclude.iter().map(|e| expand_tilde(e)).collect();
             let mut failed = 0;
             // A failing step is reported; the others still run.
@@ -319,6 +363,7 @@ async fn main() -> Result<()> {
                 keep: &[],
                 zeron_only: false,
                 codex: &codex,
+                resumed_elsewhere: &resumed,
                 dry_run: write.dry_run,
             };
             step("orphans", delete::run(&mut profile, &delete));
@@ -340,6 +385,8 @@ async fn main() -> Result<()> {
                 });
                 step(&format!("{name} import"), result);
             }
+            eprintln!("== Adding turns made outside Zeron");
+            step("turns", refresh::run(&mut profile, write.dry_run));
             if !no_rename {
                 eprintln!("== Titling untitled chats");
                 let selection = rename::Selection {
@@ -357,7 +404,32 @@ async fn main() -> Result<()> {
                 "archive",
                 archive::run(&mut profile, keep, None, None, write.dry_run),
             );
+            if let Some(mono) = &mono {
+                eprintln!("== Copying chats to MonoCode");
+                let state = monocode_state(&data_dir);
+                step(
+                    "monocode",
+                    monocode::push::run(&profile, mono, &state, write.dry_run),
+                );
+            }
             failed
+        }
+        Cmd::Refresh { write } => {
+            let mut profile = open(!write.dry_run)?;
+            backup(&profile, &data_dir, &write)?;
+            refresh::run(&mut profile, write.dry_run)?.failed
+        }
+        Cmd::Monocode { write } => {
+            let paths = monocode::Paths::installed()?.context("MonoCode isn't installed")?;
+            let mono = open_monocode(&paths, &write, cli.global.ignore_version)?;
+            // Zeron is only read, but a running Zeron may not have saved
+            // its newest chats and turns yet.
+            let profile = open(!write.dry_run)?;
+            if let Some(dest) = backup(&profile, &data_dir, &write)? {
+                mono.backup(&dest)?;
+            }
+            let state = monocode_state(&data_dir);
+            monocode::push::run(&profile, &mono, &state, write.dry_run)?.failed
         }
         Cmd::Sessions { harness, all } => {
             let profile = open(false)?;
@@ -470,6 +542,7 @@ async fn main() -> Result<()> {
                 keep: &keep,
                 zeron_only,
                 codex: &codex,
+                resumed_elsewhere: &monocode_sessions()?,
                 dry_run: write.dry_run,
             };
             delete::run(&mut profile, &opts)?.failed
@@ -591,16 +664,44 @@ fn expand_tilde(path: &str) -> PathBuf {
     }
 }
 
-/// Back up docs.sqlite3 before a write, unless dry-run or opted out.
-fn backup(profile: &Profile, data_dir: &Path, opts: &WriteOpts) -> Result<()> {
+/// Back up docs.sqlite3 before a write, unless dry-run or opted out; returns
+/// the backup folder, for other stores to back up into.
+fn backup(profile: &Profile, data_dir: &Path, opts: &WriteOpts) -> Result<Option<PathBuf>> {
     if opts.dry_run || opts.no_backup {
-        return Ok(());
+        return Ok(None);
     }
     let dest = data_dir
         .join("zeron-tools-backups")
         .join(Local::now().format("%Y%m%d-%H%M%S").to_string());
-    eprintln!("backup: {}", profile.backup(&dest)?.display());
-    Ok(())
+    profile.backup(&dest)?;
+    eprintln!("backup: {}", dest.display());
+    Ok(Some(dest))
+}
+
+/// Open MonoCode to write (it must be quit), or read for a dry run.
+fn open_monocode(
+    paths: &monocode::Paths,
+    write: &WriteOpts,
+    ignore_version: bool,
+) -> Result<Monocode> {
+    if !write.dry_run {
+        monocode::ensure_quit()?;
+    }
+    Monocode::open(paths, !write.dry_run, ignore_version)
+}
+
+/// Sessions MonoCode chats resume (none if it isn't installed): deleting
+/// one would break that chat. Reads one column, so any version will do.
+fn monocode_sessions() -> Result<HashSet<String>> {
+    match monocode::Paths::installed()? {
+        Some(paths) => Monocode::open(&paths, false, true)?.resumed_sessions(),
+        None => Ok(HashSet::new()),
+    }
+}
+
+/// Where `monocode` remembers the sessions MonoCode had.
+fn monocode_state(data_dir: &Path) -> PathBuf {
+    data_dir.join("zeron-tools-monocode.json")
 }
 
 /// A harness's id as Zeron spells it (`codex`, `pi`, `claude-code`).

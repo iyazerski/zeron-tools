@@ -1,12 +1,14 @@
 # zeron-tools
 
 Offline tools for a local [Zeron](https://github.com/zeronsh/zeron) profile:
-- `sync`: keep Zeron up to date with one command
+- `sync`: keep Zeron (and MonoCode) up to date with one command
 - import pi sessions and Codex threads (for example from the ChatGPT/Codex app) that were created outside Zeron
 - title chats with a small model through pi
 - export chats as Markdown or JSONL, for example to have an agent review them
 - archive older chats so the sidebar shows only recent ones per project
 - delete unfinished chats (interrupted, failed, never answered) and orphaned sessions, together with their pi/Codex sessions
+- show turns made outside Zeron (in MonoCode, the pi CLI, Codex's apps) in the Zeron chat
+- copy chats and projects to [MonoCode](https://github.com/hardbeat920/monocode)
 
 Supports macOS on Apple silicon, the same as Zeron. See `AGENTS.md` for how it works and how to update it for a new Zeron release.
 
@@ -26,7 +28,7 @@ To build from source instead, run `make install`.
 
 ## Usage
 
-Quit Zeron (Cmd+Q), then run this from time to time:
+Quit Zeron (Cmd+Q), and MonoCode if you use it, then run this from time to time:
 
 ```sh
 zeron-tools sync --dry-run                 # see what it would do (works while Zeron runs)
@@ -34,11 +36,13 @@ zeron-tools sync
 open -a Zeron
 ```
 
-`sync` backs up `docs.sqlite3`, then:
+`sync` backs up `docs.sqlite3` (and MonoCode's data), then:
 1. deletes orphaned sessions (`delete --orphaned`);
 2. imports new pi and Codex sessions, creating a project for a new folder only if it's a git repository root;
-3. titles untitled chats (`rename --untitled`);
-4. archives all but the 10 most recent chats per project (`archive`, change with `--keep`).
+3. adds turns made outside Zeron to the chats that resume those sessions (`refresh`);
+4. titles untitled chats (`rename --untitled`);
+5. archives all but the 10 most recent chats per project (`archive`, change with `--keep`);
+6. if MonoCode is installed, copies chats to it (`monocode`, skip with `--no-monocode`).
 
 It doesn't import sessions whose folder is gone, sessions in `--exclude` folders (default: Codex's scratch folder `~/Documents/Codex` and temp folders), or sessions active in the last hour, which may still be running. It never deletes chats; use `delete --unfinished` for that. `--no-rename` skips titling. A failing step is reported and the others still run.
 
@@ -61,6 +65,8 @@ zeron-tools import pi 01a0f866-31fb
 zeron-tools rename --untitled              # or --chat <id-prefix>..., or --all
 zeron-tools delete --unfinished --orphaned --dry-run   # then without --dry-run
 zeron-tools archive --keep 10 --dry-run    # keep 10 recent chats per project
+zeron-tools refresh                        # turns made outside Zeron
+zeron-tools monocode --dry-run             # copy chats to MonoCode (quit it first)
 open -a Zeron
 ```
 
@@ -75,4 +81,6 @@ open -a Zeron
 - **Messages from other chats:** when an agent in another chat sends a message with Zeron's `send_message` tool (sub-agents, reviews, second opinions), it arrives as a user message. Export labels it "Message from chat <title>" instead of "User" and removes the routing header. In JSONL it keeps `role: "user"` and gets `fromChat: {id, title}`. User messages without `fromChat` are the ones a person typed in Zeron.
 - **Archive:** Zeron's sidebar draws every unarchived chat, which gets slow with hundreds. `archive` keeps the `--keep N` (default 10) most recently active chats of each project and archives the rest. `--older-than 30d` (or a date) archives only chats inactive at least that long, and `--project` limits it to one project. Pinned chats and chats in sidebar sections are never archived. Archived chats stay searchable and resumable; turn on the Archived shelf in the sidebar options to browse them, and unarchive any chat from its menu.
 - **Delete:** `delete --chat <id>...` deletes chats you pick. `--unfinished` picks every chat where the agent never finished a turn with an answer: you interrupted it, it failed with an error, or it never replied. A chat with at least one finished answer is never unfinished. `--orphaned` picks pi and Codex sessions that Zeron started but no chat resumes anymore. `--keep <id>` protects a chat or session. Each deleted chat's harness session is deleted too, unless another chat still resumes it or you pass `--zeron-only`. Pi session files go to the Trash. Codex threads are deleted for good with `codex delete` (set `CODEX_BIN` or `--codex` if it isn't on `PATH`). Run `--dry-run` first.
+- **Turns made elsewhere:** Zeron resumes a session even when you continued it in another app, but its transcript doesn't show those turns. `refresh` adds them. A turn counts as new only if its prompt comes after the chat's last one both by count and by time, so it may miss a turn but never adds one twice. Sessions written in the last 2 minutes wait for the next run, as they may be mid-turn.
+- **MonoCode:** `monocode` copies every pi and Codex chat in a Zeron project to MonoCode, resuming the same session, and puts the projects on MonoCode's project rail. Title, archived flag, and model are copied once. After that, each app keeps its own, but turns made in either app reach the other on the next `sync`. Chats started in MonoCode are plain pi and Codex sessions, so `sync` imports them like any other. Chats in no Zeron project are skipped (MonoCode files every chat under a project). A chat you delete in MonoCode isn't copied again (zeron-tools remembers MonoCode's chats in `~/.zeron/zeron-tools-monocode.json`). Deleting a Zeron chat never deletes a session a MonoCode chat still resumes. MonoCode's rail keeps only 20 projects once you open another folder; the others' chats stay. Each release targets one MonoCode version, shown by `zeron-tools --version`, and refuses other database versions.
 - **Rename:** `rename` (and `sync`) ask a small model through the `pi` CLI, logged in to the model's provider. Pi runs one-shot with nothing loaded but the model (no session file, tools, extensions, skills, or context files), 20 chats per call, so a batch costs a few hundred tokens. Defaults: `--model openai-codex/gpt-6-luna --thinking low`; any `provider/model` from `pi --list-models` works. Set `PI_BIN` or pass `--pi` if `pi` isn't on `PATH`.

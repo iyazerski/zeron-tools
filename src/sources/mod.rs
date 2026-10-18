@@ -58,6 +58,55 @@ impl Message {
     }
 }
 
+/// An app's recorded turn end and a harness message within this of it are
+/// the same turn (apps and harnesses stamp the same events a little apart).
+const SAME_TURN_MS: i64 = 2_000;
+
+/// How much of a session an app's transcript shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Seen {
+    /// Prompts it sent.
+    pub prompts: usize,
+    /// When its last turn ended.
+    pub end: Option<i64>,
+}
+
+/// The turns of a session continued elsewhere that an app hasn't `seen`.
+/// A turn is new only if its prompt comes after the app's last one both by
+/// count and by time: apps stamp a prompt when sent, harnesses when they
+/// start on it, which can be many seconds apart (a restart, a queue), and an
+/// app may show a prompt the harness never got. Either way this errs toward
+/// missing a turn, never duplicating one.
+pub fn after<'a>(messages: &'a [Message], seen: &Seen) -> &'a [Message] {
+    let mut prompts = 0;
+    let start = messages
+        .iter()
+        .position(|m| {
+            if m.role != MessageRole::User {
+                return false;
+            }
+            prompts += 1;
+            prompts > seen.prompts && seen.end.is_none_or(|end| m.created_ms > end + SAME_TURN_MS)
+        })
+        .unwrap_or(messages.len());
+    &messages[start..]
+}
+
+/// Whether a session written at `modified` may hold turns after `end`.
+pub fn written_after(modified: Option<SystemTime>, end: i64) -> bool {
+    modified
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .is_some_and(|t| t.as_millis() as i64 > end + SAME_TURN_MS)
+}
+
+/// Whether a session written at `modified` may be mid-turn in some app:
+/// copying it now would split that turn, so callers wait for the next run.
+pub fn maybe_running(modified: Option<SystemTime>) -> bool {
+    modified
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .is_some_and(|age| age.as_secs() < 2 * 60)
+}
+
 /// Cheap listing row for `zeron-tools sessions`.
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
@@ -143,6 +192,15 @@ impl Source {
         }
     }
 
+    /// Session id → its file (as in [`Self::files`]), from file names only.
+    pub fn index(&self) -> Result<HashMap<String, PathBuf>> {
+        Ok(self
+            .files()?
+            .into_iter()
+            .filter_map(|f| Some((self.file_id(&f)?.to_owned(), f)))
+            .collect())
+    }
+
     /// All files of the session `path` belongs to.
     fn segments(threads: &HashMap<String, Vec<PathBuf>>, path: &Path) -> Vec<PathBuf> {
         codex::file_id(path)
@@ -189,5 +247,46 @@ impl Source {
             Self::Pi { .. } => pi::parse(path),
             Self::Codex { names, threads } => codex::parse(&Self::segments(threads, path), names),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn after_keeps_only_later_turns() {
+        let at = |role, ms| Message {
+            role,
+            parts: vec![],
+            created_ms: ms,
+            duration_ms: None,
+            aborted: false,
+        };
+        let (user, assistant) = (MessageRole::User, MessageRole::Assistant);
+        let messages = [
+            at(user, 1_000),
+            at(assistant, 1_500),
+            at(user, 5_000),
+            at(assistant, 5_500),
+            at(user, 40_000),
+            at(assistant, 41_000),
+        ];
+        let seen = |prompts, end| Seen { prompts, end };
+        assert_eq!(after(&messages, &Seen::default()).len(), 6);
+        assert_eq!(after(&messages, &seen(1, Some(2_000))).len(), 4);
+        assert_eq!(
+            after(&messages, &seen(2, Some(4_000))).len(),
+            2,
+            "5000 is the same turn"
+        );
+        // The app sent its 3rd prompt at 20 s, the harness started on it at 40 s.
+        assert!(after(&messages, &seen(3, Some(21_000))).is_empty());
+        // The app shows a prompt the harness never got: miss, don't duplicate.
+        assert!(after(&messages, &seen(4, Some(4_000))).is_empty());
+        let t = |ms| Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ms));
+        assert!(written_after(t(10_000), 5_000));
+        assert!(!written_after(t(6_000), 5_000));
+        assert!(!written_after(None, 5_000));
     }
 }
