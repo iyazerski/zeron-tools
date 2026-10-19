@@ -159,9 +159,16 @@ a { color: inherit; text-decoration: none; }
 
 .list-head { padding: calc(var(--top) + 58px) 20px 6px; }
 .list-head h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -.02em; }
-.macs { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-size: 13.5px; color: var(--secondary); }
-.macs span { display: inline-flex; align-items: center; gap: 6px; }
-.macs .off { color: var(--tertiary); }
+/* The Mac tabs: the list shows one Mac at a time. */
+.macs { display: flex; gap: 8px; margin: 10px -20px 0; padding: 0 20px; overflow-x: auto; scrollbar-width: none; }
+.macs::-webkit-scrollbar { display: none; }
+.mac-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px;
+  border-radius: 17px; background: var(--control); color: var(--secondary); font-size: 14.5px; font-weight: 500;
+  transition: background .15s, color .15s, transform .12s;
+}
+.mac-tab:active { transform: scale(.96); }
+.mac-tab.on { background: var(--solid); color: var(--on-solid); }
 
 .search {
   margin: 12px 16px 6px; height: 42px; border-radius: 21px;
@@ -387,15 +394,43 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 .dock > * { pointer-events: auto; }
+/* A card, like the iOS app's active composer: the text, then a row with the
+   model chip and Send. The desktop's footer sits under it. */
 .composer {
-  display: flex; align-items: flex-end; gap: 8px;
-  min-height: 50px; padding: 7px 7px 7px 18px; border-radius: 25px;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 9px 7px 7px 16px; border-radius: 24px;
   max-width: 760px; width: 100%; margin: 0 auto;
 }
 .composer textarea {
-  flex: 1; border: 0; outline: 0; background: none; resize: none;
-  font-size: 16px; line-height: 22px; padding: 7px 0; max-height: 40vh; min-width: 0;
+  width: 100%; border: 0; outline: 0; background: none; resize: none;
+  font-size: 16px; line-height: 22px; padding: 4px 9px 4px 2px; max-height: 40vh;
 }
+.composer-tools { display: flex; align-items: center; gap: 8px; }
+.composer-tools .send { margin-left: auto; }
+.model-chip {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+  height: 32px; padding: 0 10px; margin-left: -8px; border-radius: 16px;
+  font-size: 14px; color: var(--text); transition: background .15s;
+}
+.model-chip:active { background: var(--control); }
+.model-chip .i { width: 15px; height: 15px; flex: none; }
+.model-chip .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.model-chip .lvl { color: var(--tertiary); white-space: nowrap; }
+.composer-foot {
+  display: flex; align-items: center; gap: 14px; min-height: 22px;
+  max-width: 760px; width: 100%; margin: 0 auto; padding: 0 12px 0 16px;
+  font-size: 12.5px; color: var(--tertiary);
+}
+.composer-foot > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; min-width: 0; }
+.composer-foot .branch-ref .txt { overflow: hidden; text-overflow: ellipsis; }
+.composer-foot .i { width: 14px; height: 14px; flex: none; }
+.composer-foot .grow { flex: 1; }
+.ctx { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0 2px 6px; font-size: 12.5px; flex: none; }
+.ring { width: 16px; height: 16px; flex: none; }
+.group-label { font-size: 13px; color: var(--tertiary); margin: 0 6px 8px; }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.pill { height: 34px; padding: 0 14px; border-radius: 17px; background: var(--control); color: var(--secondary); font-size: 14.5px; font-weight: 500; transition: background .15s, color .15s; }
+.pill.on { background: var(--solid); color: var(--on-solid); }
 .composer textarea::placeholder { color: var(--tertiary); }
 .send {
   width: 34px; height: 34px; border-radius: 50%; flex: none;
@@ -446,6 +481,7 @@ a { color: inherit; text-decoration: none; }
 .item-row .label .sub { font-size: 13px; color: var(--tertiary); }
 .item-row .value { color: var(--secondary); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; display: flex; align-items: center; gap: 6px; }
 .item-row .value .i { width: 16px; height: 16px; }
+.item-row > .chev { width: 16px; height: 16px; color: var(--tertiary); }
 .item-row select { position: absolute; inset: 0; opacity: 0; width: 100%; font-size: 16px; }
 .item-row.danger { color: var(--danger); }
 .item-row.danger > .i { color: var(--danger); }

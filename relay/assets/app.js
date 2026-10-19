@@ -10,7 +10,7 @@ const ICONS = {
   "chevDown": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M17.5 9.25 12 14.75 6.5 9.25\"/>"],
   "chevRight": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M9.25 6.5 14.75 12 9.25 17.5\"/>"],
   "plus": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M12 5v14M5 12h14\"/>"],
-  "more": ["0 0 24 24", "fill=\"none\"", "<g fill=\"black\" stroke=\"black\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"3.75\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"20.25\" cy=\"12\" r=\"1\"/></g>"],
+  "more": ["0 0 24 24", "fill=\"none\"", "<g fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"3.75\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"20.25\" cy=\"12\" r=\"1\"/></g>"],
   "send": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M12 20V4m0 0l6 6m-6-6l-6 6\"/>"],
   "stop": ["0 0 10 10", "", "<rect x=\"1\" y=\"1\" width=\"8\" height=\"8\" rx=\"2\" fill=\"currentColor\"/>"],
   "search": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"11.5\" cy=\"11.5\" r=\"9.5\"/><path stroke-linecap=\"round\" d=\"M18.5 18.5L22 22\"/></g>"],
@@ -26,6 +26,8 @@ const ICONS = {
   "bot": ["0 0 24 24", "", "<g fill=\"none\"><path stroke=\"currentColor\" stroke-width=\"1.5\" d=\"M4.75 10.5C4.75 8.98122 5.98122 7.75 7.5 7.75H16.5C18.0188 7.75 19.25 8.98122 19.25 10.5V16.5C19.25 18.0188 18.0188 19.25 16.5 19.25H7.5C5.98122 19.25 4.75 18.0188 4.75 16.5V10.5Z\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M12 7.5V5.25\"/><path fill=\"currentColor\" d=\"M13.25 3.75C13.25 4.44036 12.6904 5 12 5C11.3096 5 10.75 4.44036 10.75 3.75C10.75 3.05964 11.3096 2.5 12 2.5C12.6904 2.5 13.25 3.05964 13.25 3.75Z\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M9.25 12.25V14\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M14.75 12.25V14\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M2 12.5V15\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M22 12.5V15\"/></g>"],
   "archive": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M2 12c0-4.714 0-7.071 1.464-8.536C4.93 2 7.286 2 12 2s7.071 0 8.535 1.464C22 4.93 22 7.286 22 12\"/><path d=\"M2 14c0-2.8 0-4.2.545-5.27A5 5 0 0 1 4.73 6.545C5.8 6 7.2 6 10 6h4c2.8 0 4.2 0 5.27.545a5 5 0 0 1 2.185 2.185C22 9.8 22 11.2 22 14s0 4.2-.545 5.27a5 5 0 0 1-2.185 2.185C18.2 22 16.8 22 14 22h-4c-2.8 0-4.2 0-5.27-.545a5 5 0 0 1-2.185-2.185C2 18.2 2 16.8 2 14Z\"/><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m9.5 14.4l1.429 1.6l3.571-4\"/></g>"],
   "laptop": ["0 0 24 24", "", "<g fill=\"none\"><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M19.647 15.536H4.353m15.294 0V8c0-1.886 0-2.828-.586-3.414C18.476 4 17.533 4 15.647 4H8.353c-1.886 0-2.828 0-3.414.586S4.353 6.114 4.353 8v7.536m15.294 0l1.744 1.8l.088.092a2 2 0 0 1 .52 1.284l.001.127c0 .15 0 .224-.004.287a2 2 0 0 1-1.87 1.87a5 5 0 0 1-.287.004H4.161c-.15 0-.224 0-.287-.004a2 2 0 0 1-1.87-1.87C2 19.063 2 18.988 2 18.84l.001-.127a2 2 0 0 1 .52-1.284l.088-.092l1.744-1.8M9.5 18.5h5\"/><path fill=\"currentColor\" d=\"M12.75 6.75a.75.75 0 1 1-1.5 0a.75.75 0 0 1 1.5 0\"/></g>"],
+  "restart": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"", "<path d=\"M4.27 11a8 8 0 1 1 2.07 4.66\"/><path stroke-linejoin=\"round\" d=\"M6.84 20.66l-.63-2.86l2.86-.63\"/>"],
+  "worktree": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M6 8.5v7M8.25 6.25H16a2 2 0 0 1 2 2v7.25\"/><circle cx=\"6\" cy=\"6.25\" r=\"2.25\"/><circle cx=\"6\" cy=\"17.75\" r=\"2.25\"/><circle cx=\"18\" cy=\"17.75\" r=\"2.25\"/>"],
   "logout": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\"><path d=\"M9.002 7c.012-2.175.109-3.353.877-4.121C10.758 2 12.172 2 15 2h1c2.829 0 4.243 0 5.122.879C22 3.757 22 5.172 22 8v8c0 2.828 0 4.243-.878 5.121C20.242 22 18.829 22 16 22h-1c-2.828 0-4.242 0-5.121-.879c-.768-.768-.865-1.946-.877-4.121\"/><path stroke-linejoin=\"round\" d=\"M15 12H2m0 0l3.5-3M2 12l3.5 3\"/></g>"],
   "trash": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M9.17 4a3.001 3.001 0 0 1 5.66 0m5.67 2h-17m15.333 2.5l-.46 6.9c-.177 2.654-.265 3.981-1.13 4.79s-2.196.81-4.856.81h-.774c-2.66 0-3.991 0-4.856-.81c-.865-.809-.954-2.136-1.13-4.79l-.46-6.9M9.5 11l.5 5m4.5-5l-.5 5\"/>"],
   "close": ["0 0 16 16", "fill=\"none\"", "<path d=\"m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5\" stroke=\"currentColor\" stroke-width=\"1.25\" stroke-linecap=\"round\"/>"],
@@ -114,6 +116,41 @@ const isStale = chat => /stale/.test(chat?.status || "");
 const HARNESS_NAMES = { pi: "Pi", codex: "Codex", "claude-code": "Claude Code", cursor: "Cursor", devin: "Devin", grok: "Grok", hermes: "Hermes", antigravity: "Antigravity", opencode: "OpenCode", mock: "Mock" };
 const harnessName = id => HARNESS_NAMES[id] || id || "Agent";
 const shortModel = m => (m || "").split("/").pop();
+const reasoningName = level => ({ xhigh: "X-High" })[level] || (level ? level[0].toUpperCase() + level.slice(1) : "");
+
+/** Each Mac's model catalog per harness, loaded once: models, and the
+ * harness's reasoning levels for models without their own. */
+const catalogs = new Map();
+function catalog(machine, harness) {
+  const key = `${machine}/${harness}`;
+  if (!catalogs.has(key)) {
+    const entry = { ready: null };
+    entry.promise = Promise.all([
+      call(machine, "list_models", { harness }).then(r => r.models || []),
+      call(machine, "list_harnesses").then(r => r.harnesses?.find(x => x.id === harness)?.reasoningLevels || []),
+    ]).then(value => (entry.ready = value), e => { catalogs.delete(key); throw e; });
+    catalogs.set(key, entry);
+  }
+  return catalogs.get(key);
+}
+
+/** The desktop's footer ring: a faint track under the used arc. */
+function ring(fraction, color) {
+  const r = 6.25, c = 2 * Math.PI * r;
+  const wrap = document.createElement("span");
+  wrap.innerHTML = `<svg class="ring" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="currentColor" stroke-opacity=".2" stroke-width="1.6"/>`
+    + (fraction > 0 ? `<circle cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="${c * Math.min(fraction, 1)} ${c}" transform="rotate(-90 8 8)"/>` : "") + "</svg>";
+  return wrap.firstChild;
+}
+
+/** The desktop's context card text (context_usage.rs details). */
+function contextDetails({ tokens, window: size } = {}) {
+  const n = v => v.toLocaleString("en-US");
+  if (tokens != null && size > 0) return `${n(tokens)} / ${n(size)} tokens. ${n(Math.max(size - tokens, 0))} tokens remaining.`;
+  if (tokens != null) return `${n(tokens)} tokens used. Context limit not reported.`;
+  if (size > 0) return `${n(size)} token capacity. Waiting for context usage.`;
+  return "Context usage not reported by this agent yet.";
+}
 
 // The desktop's project tones (project_icon.rs), indexed by FNV-1a of the
 // project path (project_color_index): slate, blue, violet, rose, amber,
@@ -178,8 +215,9 @@ function poller(fn, interval) {
   return { now: tick, stop() { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", wake); } };
 }
 
-/** What the app knows about the Macs and their chats. */
-const store = { machines: null, chats: null };
+/** What the app knows about the Macs and their chats. `chats` holds every
+ * Mac loaded so far, so switching back shows them at once; `loaded` names those Macs. */
+const store = { machines: null, chats: null, loaded: new Set() };
 const machineName = id => store.machines?.find(m => m.id === id)?.name || "Mac";
 const severalMacs = () => (store.machines?.length || 0) > 1;
 
@@ -191,6 +229,12 @@ function macState(m) {
 }
 const ready = () => (store.machines || []).filter(m => macState(m) === "ready");
 
+/** The Mac the list shows: the one picked last, else the first ready one. */
+function selectedMac() {
+  const machines = store.machines || [];
+  return machines.find(m => m.id === localStorage.getItem("zeron.mac")) || ready()[0] || machines[0] || null;
+}
+
 /** Start Zeron on a Mac where it's closed; it shows up within seconds. */
 async function openZeron(machine) {
   haptic(8);
@@ -198,6 +242,18 @@ async function openZeron(machine) {
     await call(machine, "open_zeron");
     toast({ title: `Opening Zeron on ${machineName(machine)}`, kind: "info", timeout: 2600 });
   } catch (e) { toast({ title: "Couldn't open Zeron", body: e.message, kind: "error" }); }
+}
+
+/** Quit Zeron on a Mac (force-quitting it if it hangs) and start it again. */
+async function restartZeron(machine) {
+  const name = machineName(machine);
+  if (!confirm(`Restart Zeron on ${name}? Agents that are working stop.`)) return;
+  haptic(8);
+  toast({ title: `Restarting Zeron on ${name}`, body: "A hung Zeron takes about 15 seconds.", kind: "info", timeout: 4000 });
+  try {
+    await call(machine, "restart_zeron");
+    toast({ title: `Zeron restarted on ${name}`, body: "Its chats are back in a few seconds.", kind: "done", timeout: 3000 });
+  } catch (e) { toast({ title: "Couldn't restart Zeron", body: e.message, kind: "error" }); }
 }
 
 /** The note for a Mac that can't show chats, if it can't. */
@@ -218,19 +274,21 @@ function macNote(m) {
   return null;
 }
 
-/** Load the Macs, then every ready Mac's chats, newest activity first. */
+/** Load the Macs, then the selected Mac's chats, newest activity first. */
 async function loadChats() {
   const { machines } = await post("/api/machines");
   store.machines = machines;
-  const lists = await Promise.all(machines.filter(m => macState(m) === "ready").map(async m => {
-    try {
-      const { chats } = await call(m.id, "list_chats", { limit: 200 });
-      return chats.map(c => ({ ...c, machine: m.id }));
-    } catch (e) { console.warn(m.name, e); return []; }
-  }));
+  const m = selectedMac();
+  if (!m) { store.chats = []; return; }
+  let fresh = [];
+  if (macState(m) === "ready") {
+    const { chats } = await call(m.id, "list_chats", { limit: 200 });
+    fresh = chats.map(c => ({ ...c, machine: m.id }));
+  }
   const when = c => Date.parse(c.lastMessageAt || c.createdAt) || 0;
-  store.chats = lists.flat().sort((a, b) => when(b) - when(a));
-  seen.prime(store.chats);
+  store.chats = [...(store.chats || []).filter(c => c.machine !== m.id), ...fresh].sort((a, b) => when(b) - when(a));
+  store.loaded.add(m.id);
+  seen.prime(fresh);
 }
 
 /** Which finished turns this phone has seen, so new ones read "Done". */
@@ -660,13 +718,13 @@ function listView() {
   input.addEventListener("input", () => { listState.query = input.value; draw(); });
 
   const known = new Map();
-  let painted = !!store.chats;
+  let painted = store.loaded.has(selectedMac()?.id);
 
   // In a project section the row is one line, like the sidebar; search
   // results also name the project.
   function row(c, withProject) {
     const s = statusOf(c), unseen = s === "idle" && seen.unseen(c);
-    const sig = JSON.stringify([c.title, s, isStale(c), unseen, ago(c.lastMessageAt || c.createdAt), c.harness, c.project?.id, c.branch, severalMacs(), withProject]);
+    const sig = JSON.stringify([c.title, s, isStale(c), unseen, ago(c.lastMessageAt || c.createdAt), c.harness, c.project?.id, c.branch, withProject]);
     const old = known.get(c.machine + c.id);
     if (old?.sig === sig) return old.el;
     const corner = s === "working" ? [glyph("spin"), h("span", { style: { color: "var(--tone-working)" } }, isStale(c) ? "Offline?" : "Working")]
@@ -680,14 +738,13 @@ function listView() {
       h("span", { class: "corner" }, corner),
       (withProject || c.branch) && h("span", { class: "meta" },
         withProject && h("span", {}, tile(c.project), c.project?.name || "No project"),
-        c.branch && h("span", { class: "branch" }, icon("branch"), c.branch),
-        withProject && severalMacs() && h("span", { class: "branch" }, icon("laptop"), machineName(c.machine))));
+        c.branch && h("span", { class: "branch" }, icon("branch"), c.branch)));
     el.addEventListener("click", () => haptic(5));
     known.set(c.machine + c.id, { sig, el });
     return el;
   }
 
-  function section(key, project, machine, items) {
+  function section(key, project, items) {
     const live = items.some(c => statusOf(c) === "working");
     return h("button", { class: `section${collapsed.has(key) ? " collapsed" : ""}`, onclick: () => {
       collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
@@ -696,32 +753,44 @@ function listView() {
       draw();
     } }, tile(project), h("span", { class: "name" }, project?.name || "No project"),
       h("span", { class: "n" }, items.length),
-      severalMacs() && h("span", { class: "n" }, `· ${machineName(machine)}`),
       live && glyph("spin"), icon("chevDown", "chev"));
+  }
+
+  /** Show `id`'s chats: at once if they're loaded, then fresh ones. */
+  function pick(id) {
+    if (id === selectedMac()?.id) return;
+    haptic(5);
+    localStorage.setItem("zeron.mac", id);
+    painted = store.loaded.has(id);
+    known.clear();
+    draw();
+    scroll.scrollTop = 0;
+    poll.now();
   }
 
   function draw() {
     const machines = store.machines;
+    const sel = selectedMac();
     if (machines) {
-      const label = { offline: " · offline", closed: " · Zeron closed", outdated: " · update needed", ready: "" };
+      // One tab per Mac; the dot tells its state at a glance.
       macs.replaceChildren(...machines.map(m => {
         const state = macState(m);
-        return h("span", { class: state === "ready" ? "" : "off" },
-          glyph("dot", state === "ready" ? "var(--tone-done)" : state === "offline" ? "var(--tertiary)" : "var(--tone-input)"), m.name, label[state]);
+        const tone = state === "ready" ? "var(--tone-done)" : state === "offline" ? "var(--tertiary)" : "var(--tone-input)";
+        return h("button", { class: `mac-tab${m === sel ? " on" : ""}`, "aria-pressed": String(m === sel), onclick: () => pick(m.id) },
+          glyph("dot", tone), m.name);
       }));
     }
-    const chats = store.chats;
-    if (!chats) return;
+    if (!store.chats || (sel && !store.loaded.has(sel.id))) {
+      if (!rows.querySelector(".skeleton")) rows.replaceChildren(...Array.from({ length: 7 }, () => h("div", { class: "skeleton" })));
+      return;
+    }
+    const chats = store.chats.filter(c => c.machine === sel?.id);
     const nodes = [];
     if (!machines.length) {
       nodes.push(h("div", { class: "empty" }, "No Macs yet. Tap ", icon("more", ""), " and add one."));
     }
-    // Closed and outdated Macs need you; an offline one only matters when nothing else works.
-    const noReady = !ready().length;
-    for (const m of machines) {
-      const note = (macState(m) !== "offline" || noReady) && macNote(m);
-      if (note) nodes.push(note);
-    }
+    const note = sel && macNote(sel);
+    if (note) nodes.push(note);
     const q = listState.query.trim().toLowerCase();
     if (q) {
       const hits = chats.filter(c => `${c.title} ${c.project?.name || ""} ${c.lastMessagePreview || ""} ${c.branch || ""}`.toLowerCase().includes(q));
@@ -732,14 +801,14 @@ function listView() {
       const groups = new Map();
       for (const c of chats) {
         const key = `${c.machine}/${c.project?.id || "home"}`;
-        if (!groups.has(key)) groups.set(key, { project: c.project, machine: c.machine, items: [] });
+        if (!groups.has(key)) groups.set(key, { project: c.project, items: [] });
         groups.get(key).items.push(c);
       }
       for (const [key, g] of groups) {
-        nodes.push(section(key, g.project, g.machine, g.items));
+        nodes.push(section(key, g.project, g.items));
         if (!collapsed.has(key)) nodes.push(...g.items.map(c => row(c, false)));
       }
-      if (!chats.length && !noReady) nodes.push(h("div", { class: "empty" }, "No chats yet"));
+      if (!chats.length && !note && machines.length) nodes.push(h("div", { class: "empty" }, "No chats yet"));
     }
     reconcile(rows, nodes);
     painted = true;
@@ -848,7 +917,12 @@ function chatView(machine, id, fromList) {
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
-  const dock = h("div", { class: "dock" }, jump, h("div", { class: "composer glass" }, textarea, sendBtn), hint);
+  // Like the desktop composer: model and reasoning beside Send, then the
+  // checkout, branch, and context ring under the box.
+  const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
+  const footer = h("div", { class: "composer-foot hide" });
+  const dock = h("div", { class: "dock" }, jump,
+    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, sendBtn)), footer, hint);
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
@@ -858,6 +932,9 @@ function chatView(machine, id, fromList) {
   dockSize.observe(dock);
 
   let chat = null, read = null, limit = 40, version = "", keepAnchor = false, pending = [];
+  // The composer's footer and model (composer_info): re-read when the chat
+  // moves, at most every few seconds.
+  let info = null, infoFor = "", infoAt = 0;
   const rendered = new Map();
   const openGroups = new Set();
   let questionId = null;
@@ -934,6 +1011,7 @@ function chatView(machine, id, fromList) {
         [harnessName(chat.harness), shortModel(chat.model), chat.reasoning, chat.project?.name, chat.branch, severalMacs() && machineName(machine)].filter(Boolean).join(" · ")),
       h("div", { class: "group" },
         isWorking() && itemRow({ iconName: "stop", label: "Stop the agent", cls: "danger", onclick: () => { close(); stop(); } }),
+        itemRow({ iconName: "restart", label: "Restart Zeron", sub: severalMacs() ? `On ${machineName(machine)}` : "If it hangs", onclick: () => { close(); restartZeron(machine); } }),
         itemRow({ iconName: "copy", label: "Copy link", onclick: () => { close(); copyText(location.href); toast({ title: "Link copied", kind: "done", timeout: 1800 }); } }),
         itemRow({ iconName: "archive", label: "Archive", cls: "danger", onclick: async () => {
           close();
@@ -1062,10 +1140,81 @@ function chatView(machine, id, fromList) {
     toBottom(true);
   }
 
+  async function loadInfo() {
+    infoAt = Date.now();
+    try { info = await api("composer_info"); drawInfo(); } catch (e) { console.warn("composer_info", e); }
+  }
+
+  function drawInfo() {
+    const harness = info?.harness || chat?.harness;
+    const model = info ? info.model : chat?.model;
+    const reasoning = info ? info.reasoning : chat?.reasoning;
+    const entry = harness && catalog(machine, harness);
+    if (entry && !entry.ready) entry.promise.then(drawInfo, () => {});
+    const label = entry?.ready?.[0].find(m => m.id === model)?.label || shortModel(model) || "Default";
+    modelChip.disabled = !harness;
+    modelChip.replaceChildren(harness ? mark(harness) : "", h("span", { class: "name" }, label),
+      reasoning && h("span", { class: "lvl" }, reasoningName(reasoning)));
+    if (!info) return;
+    const usage = info.contextUsage;
+    const fraction = usage?.window > 0 && usage.tokens != null ? usage.tokens / usage.window : null;
+    const tone = fraction >= 0.9 ? "var(--danger)" : fraction >= 0.75 ? "var(--warning)" : "var(--secondary)";
+    const left = info.checkout && [
+      h("span", {}, icon(info.checkout === "worktree" ? "worktree" : "folder"), info.checkout === "worktree" ? "Worktree" : "Local checkout"),
+      h("span", { class: "branch-ref" }, icon("branch"), h("span", { class: "txt" }, info.branch || "No ref"))];
+    // Harnesses that never report a window get no ring, as on the desktop.
+    const right = usage?.window > 0 && h("button", { class: "ctx", style: { color: fraction == null ? "var(--tertiary)" : tone },
+      "aria-label": "Context window", onclick: () => toast({ title: "Context window", body: contextDetails(usage), kind: "info", timeout: 4000 }) },
+      ring(fraction || 0, tone), fraction == null ? "—" : `${Math.round(fraction * 100)}%`);
+    footer.replaceChildren(...(left || []), h("span", { class: "grow" }), right || "");
+    footer.classList.toggle("hide", !left && !right);
+  }
+
+  /** Pick the model and reasoning for the next turns, like the desktop's picker. */
+  function modelSheet() {
+    const harness = info?.harness || chat?.harness;
+    if (!harness) return;
+    haptic(5);
+    sheet(() => {
+      const body = h("div", {}, h("div", { class: "skeleton", style: { margin: "0 0 14px" } }));
+      const pick = async change => {
+        haptic(5);
+        try {
+          const saved = await api("set_chat_model", change);
+          info = { ...info, ...saved };
+          drawInfo();
+          draw();
+        } catch (e) { toast({ title: "Couldn't change the model", body: e.message, kind: "error" }); }
+      };
+      let first = true;
+      const draw = () => {
+        const [models, harnessLevels] = catalog(machine, harness).ready;
+        const current = info ? info.model : chat?.model;
+        const reasoning = info ? info.reasoning : chat?.reasoning;
+        const levels = models.find(m => m.id === current)?.reasoningLevels?.length ? models.find(m => m.id === current).reasoningLevels : harnessLevels;
+        const check = on => (on ? icon("check") : null);
+        // Reasoning first, as pills: a harness like Pi lists dozens of models.
+        body.replaceChildren(
+          levels.length ? h("div", { class: "group-label" }, "Reasoning") : "",
+          levels.length ? h("div", { class: "pills" }, levels.map(l => h("button", { class: `pill${l === reasoning ? " on" : ""}`, "aria-pressed": String(l === reasoning),
+            onclick: () => l !== reasoning && pick({ reasoning: l }) }, reasoningName(l)))) : "",
+          isWorking() ? h("div", { class: "note", style: { marginTop: "0" } }, "Changes apply from the next turn.") : "",
+          h("div", { class: "group-label" }, "Model"),
+          h("div", { class: "group" }, models.map(m => itemRow({ label: m.label || m.id, value: check(m.id === current), cls: m.id === current ? "on" : "",
+            onclick: () => m.id !== current && pick({ model: m.id }) }))));
+        if (first) body.querySelector(".item-row.on")?.scrollIntoView({ block: "nearest" });
+        first = false;
+      };
+      catalog(machine, harness).promise.then(draw, e => body.replaceChildren(h("div", { class: "note" }, `Couldn't load the models: ${e.message}`)));
+      return [h("h2", {}, harnessName(harness)), body];
+    });
+  }
+
   function drawHeader() {
     titleEl.textContent = chat.title || "Untitled chat";
     subEl.textContent = [harnessName(chat.harness), shortModel(chat.model), chat.project?.name].filter(Boolean).join(" · ");
     updateComposer();
+    drawInfo();
   }
 
   async function refresh(force = false) {
@@ -1086,6 +1235,7 @@ function chatView(machine, id, fromList) {
     drawHeader();
     // Re-read the transcript when something moved, and always while it streams.
     const next = `${chat.messageCount}|${chat.lastMessageAt}|${chat.status}|${limit}`;
+    if (next !== infoFor && Date.now() - infoAt > 8000) { infoFor = next; loadInfo(); }
     if (!force && next === version && !isWorking()) return;
     version = next;
     read = await api("read_chat", { limit });
@@ -1125,7 +1275,7 @@ function newChatSheet() {
   sheet(close => {
     const saved = prefs.get();
     const choice = {
-      machine: online.some(m => m.id === saved.machine) ? saved.machine : online[0].id,
+      machine: online.find(m => m.id === selectedMac()?.id)?.id || (online.some(m => m.id === saved.machine) ? saved.machine : online[0].id),
       project: saved.project ?? null, harness: saved.harness ?? null, model: saved.model ?? "", reasoning: saved.reasoning ?? "",
     };
     let projects = [], harnesses = [], models = [];
@@ -1273,11 +1423,8 @@ function settingsSheet() {
       sub: { offline: "Offline", closed: "Zeron is closed", outdated: `Runs Zeron ${m.status.engine?.running}: update zeron-tools`,
         ready: `Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` }[macState(m)],
       value: glyph("dot", { ready: "var(--tone-done)", offline: "var(--tertiary)" }[macState(m)] || "var(--tone-input)"),
-      onclick: async () => {
-        if (!confirm(`Remove ${m.name}? It disconnects now, and needs a new token to connect again.`)) return;
-        try { await post("/api/machines/remove", { id: m.id }); close(); toast({ title: `${m.name} removed`, kind: "done" }); }
-        catch (e) { toast({ title: "Couldn't remove it", body: e.message, kind: "error" }); }
-      },
+      extra: icon("chevRight", "chev"),
+      onclick: () => fill(macPage(m, close)),
     }));
     const addRow = itemRow({ iconName: "plus", label: "Add a Mac", onclick: () => fill(addMac(close)) });
     return [
@@ -1291,6 +1438,26 @@ function settingsSheet() {
       } })),
     ];
   });
+}
+
+/** One Mac's page: start or restart its Zeron, or remove it. */
+function macPage(m, close) {
+  const state = macState(m);
+  const sub = { offline: "Offline. Run zeron-tools connect --install on it.", closed: "Zeron is closed.",
+    outdated: `Runs Zeron ${m.status.engine?.running}. Update zeron-tools on it.`,
+    ready: `Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` }[state];
+  return [
+    h("h2", {}, m.name),
+    h("div", { class: "note", style: { marginTop: "-8px" } }, sub),
+    state !== "offline" && h("div", { class: "group" }, state === "closed"
+      ? itemRow({ iconName: "laptop", label: "Open Zeron", onclick: () => { close(); openZeron(m.id); } })
+      : itemRow({ iconName: "restart", label: "Restart Zeron", sub: "Quits it, or force-quits it if it hangs, then opens it", onclick: () => { close(); restartZeron(m.id); } })),
+    h("div", { class: "group" }, itemRow({ iconName: "trash", label: "Remove this Mac", cls: "danger", onclick: async () => {
+      if (!confirm(`Remove ${m.name}? It disconnects now, and needs a new token to connect again.`)) return;
+      try { await post("/api/machines/remove", { id: m.id }); close(); toast({ title: `${m.name} removed`, kind: "done" }); }
+      catch (e) { toast({ title: "Couldn't remove it", body: e.message, kind: "error" }); }
+    } })),
+  ];
 }
 
 /** The "Add a Mac" step: name it, then show the command that connects it. */

@@ -52,4 +52,4 @@ Each Mac dials out to a small relay, so no VPN or open ports are needed. You sig
   echo "https://zeron.iyazerski.dev/#/setup/$(kubectl get secret zeron-relay-secrets -o jsonpath='{.data.SETUP_TOKEN}' | base64 -d)"
   ```
 
-- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows. With `--install`, `connect` runs in the background from then on: it starts at login and logs to `~/Library/Logs/zeron-tools-connect.log` (`connect --uninstall` stops it). Zeron may be closed: the app shows that and can open it. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).
+- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows. With `--install`, `connect` runs in the background from then on: it starts at login and logs to `~/Library/Logs/zeron-tools-connect.log` (`connect --uninstall` stops it). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).

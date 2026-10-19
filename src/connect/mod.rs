@@ -12,6 +12,7 @@
 //! [`watch`] reports chats that finish, need an answer, or fail.
 
 mod agent;
+mod composer;
 mod engine;
 mod watch;
 
@@ -101,13 +102,16 @@ pub async fn run(opts: Opts) -> Result<()> {
         format!("ws://127.0.0.1:{}", opts.ipc_port),
         Origin::default(),
     ));
-    let tools = Arc::new(Tools::new(zeron.clone()));
+    let mac = Arc::new(Mac {
+        zeron: zeron.clone(),
+        tools: Arc::new(Tools::new(zeron.clone())),
+    });
     let mut engine = engine::spawn(zeron.clone(), opts.version);
     // Notices wait here while the relay is unreachable.
     let (notices_tx, mut notices) = mpsc::channel(64);
     tokio::spawn(watch::run(
         zeron,
-        tools.clone(),
+        mac.tools.clone(),
         engine.clone(),
         notices_tx,
         opts.notify_always,
@@ -125,15 +129,7 @@ pub async fn run(opts: Opts) -> Result<()> {
             }
             Ok(())
         };
-        let result = session(
-            &url,
-            &link.token,
-            &tools,
-            &mut engine,
-            &mut notices,
-            accepted,
-        )
-        .await;
+        let result = session(&url, &link.token, &mac, &mut engine, &mut notices, accepted).await;
         match result {
             Ok(()) => {
                 eprintln!("the relay closed the connection; reconnecting");
@@ -160,7 +156,7 @@ pub async fn run(opts: Opts) -> Result<()> {
 async fn session(
     url: &str,
     token: &str,
-    tools: &Arc<Tools>,
+    mac: &Arc<Mac>,
     engine: &mut state::Receiver<Engine>,
     notices: &mut mpsc::Receiver<Notice>,
     accepted: impl FnOnce() -> Result<()>,
@@ -183,10 +179,10 @@ async fn session(
                 match frame {
                     Some(Ok(Message::Text(body))) => {
                         let call: Call = serde_json::from_str(&body).context("bad call from the relay")?;
-                        let (tools, replies) = (tools.clone(), replies_tx.clone());
+                        let (mac, replies) = (mac.clone(), replies_tx.clone());
                         let now = engine.borrow().clone();
                         tokio::spawn(async move {
-                            let reply = Up::Reply { id: call.id, result: run_tool(&tools, &now, call.tool, call.args).await };
+                            let reply = Up::Reply { id: call.id, result: run_tool(&mac, &now, call.tool, call.args).await };
                             // The connection may be gone by now; the relay times the call out.
                             let _ = replies.send(reply).await;
                         });
@@ -249,26 +245,43 @@ fn hello() -> Up {
     }
 }
 
+/// This Mac's Zeron, as the relay's calls reach it.
+struct Mac {
+    zeron: Arc<Zeron>,
+    tools: Arc<Tools>,
+}
+
 /// Run one allowed tool and return its result, or why it can't run.
-/// `open_zeron` is ours, not a Zeron tool: it works while Zeron is closed.
-async fn run_tool(
-    tools: &Tools,
-    engine: &Engine,
-    tool: String,
-    args: Value,
-) -> Result<Value, String> {
-    if tool == "open_zeron" {
-        return engine::open()
-            .await
+/// `open_zeron` and `restart_zeron` are ours, not Zeron tools: they work
+/// while Zeron is closed or hangs. `composer_info` and `set_chat_model`
+/// are ours too, for the chat's composer ([`composer`]).
+async fn run_tool(mac: &Mac, engine: &Engine, tool: String, args: Value) -> Result<Value, String> {
+    let started = match tool.as_str() {
+        "open_zeron" => Some(engine::open().await),
+        "restart_zeron" => Some(engine::restart().await),
+        _ => None,
+    };
+    if let Some(started) = started {
+        return started
             .map(|()| json!({ "opening": true }))
             .map_err(|e| format!("{e:#}"));
     }
-    let args = allowed_args(&tool, args)
-        .ok_or_else(|| format!("tool {tool} is not available from the phone"))?;
+    let ours = matches!(tool.as_str(), "composer_info" | "set_chat_model");
+    let args = if ours {
+        args
+    } else {
+        allowed_args(&tool, args)
+            .ok_or_else(|| format!("tool {tool} is not available from the phone"))?
+    };
     if let Some(why) = engine::refusal(engine) {
         return Err(why);
     }
-    tools.call(&tool, args).await
+    let result = match tool.as_str() {
+        "composer_info" => composer::info(&mac.zeron, &args).await,
+        "set_chat_model" => composer::set_model(&mac.zeron, &args).await,
+        _ => return mac.tools.call(&tool, args).await,
+    };
+    result.map_err(|e| format!("{e:#}"))
 }
 
 /// Return the arguments to pass to `tool`, or `None` if the phone may not call it.
@@ -364,12 +377,17 @@ mod tests {
     async fn calls_wait_for_a_matching_zeron() {
         // Nothing listens here: a call that got through would fail differently.
         let zeron = Arc::new(Zeron::new("ws://127.0.0.1:9".into(), Origin::default()));
-        let tools = Tools::new(zeron);
+        let mac = Mac {
+            zeron: zeron.clone(),
+            tools: Arc::new(Tools::new(zeron)),
+        };
         let call = |engine: Engine, tool: &str| {
-            let (tools, tool) = (&tools, tool.to_owned());
-            async move { run_tool(tools, &engine, tool, json!({})).await }
+            let (mac, tool) = (&mac, tool.to_owned());
+            async move { run_tool(mac, &engine, tool, json!({})).await }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
+        assert_eq!(closed, "Zeron isn't open on this Mac");
+        let closed = call(Engine::Closed, "set_chat_model").await.unwrap_err();
         assert_eq!(closed, "Zeron isn't open on this Mac");
         let outdated = Engine::Outdated {
             running: "0.0.1".into(),

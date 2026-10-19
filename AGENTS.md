@@ -9,7 +9,7 @@ Maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile, p
 - Imports mirror the engine's born-chat path (`local_import.rs`): chat doc saved with cursor 0 and epoch 2, row upserted with `room_gen` 2. Tool outputs are dropped; tool inputs go through `sanitize_tool_call`.
 - Zeron holds the registry in memory and would overwrite offline writes, so writes take its `engine.lock` flock (fails while Zeron runs) and back up `docs.sqlite3` first. They are refused if the device row's `version` differs from `ZERON_VERSION`.
 - A session's model is kept only if Zeron's cached catalog (`~/.zeron/model-catalogs/<harness>/`) still lists it: Zeron passes the chat's model on resume, and a retired one breaks it.
-- Phone: phone → HTTPS → relay ← outbound WebSocket ← `connect` on each Mac. `connect` calls the engine's loopback IPC through `zeron_mcp::Tools` and runs only the tools the app needs (`allowed_args`, checked on the Mac: the raw IPC also runs terminals and writes files). It runs as a launch agent (`--install`) whether or not Zeron is open: it probes the IPC, reports Zeron as running, closed, or outdated (the device row's version, re-read while it runs), refuses calls unless running, and can start Zeron (`open_zeron`). It watches `WatchSessions` for finished, waiting, and failed chats, and the relay sends them as Web Push. Deploy relay changes before releasing a `connect` that sends new messages. The relay keeps no chat data, only passkeys, hashed tokens, and push subscriptions.
+- Phone: phone → HTTPS → relay ← outbound WebSocket ← `connect` on each Mac. `connect` calls the engine's loopback IPC through `zeron_mcp::Tools` and runs only the tools the app needs (`allowed_args`, checked on the Mac: the raw IPC also runs terminals and writes files). It runs as a launch agent (`--install`) whether or not Zeron is open: it probes the IPC, reports Zeron as running, closed, or outdated (the device row's version, re-read while it runs), refuses calls unless running, and can start or restart Zeron (`open_zeron`, `restart_zeron`: a fixed AppKit quit, then a force-quit if it hangs). It watches `WatchSessions` for finished, waiting, and failed chats, and the relay sends them as Web Push. Deploy relay changes before releasing a `connect` that sends new messages. The relay keeps no chat data, only passkeys, hashed tokens, and push subscriptions.
 
 ## Layout
 
@@ -17,7 +17,7 @@ Maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile, p
 - `src/zeron.rs`: profile access (lock, version check, backup, import, append, rename, delete). No harness knowledge.
 - `src/sources/`: one reader per harness (`pi.rs`, `codex.rs`) producing a neutral `Session`, mirroring Zeron's normalizers. They also delete harness sessions.
 - `src/import.rs`, `refresh.rs`, `rename.rs`, `archive.rs`, `delete.rs`, `export.rs`: the commands. `archive` mirrors the sidebar's grouping and order; `export` renders with `zeron_mcp::render_entries`.
-- `src/connect/`: the relay link, Zeron's state (`engine.rs`), the launch agent (`agent.rs`), and the status watcher. `relay-proto/`: wire types shared with the relay.
+- `src/connect/`: the relay link, Zeron's state (`engine.rs`), the launch agent (`agent.rs`), the composer's model and context (`composer.rs`), and the status watcher. `relay-proto/`: wire types shared with the relay.
 - `relay/`: the relay crate, its app (`assets/`, plain JS styled after Zeron's iOS app), a `scratch`-image `Dockerfile`, and `k8s/` for the `hetzner` cluster.
 - Tests: unit tests next to the code; fixtures in `tests/fixtures/`.
 
@@ -27,10 +27,10 @@ Maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile, p
    - `crates/proto/src/entities.rs` and events: `Chat`, `Space`, `Device`, `Session`, `AgentEvent`, `ToolCall`, `HarnessId`
    - `crates/doc/src/`: `registry.rs` (and `registry/sidebar_*.rs`), `schema.rs`, `parts.rs`
    - `crates/sync/src/store.rs`: snapshot load/save and schema
-   - `crates/engine/src/`: `local_import.rs`, `chat2_host.rs` (epoch, room generation), `instance_lock.rs`, `profile.rs`, `spaces.rs`, `model_catalogs.rs`, `rpc.rs` `DeleteChat`, `doc_host.rs` `purge_chat`
+   - `crates/engine/src/`: `local_import.rs`, `chat2_host.rs` (epoch, room generation), `instance_lock.rs`, `profile.rs`, `spaces.rs`, `model_catalogs.rs`, `rpc.rs` `DeleteChat` and `SetChatConfig`, `doc_host.rs` `purge_chat`
    - `crates/harness/src/pi/` and `codex/`: `normalize.rs` (tool mapping), session resume, the `zeron-sessions` record
    - `crates/mcp/src/`: `transcript.rs` (`render_entries`, `tool_line`) and `tools.rs` (tool names and fields used by `relay/assets/app.js`)
-   - `crates/ui/src/`: sidebar order (`state.rs`, `shell/spaces.rs`) and the "[Message from Zeron chat …]" header (`transcript.rs`)
+   - `crates/ui/src/`: sidebar order (`state.rs`, `shell/spaces.rs`), the "[Message from Zeron chat …]" header (`transcript.rs`), and the composer (`pickers.rs` `update_chat_config`, `context_usage.rs`)
 2. Bump the tag in the `zeron-*` deps and in `zeron_version!` (`src/zeron.rs`), run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto -p zeron-mcp -p zeron-rpc`, and match `loro`/`rusqlite`/`tokio` to Zeron's workspace.
 3. Port the changes. If Codex changed too, check new rollout item types: `rg -o --no-filename '"item":\{"type":"[A-Za-z]+"' ~/.codex/sessions | sort | uniq -c`.
 4. Verify:
