@@ -330,7 +330,7 @@ async fn add_machine(State(app): State<App>, Json(body): Json<AddMachine>) -> Re
     match app.store.add_machine(name) {
         Ok((machine, token)) => Json(json!({
             "machine": machine,
-            "command": format!("zeron-tools connect --relay {} --token {token}", app.origin),
+            "command": format!("zeron-tools connect --install --relay {} --token {token}", app.origin),
         }))
         .into_response(),
         Err(e) => failure(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")),

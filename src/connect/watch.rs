@@ -11,26 +11,34 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zeron_mcp::{Tools, Zeron};
 use zeron_proto::{Session, SessionStatus};
-use zeron_relay_proto::{Notice, NoticeKind};
+use zeron_relay_proto::{Engine, Notice, NoticeKind};
 
 /// The Mac counts as in use if it had keyboard or mouse input this recently.
 const AWAY_AFTER: Duration = Duration::from_secs(120);
-/// Wait before resubscribing when the engine goes away (Zeron quit or restarted).
+/// Wait before resubscribing after the stream failed while Zeron runs.
 const RETRY: Duration = Duration::from_secs(5);
 
-/// Follow chat statuses and send notices for changes, forever.
+/// Follow chat statuses whenever Zeron runs, and send notices for changes.
 pub async fn run(
     zeron: Arc<Zeron>,
     tools: Arc<Tools>,
+    mut engine: watch::Receiver<Engine>,
     notices: mpsc::Sender<Notice>,
     always: bool,
 ) {
     loop {
+        // An outdated Zeron may speak another IPC, so it isn't watched either.
+        if engine.wait_for(|e| *e == Engine::Running).await.is_err() {
+            return;
+        }
         if let Err(e) = watch_once(&zeron, &tools, &notices, always).await {
-            eprintln!("notifications paused: {e:#}");
+            // Zeron quitting ends the stream too; the engine log covers that.
+            if *engine.borrow() == Engine::Running {
+                eprintln!("notifications paused: {e:#}");
+            }
         }
         tokio::time::sleep(RETRY).await;
     }

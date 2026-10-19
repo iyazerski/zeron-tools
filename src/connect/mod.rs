@@ -8,9 +8,15 @@
 //! `list_chats`/`send_message`/... MCP tools. Only the tools the phone app
 //! needs are allowed, checked here and not on the relay: the raw IPC also
 //! opens terminals and writes files, and a compromised relay must not reach
-//! those. [`watch`] reports chats that finish, need an answer, or fail.
+//! those. [`engine`] tracks whether Zeron is open (and opens it), and
+//! [`watch`] reports chats that finish, need an answer, or fail.
 
+mod agent;
+mod engine;
 mod watch;
+
+pub use agent::{install, uninstall};
+pub use engine::VersionCheck;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,12 +26,12 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch as state};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use zeron_mcp::{Origin, Tools, Zeron};
-use zeron_relay_proto::{CONNECT_PATH, Call, Notice, PROTOCOL, Up};
+use zeron_relay_proto::{CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
 
 /// How often to ping the relay. Proxies drop idle sockets, and a reply
 /// (or any frame) proves the link still works.
@@ -78,12 +84,17 @@ pub struct Opts {
     pub ipc_port: u16,
     /// Notify even while the Mac is in use.
     pub notify_always: bool,
+    /// Reads Zeron's version; `None` skips the check (`--ignore-version`).
+    pub version: Option<VersionCheck>,
+    /// Running as the launch agent: a rejected token ends it for good.
+    pub agent: bool,
 }
 
 /// Stay connected to the relay until the process is stopped or the relay
 /// rejects the token.
 pub async fn run(opts: Opts) -> Result<()> {
-    let url = socket_url(&opts.link.relay)?;
+    let link = opts.link.clone();
+    let url = socket_url(&link.relay)?;
     // No origin chat: messages go out as the user's own, not attributed to a
     // chat (as they would be if this ran inside a Zeron terminal).
     let zeron = Arc::new(Zeron::new(
@@ -91,11 +102,13 @@ pub async fn run(opts: Opts) -> Result<()> {
         Origin::default(),
     ));
     let tools = Arc::new(Tools::new(zeron.clone()));
+    let mut engine = engine::spawn(zeron.clone(), opts.version);
     // Notices wait here while the relay is unreachable.
     let (notices_tx, mut notices) = mpsc::channel(64);
     tokio::spawn(watch::run(
         zeron,
         tools.clone(),
+        engine.clone(),
         notices_tx,
         opts.notify_always,
     ));
@@ -104,7 +117,7 @@ pub async fn run(opts: Opts) -> Result<()> {
     loop {
         let accepted = || -> Result<()> {
             if let Some(path) = save_to.take() {
-                opts.link.save(&path)?;
+                link.save(&path)?;
                 eprintln!(
                     "saved the link to {}; next time run just zeron-tools connect",
                     path.display()
@@ -112,13 +125,28 @@ pub async fn run(opts: Opts) -> Result<()> {
             }
             Ok(())
         };
-        match session(&url, &opts.link.token, &tools, &mut notices, accepted).await {
+        let result = session(
+            &url,
+            &link.token,
+            &tools,
+            &mut engine,
+            &mut notices,
+            accepted,
+        )
+        .await;
+        match result {
             Ok(()) => {
                 eprintln!("the relay closed the connection; reconnecting");
                 backoff = Duration::from_secs(1);
             }
             Err(e) if rejected(&e) => {
-                bail!("the relay rejected this Mac's token; add the Mac again in the app")
+                let why = "the relay rejected this Mac's token; add the Mac again in the app";
+                // A failing exit would make launchd restart it forever.
+                if opts.agent {
+                    eprintln!("{why}");
+                    return Ok(());
+                }
+                bail!(why)
             }
             Err(e) => eprintln!("relay: {e:#}"),
         }
@@ -133,24 +161,17 @@ async fn session(
     url: &str,
     token: &str,
     tools: &Arc<Tools>,
+    engine: &mut state::Receiver<Engine>,
     notices: &mut mpsc::Receiver<Notice>,
     accepted: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let mut request = url.into_client_request()?;
-    request.headers_mut().insert(
-        header::AUTHORIZATION,
-        HeaderValue::from_str(&format!("Bearer {token}")).context("bad token")?,
-    );
-    let (socket, _) = tokio_tungstenite::connect_async(request).await?;
+    let socket = dial(url, token).await?;
     eprintln!("connected to {url}");
     accepted()?;
     let (mut sink, mut stream) = socket.split();
-    let hello = Up::Hello {
-        protocol: PROTOCOL,
-        version: env!("CARGO_PKG_VERSION").into(),
-        zeron: crate::zeron::ZERON_VERSION.into(),
-    };
-    sink.send(text(&hello)?).await?;
+    sink.send(text(&hello())?).await?;
+    let now = engine.borrow_and_update().clone();
+    sink.send(text(&Up::Engine(now))?).await?;
     // Replies from tool calls running in their own tasks.
     let (replies_tx, mut replies) = mpsc::channel::<Up>(64);
     let mut ping = tokio::time::interval(PING_EVERY);
@@ -163,8 +184,9 @@ async fn session(
                     Some(Ok(Message::Text(body))) => {
                         let call: Call = serde_json::from_str(&body).context("bad call from the relay")?;
                         let (tools, replies) = (tools.clone(), replies_tx.clone());
+                        let now = engine.borrow().clone();
                         tokio::spawn(async move {
-                            let reply = Up::Reply { id: call.id, result: run_tool(&tools, call.tool, call.args).await };
+                            let reply = Up::Reply { id: call.id, result: run_tool(&tools, &now, call.tool, call.args).await };
                             // The connection may be gone by now; the relay times the call out.
                             let _ = replies.send(reply).await;
                         });
@@ -176,6 +198,10 @@ async fn session(
             }
             Some(reply) = replies.recv() => sink.send(text(&reply)?).await?,
             Some(notice) = notices.recv() => sink.send(text(&Up::Notify(notice))?).await?,
+            Ok(()) = engine.changed() => {
+                let now = engine.borrow_and_update().clone();
+                sink.send(text(&Up::Engine(now))?).await?;
+            }
             _ = ping.tick() => {
                 if heard.elapsed() > SILENCE_LIMIT {
                     bail!("no answer from the relay for {}s", SILENCE_LIMIT.as_secs());
@@ -186,12 +212,63 @@ async fn session(
     }
 }
 
-/// Run one allowed tool and return its result, or why it can't run.
-async fn run_tool(tools: &Tools, tool: String, args: Value) -> Result<Value, String> {
-    match allowed_args(&tool, args) {
-        Some(args) => tools.call(&tool, args).await,
-        None => Err(format!("tool {tool} is not available from the phone")),
+/// Check that the relay accepts `link`'s token, then disconnect.
+pub async fn verify(link: &Link) -> Result<()> {
+    let socket = match dial(&socket_url(&link.relay)?, &link.token).await {
+        Err(e) if rejected(&e) => {
+            bail!("the relay rejected this token; add the Mac again in the app")
+        }
+        other => other.with_context(|| format!("reaching {}", link.relay))?,
+    };
+    // Say hello, so the relay logs a short visit rather than a bad client.
+    let (mut sink, _) = socket.split();
+    sink.send(text(&hello())?).await?;
+    sink.close().await?;
+    Ok(())
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// Open the WebSocket to the relay with this Mac's token.
+async fn dial(url: &str, token: &str) -> Result<Socket> {
+    let mut request = url.into_client_request()?;
+    request.headers_mut().insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).context("bad token")?,
+    );
+    let (socket, _) = tokio_tungstenite::connect_async(request).await?;
+    Ok(socket)
+}
+
+fn hello() -> Up {
+    Up::Hello {
+        protocol: PROTOCOL,
+        version: env!("CARGO_PKG_VERSION").into(),
+        zeron: crate::zeron::ZERON_VERSION.into(),
     }
+}
+
+/// Run one allowed tool and return its result, or why it can't run.
+/// `open_zeron` is ours, not a Zeron tool: it works while Zeron is closed.
+async fn run_tool(
+    tools: &Tools,
+    engine: &Engine,
+    tool: String,
+    args: Value,
+) -> Result<Value, String> {
+    if tool == "open_zeron" {
+        return engine::open()
+            .await
+            .map(|()| json!({ "opening": true }))
+            .map_err(|e| format!("{e:#}"));
+    }
+    let args = allowed_args(&tool, args)
+        .ok_or_else(|| format!("tool {tool} is not available from the phone"))?;
+    if let Some(why) = engine::refusal(engine) {
+        return Err(why);
+    }
+    tools.call(&tool, args).await
 }
 
 /// Return the arguments to pass to `tool`, or `None` if the phone may not call it.
@@ -281,6 +358,26 @@ mod tests {
             assert_eq!(allowed_args(tool, json!({})), None, "{tool}");
         }
         assert_eq!(allowed_args("read_chat", json!("not an object")), None);
+    }
+
+    #[tokio::test]
+    async fn calls_wait_for_a_matching_zeron() {
+        // Nothing listens here: a call that got through would fail differently.
+        let zeron = Arc::new(Zeron::new("ws://127.0.0.1:9".into(), Origin::default()));
+        let tools = Tools::new(zeron);
+        let call = |engine: Engine, tool: &str| {
+            let (tools, tool) = (&tools, tool.to_owned());
+            async move { run_tool(tools, &engine, tool, json!({})).await }
+        };
+        let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
+        assert_eq!(closed, "Zeron isn't open on this Mac");
+        let outdated = Engine::Outdated {
+            running: "0.0.1".into(),
+        };
+        let outdated = call(outdated, "list_chats").await.unwrap_err();
+        assert!(outdated.contains("update zeron-tools"), "{outdated}");
+        let refused = call(Engine::Running, "open_terminal").await.unwrap_err();
+        assert!(refused.contains("not available"), "{refused}");
     }
 
     #[test]

@@ -183,11 +183,46 @@ const store = { machines: null, chats: null };
 const machineName = id => store.machines?.find(m => m.id === id)?.name || "Mac";
 const severalMacs = () => (store.machines?.length || 0) > 1;
 
-/** Load the Macs, then every online Mac's chats, newest activity first. */
+/** A Mac's state: offline (no link), closed (Zeron isn't open), outdated (zeron-tools needs an update), or ready. */
+function macState(m) {
+  if (!m.status.online) return "offline";
+  const engine = m.status.engine?.state;
+  return engine === "closed" || engine === "outdated" ? engine : "ready";
+}
+const ready = () => (store.machines || []).filter(m => macState(m) === "ready");
+
+/** Start Zeron on a Mac where it's closed; it shows up within seconds. */
+async function openZeron(machine) {
+  haptic(8);
+  try {
+    await call(machine, "open_zeron");
+    toast({ title: `Opening Zeron on ${machineName(machine)}`, kind: "info", timeout: 2600 });
+  } catch (e) { toast({ title: "Couldn't open Zeron", body: e.message, kind: "error" }); }
+}
+
+/** The note for a Mac that can't show chats, if it can't. */
+function macNote(m) {
+  const state = macState(m);
+  if (state === "closed") {
+    return h("div", { class: "offline-note" }, h("span", {}, h("b", {}, `Zeron is closed on ${m.name}.`)),
+      h("button", { class: "btn", onclick: () => openZeron(m.id) }, "Open"));
+  }
+  if (state === "outdated") {
+    return h("div", { class: "offline-note" }, h("span", {}, h("b", {}, `Update zeron-tools on ${m.name}.`),
+      ` It runs Zeron ${m.status.engine.running}.`));
+  }
+  if (state === "offline") {
+    return h("div", { class: "offline-note" }, h("span", {}, h("b", {}, `${m.name} is offline.`),
+      " Run zeron-tools connect --install on it."));
+  }
+  return null;
+}
+
+/** Load the Macs, then every ready Mac's chats, newest activity first. */
 async function loadChats() {
   const { machines } = await post("/api/machines");
   store.machines = machines;
-  const lists = await Promise.all(machines.filter(m => m.status.online).map(async m => {
+  const lists = await Promise.all(machines.filter(m => macState(m) === "ready").map(async m => {
     try {
       const { chats } = await call(m.id, "list_chats", { limit: 200 });
       return chats.map(c => ({ ...c, machine: m.id }));
@@ -643,10 +678,10 @@ function listView() {
       h("span", { class: "mark" }, mark(c.harness)),
       h("span", { class: "title" }, c.title || "Untitled chat"),
       h("span", { class: "corner" }, corner),
-      (withProject || c.branch || severalMacs()) && h("span", { class: "meta" },
+      (withProject || c.branch) && h("span", { class: "meta" },
         withProject && h("span", {}, tile(c.project), c.project?.name || "No project"),
         c.branch && h("span", { class: "branch" }, icon("branch"), c.branch),
-        severalMacs() && h("span", { class: "branch" }, icon("laptop"), machineName(c.machine))));
+        withProject && severalMacs() && h("span", { class: "branch" }, icon("laptop"), machineName(c.machine))));
     el.addEventListener("click", () => haptic(5));
     known.set(c.machine + c.id, { sig, el });
     return el;
@@ -668,17 +703,24 @@ function listView() {
   function draw() {
     const machines = store.machines;
     if (machines) {
-      macs.replaceChildren(...machines.map(m => h("span", { class: m.status.online ? "" : "off" },
-        glyph("dot", m.status.online ? "var(--tone-done)" : "var(--tertiary)"), m.name, m.status.online ? "" : " · offline")));
+      const label = { offline: " · offline", closed: " · Zeron closed", outdated: " · update needed", ready: "" };
+      macs.replaceChildren(...machines.map(m => {
+        const state = macState(m);
+        return h("span", { class: state === "ready" ? "" : "off" },
+          glyph("dot", state === "ready" ? "var(--tone-done)" : state === "offline" ? "var(--tertiary)" : "var(--tone-input)"), m.name, label[state]);
+      }));
     }
     const chats = store.chats;
     if (!chats) return;
     const nodes = [];
     if (!machines.length) {
       nodes.push(h("div", { class: "empty" }, "No Macs yet. Tap ", icon("more", ""), " and add one."));
-    } else if (!machines.some(m => m.status.online)) {
-      nodes.push(h("div", { class: "offline-note" }, h("b", {}, machines.length > 1 ? "Your Macs are offline." : `${machines[0].name} is offline.`),
-        " Start zeron-tools connect on it, with Zeron open."));
+    }
+    // Closed and outdated Macs need you; an offline one only matters when nothing else works.
+    const noReady = !ready().length;
+    for (const m of machines) {
+      const note = (macState(m) !== "offline" || noReady) && macNote(m);
+      if (note) nodes.push(note);
     }
     const q = listState.query.trim().toLowerCase();
     if (q) {
@@ -697,7 +739,7 @@ function listView() {
         nodes.push(section(key, g.project, g.machine, g.items));
         if (!collapsed.has(key)) nodes.push(...g.items.map(c => row(c, false)));
       }
-      if (!chats.length && machines.some(m => m.status.online)) nodes.push(h("div", { class: "empty" }, "No chats yet"));
+      if (!chats.length && !noReady) nodes.push(h("div", { class: "empty" }, "No chats yet"));
     }
     reconcile(rows, nodes);
     painted = true;
@@ -808,7 +850,7 @@ function chatView(machine, id, fromList) {
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
   const dock = h("div", { class: "dock" }, jump, h("div", { class: "composer glass" }, textarea, sendBtn), hint);
   const offline = offlineBanner();
-  const macOffline = h("div", { class: "offline glass hide" }, icon("alert"), `${machineName(machine)} is offline`);
+  const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
   solidOnScroll(scroll, bar);
   // The transcript scrolls under the floating composer; keep room for it.
@@ -1030,8 +1072,13 @@ function chatView(machine, id, fromList) {
     try {
       chat = await api("get_chat");
     } catch (e) {
-      // The relay answers for an offline Mac; show it instead of a stale page.
-      macOffline.classList.toggle("hide", !/offline|didn't answer/.test(e.message));
+      // Show why the Mac can't answer instead of a stale page.
+      const name = machineName(machine);
+      const why = /isn't open/.test(e.message) ? [`Zeron is closed on ${name}`, h("button", { class: "open", onclick: () => openZeron(machine) }, "Open")]
+        : /update zeron-tools/.test(e.message) ? [`Update zeron-tools on ${name}`]
+        : /offline|didn't answer/.test(e.message) ? [`${name} is offline`] : null;
+      if (why) macOffline.replaceChildren(icon("alert"), ...why);
+      macOffline.classList.toggle("hide", !why);
       throw e;
     }
     macOffline.classList.add("hide");
@@ -1073,8 +1120,8 @@ const prefs = {
 };
 
 function newChatSheet() {
-  const online = (store.machines || []).filter(m => m.status.online);
-  if (!online.length) { toast({ title: "No Mac is online", body: "Start zeron-tools connect on a Mac first.", kind: "info" }); return; }
+  const online = ready();
+  if (!online.length) { toast({ title: "No Mac is ready", body: "Zeron needs to be open on a connected Mac.", kind: "info" }); return; }
   sheet(close => {
     const saved = prefs.get();
     const choice = {
@@ -1223,8 +1270,9 @@ function settingsSheet() {
 
     const macRows = (store.machines || []).map(m => itemRow({
       iconName: "laptop", label: m.name,
-      sub: m.status.online ? `Online · Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` : "Offline",
-      value: glyph("dot", m.status.online ? "var(--tone-done)" : "var(--tertiary)"),
+      sub: { offline: "Offline", closed: "Zeron is closed", outdated: `Runs Zeron ${m.status.engine?.running}: update zeron-tools`,
+        ready: `Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` }[macState(m)],
+      value: glyph("dot", { ready: "var(--tone-done)", offline: "var(--tertiary)" }[macState(m)] || "var(--tone-input)"),
       onclick: async () => {
         if (!confirm(`Remove ${m.name}? It disconnects now, and needs a new token to connect again.`)) return;
         try { await post("/api/machines/remove", { id: m.id }); close(); toast({ title: `${m.name} removed`, kind: "done" }); }
@@ -1257,7 +1305,7 @@ function addMac(close) {
       const { command } = await post("/api/machines/add", { name: name.value.trim() });
       body.replaceChildren(
         h("h2", {}, "Connect the Mac"),
-        h("div", { class: "note", style: { margin: "-6px 4px 12px" } }, "Run this on the Mac, with Zeron open. It saves the token, so later runs need just zeron-tools connect. The token is shown only once."),
+        h("div", { class: "note", style: { margin: "-6px 4px 12px" } }, "Run this on the Mac. It keeps the Mac connected in the background from then on, even while Zeron is closed. The token is shown only once."),
         h("div", { class: "command" }, command),
         h("button", { class: "btn full", style: { marginBottom: "8px" }, onclick: () => { copyText(command); toast({ title: "Command copied", kind: "done", timeout: 1600 }); } }, icon("copy"), "Copy command"),
         h("button", { class: "btn solid full", onclick: close }, "Done"));

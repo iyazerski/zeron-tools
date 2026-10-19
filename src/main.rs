@@ -17,6 +17,7 @@ mod zeron;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, TimeZone, Utc};
@@ -225,14 +226,14 @@ enum Cmd {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
-    /// Link the running Zeron to a relay, so you can use it from a phone
+    /// Link this Mac's Zeron to a relay, so you can use it from a phone
     ///
     /// Dials out to the relay (zeron-relay) and stays connected, so the
     /// phone app can list chats, follow them live, send messages, stop
     /// turns, answer agent questions, and start chats. Reports chats that
-    /// finish, need an answer, or fail, for notifications. Needs Zeron
-    /// running. Pass --relay and --token once (the app shows them when you
-    /// add a Mac); they're saved for later runs.
+    /// finish, need an answer, or fail, for notifications. Zeron may be
+    /// closed: the app shows that and can open it. Pass --relay and --token
+    /// once (the app shows them when you add a Mac); they're saved.
     Connect {
         /// The relay's address, like https://zeron.example.com
         #[arg(long, requires = "token")]
@@ -247,6 +248,16 @@ enum Cmd {
         /// wait until it has had no keyboard or mouse input for 2 minutes)
         #[arg(long)]
         notify_always: bool,
+        /// Run in the background from now on: start at login, restart after
+        /// a crash, log to ~/Library/Logs/zeron-tools-connect.log
+        #[arg(long, conflicts_with = "uninstall")]
+        install: bool,
+        /// Stop running in the background
+        #[arg(long, conflicts_with_all = ["relay", "notify_always"])]
+        uninstall: bool,
+        /// Set by the launch agent
+        #[arg(long, hide = true)]
+        agent: bool,
     },
 }
 
@@ -619,10 +630,17 @@ async fn main() -> Result<()> {
             token,
             ipc_port,
             notify_always,
+            install,
+            uninstall,
+            agent,
         } => {
-            // Only for the version check: the relay's calls go to the engine,
-            // whose IPC changes with Zeron releases like the profile does.
-            open(false)?;
+            if uninstall {
+                match connect::uninstall()? {
+                    true => println!("stopped; connect no longer runs in the background"),
+                    false => println!("connect wasn't running in the background"),
+                }
+                return Ok(());
+            }
             let path = connect::link_path(&data_dir);
             // A new link is saved once the relay accepts it, so a mistyped
             // token doesn't replace a working one.
@@ -638,11 +656,47 @@ async fn main() -> Result<()> {
                     (link, None)
                 }
             };
+            if install {
+                if let Some(path) = save_to {
+                    connect::verify(&link).await?;
+                    link.save(&path)?;
+                }
+                // The agent repeats this run's options, minus the link (saved).
+                let mut args = Vec::new();
+                if let Some(dir) = &cli.global.data_dir {
+                    args.extend(["--data-dir".into(), dir.to_string_lossy().into_owned()]);
+                }
+                args.extend(["--profile".into(), cli.global.profile.clone()]);
+                if cli.global.ignore_version {
+                    args.push("--ignore-version".into());
+                }
+                args.extend(["connect".into(), "--agent".into()]);
+                args.extend(["--ipc-port".into(), ipc_port.to_string()]);
+                if notify_always {
+                    args.push("--notify-always".into());
+                }
+                let log = connect::install(&args)?;
+                println!(
+                    "connect now runs in the background and starts at login; log: {}",
+                    log.display()
+                );
+                return Ok(());
+            }
+            // Zeron records the version it booted in the profile; read it
+            // whenever Zeron comes up, since its IPC changes between releases.
+            let version: Option<connect::VersionCheck> = (!cli.global.ignore_version).then(|| {
+                let (data_dir, profile_dir) = (data_dir.clone(), profile_dir.clone());
+                Arc::new(move || {
+                    Profile::open(&data_dir, &profile_dir, false, true)?.zeron_version()
+                }) as connect::VersionCheck
+            });
             connect::run(connect::Opts {
                 link,
                 save_to,
                 ipc_port,
                 notify_always,
+                version,
+                agent,
             })
             .await?;
             0

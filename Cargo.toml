@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 publish = false
 description = "Tools for Zeron: sync, import, export, rename, archive, and delete chats, and connect the running app to a relay for phone access"
@@ -24,7 +24,7 @@ libc = "0.2"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "sync", "time"] }
 # The relay link; Zeron's own IPC client uses the same version.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # tokio-tungstenite leaves the TLS crypto provider to the app; with only

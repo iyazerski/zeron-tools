@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
-use zeron_relay_proto::{Call, Notice, PROTOCOL, Up};
+use zeron_relay_proto::{Call, Engine, Notice, PROTOCOL, Up};
 
 use crate::store::Machine;
 
@@ -35,6 +35,8 @@ struct Link {
     pending: Pending,
     version: String,
     zeron: String,
+    /// Unknown until the Mac reports it, right after its hello.
+    engine: Option<Engine>,
 }
 
 /// A Mac's live state, for the app.
@@ -44,6 +46,7 @@ pub struct Status {
     pub online: bool,
     pub version: Option<String>,
     pub zeron: Option<String>,
+    pub engine: Option<Engine>,
 }
 
 #[derive(Default)]
@@ -59,11 +62,13 @@ impl Hub {
                 online: true,
                 version: Some(link.version.clone()),
                 zeron: Some(link.zeron.clone()),
+                engine: link.engine.clone(),
             },
             None => Status {
                 online: false,
                 version: None,
                 zeron: None,
+                engine: None,
             },
         }
     }
@@ -146,6 +151,7 @@ impl Hub {
                 pending: pending.clone(),
                 version: version.clone(),
                 zeron: zeron.clone(),
+                engine: None,
             },
         );
         eprintln!(
@@ -164,6 +170,11 @@ impl Hub {
                                     }
                                 }
                                 Up::Notify(notice) => notify(machine, notice),
+                                Up::Engine(engine) => {
+                                    if let Some(link) = self.lock().get_mut(&machine.id).filter(|l| l.conn == conn) {
+                                        link.engine = Some(engine);
+                                    }
+                                }
                                 Up::Hello { .. } => {}
                             },
                             Some(Ok(Message::Close(_))) | None => return Ok(()),

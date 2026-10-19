@@ -40,6 +40,22 @@ pub enum Up {
     },
     /// A chat finished, needs an answer, or failed.
     Notify(Notice),
+    /// Zeron's state on the Mac: sent after [`Up::Hello`] and on each change.
+    Engine(Engine),
+}
+
+/// Whether the Mac's Zeron can take calls.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum Engine {
+    Running,
+    /// Not open; the `open_zeron` call starts it.
+    Closed,
+    /// Open, but at a version this zeron-tools doesn't target, so calls are
+    /// refused until zeron-tools is updated.
+    Outdated {
+        running: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -87,5 +103,14 @@ mod tests {
             json!({ "type": "notify", "kind": "input", "chat": "c", "title": "t", "body": "b" })
         );
         assert_eq!(serde_json::from_value::<Up>(value).unwrap(), notify);
+        let engine = Up::Engine(Engine::Outdated {
+            running: "0.3.0".into(),
+        });
+        let value = serde_json::to_value(&engine).unwrap();
+        assert_eq!(
+            value,
+            json!({ "type": "engine", "state": "outdated", "running": "0.3.0" })
+        );
+        assert_eq!(serde_json::from_value::<Up>(value).unwrap(), engine);
     }
 }
