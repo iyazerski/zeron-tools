@@ -198,16 +198,27 @@ async function post(path, body = {}) {
 /** Run a Zeron tool on one Mac. */
 const call = (machine, tool, args = {}) => post(`/api/call/${encodeURIComponent(machine)}/${tool}`, args);
 
-/** Run `fn` now and then every `interval()` ms while the page is visible. */
+/** Run `fn` now and then every `interval()` ms while the page is visible.
+ * Runs never overlap: `now()` during a run asks for one more right after it,
+ * so an older answer can't land after a newer one. */
 function poller(fn, interval) {
-  let timer = null, stopped = false, failures = 0;
+  let timer = null, stopped = false, failures = 0, running = false, again = false;
   const tick = async () => {
+    if (running) { again = true; return; }
     clearTimeout(timer);
     if (stopped) return;
-    if (!document.hidden) {
-      try { await fn(); failures = 0; } catch (e) { failures++; if (failures === 1) console.warn(e); }
+    running = true;
+    try {
+      do {
+        again = false;
+        if (!document.hidden) {
+          try { await fn(); failures = 0; } catch (e) { failures++; if (failures === 1) console.warn(e); }
+        }
+      } while (again && !stopped);
+    } finally {
+      running = false;
+      if (!stopped) timer = setTimeout(tick, Math.min(interval() * 2 ** Math.min(failures, 3), 20000));
     }
-    if (!stopped) timer = setTimeout(tick, Math.min(interval() * 2 ** Math.min(failures, 3), 20000));
   };
   const wake = () => { if (!document.hidden) tick(); };
   document.addEventListener("visibilitychange", wake);
@@ -906,7 +917,7 @@ function chatView(machine, id, fromList) {
     h("button", { class: "circle glass", "aria-label": "Back", onclick: () => { haptic(5); fromList ? history.back() : go("#/"); } }, icon("back")),
     h("div", { class: "grow" }, titleEl, subEl),
     h("button", { class: "circle glass", "aria-label": "More", onclick: () => menu() }, icon("more")));
-  const older = h("button", { class: "older hide", onclick: () => { limit += 40; keepAnchor = true; refresh(true); } }, "Load earlier messages");
+  const older = h("button", { class: "older hide", onclick: () => { limit += 40; keepAnchor = true; poll.now(); } }, "Load earlier messages");
   const msgs = h("div", { class: "msgs" }, older, h("div", { class: "skeleton", style: { margin: "0", alignSelf: "flex-end", width: "60%" } }), h("div", { class: "skeleton", style: { margin: "0", height: "120px" } }));
   const secs = h("span", { class: "secs" });
   const working = h("div", { class: "working hide" }, glyph("trail"), h("span", { class: "shimmer" }, "Working"), secs);
@@ -1092,7 +1103,8 @@ function chatView(machine, id, fromList) {
     const quiet = !last || last.role === "user" || (!last.text && !(last.tools || []).some(t => t.endsWith("(running)")));
     working.classList.toggle("hide", !(isWorking() && quiet));
     const lastUser = [...(read?.messages || [])].reverse().find(m => m.role === "user");
-    const since = Date.parse(lastUser?.createdAt);
+    // Epoch milliseconds.
+    const since = lastUser?.createdAt;
     secs.textContent = since ? `${Math.max(0, Math.round((Date.now() - since) / 1000))}s` : "";
   }
   const clock = setInterval(() => { if (read && isWorking()) drawWorking(); }, 1000);
@@ -1217,9 +1229,12 @@ function chatView(machine, id, fromList) {
     drawInfo();
   }
 
-  async function refresh(force = false) {
+  // One call per poll: the chat, and its messages only when they may have
+  // changed since `version` (the Mac decides; always while it works).
+  async function refresh() {
+    let view;
     try {
-      chat = await api("get_chat");
+      view = await api("chat_view", { limit, known: version });
     } catch (e) {
       // Show why the Mac can't answer instead of a stale page.
       const name = machineName(machine);
@@ -1231,15 +1246,15 @@ function chatView(machine, id, fromList) {
       throw e;
     }
     macOffline.classList.add("hide");
+    chat = view.chat;
     seen.mark(chat);
     drawHeader();
-    // Re-read the transcript when something moved, and always while it streams.
-    const next = `${chat.messageCount}|${chat.lastMessageAt}|${chat.status}|${limit}`;
-    if (next !== infoFor && Date.now() - infoAt > 8000) { infoFor = next; loadInfo(); }
-    if (!force && next === version && !isWorking()) return;
-    version = next;
-    read = await api("read_chat", { limit });
+    if (view.version !== infoFor && Date.now() - infoAt > 8000) { infoFor = view.version; loadInfo(); }
+    if (!view.read) return;
+    read = view.read;
     drawMessages();
+    // Only once the messages are shown, so a failed poll retries them.
+    version = view.version;
   }
 
   const poll = poller(() => refresh(), () => (isWorking() ? 1100 : 3500));

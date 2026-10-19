@@ -57,10 +57,19 @@ pub fn spawn(zeron: Arc<Zeron>, version: Option<VersionCheck>) -> watch::Receive
                 continue;
             };
             let reachable = answer.is_ok();
-            let was_closed = *tx.borrow() == Engine::Closed;
+            let (was_closed, outdated) = {
+                let now = tx.borrow();
+                (
+                    *now == Engine::Closed,
+                    matches!(*now, Engine::Outdated { .. }),
+                )
+            };
+            // While outdated, check every probe: Zeron may have been updated
+            // and restarted between two probes (the IPC client reconnects on
+            // its own, so it never looked closed).
             let state = if !reachable {
                 Engine::Closed
-            } else if was_closed || checks % VERSION_EVERY == 0 {
+            } else if was_closed || outdated || checks % VERSION_EVERY == 0 {
                 running_state(version.clone()).await
             } else {
                 tx.borrow().clone()

@@ -20,6 +20,10 @@ use zeron_relay_proto::{Engine, Notice, NoticeKind};
 const AWAY_AFTER: Duration = Duration::from_secs(120);
 /// Wait before resubscribing after the stream failed while Zeron runs.
 const RETRY: Duration = Duration::from_secs(5);
+/// How long building one notice (reading its chat) may take.
+const NOTICE_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long reading the Mac's idle time may take.
+const IOREG_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Follow chat statuses whenever Zeron runs, and send notices for changes.
 pub async fn run(
@@ -46,7 +50,7 @@ pub async fn run(
 
 async fn watch_once(
     zeron: &Zeron,
-    tools: &Tools,
+    tools: &Arc<Tools>,
     notices: &mpsc::Sender<Notice>,
     always: bool,
 ) -> Result<()> {
@@ -62,19 +66,30 @@ async fn watch_once(
             .into_iter()
             .map(|s| (format!("{}/{}", s.chat_id, s.device_id), s))
             .collect();
-        if let Some(previous) = &known {
-            for (key, now) in &current {
-                let Some(kind) = previous.get(key).and_then(|before| change(before, now)) else {
-                    continue;
-                };
-                if !always && !away() {
-                    continue;
-                }
-                match notice(tools, &now.chat_id, kind).await {
-                    // A full queue means the relay has been away for long; drop it.
-                    Ok(notice) => _ = notices.try_send(notice),
-                    Err(e) => eprintln!("notification for {}: {e:#}", now.chat_id),
-                }
+        let changes: Vec<(String, NoticeKind)> = known
+            .as_ref()
+            .into_iter()
+            .flat_map(|previous| {
+                current.iter().filter_map(|(key, now)| {
+                    let kind = change(previous.get(key)?, now)?;
+                    Some((now.chat_id.clone(), kind))
+                })
+            })
+            .collect();
+        if !changes.is_empty() && (always || away().await) {
+            for (chat, kind) in changes {
+                // Read the chat off the stream's path: the engine's status
+                // watch keeps only its latest value, so a slow read here
+                // would make it skip transitions.
+                let (tools, notices) = (tools.clone(), notices.clone());
+                tokio::spawn(async move {
+                    match tokio::time::timeout(NOTICE_TIMEOUT, notice(&tools, &chat, kind)).await {
+                        // A full queue means the relay has been away for long; drop it.
+                        Ok(Ok(notice)) => _ = notices.try_send(notice),
+                        Ok(Err(e)) => eprintln!("notification for {chat}: {e:#}"),
+                        Err(_) => eprintln!("notification for {chat}: Zeron didn't answer in time"),
+                    }
+                });
             }
         }
         known = Some(current);
@@ -84,8 +99,11 @@ async fn watch_once(
 
 /// Which notice, if any, a session's move from `before` to `now` deserves.
 ///
-/// An interrupted turn also ends in `idle`, but without advancing
-/// `last_completed_turn`; you stopped it yourself, so it stays quiet.
+/// A turn finished when the session settles in `idle` with a newer
+/// `last_completed_turn`, whatever it was before: the status watch can skip
+/// a short `working` (say, right after you answered a question). The engine
+/// sets both together. An interrupted turn also ends in `idle`, but without
+/// advancing the marker; you stopped it yourself, so it stays quiet.
 fn change(before: &Session, now: &Session) -> Option<NoticeKind> {
     match now.status {
         SessionStatus::AwaitingInput if before.status != SessionStatus::AwaitingInput => {
@@ -95,8 +113,7 @@ fn change(before: &Session, now: &Session) -> Option<NoticeKind> {
             Some(NoticeKind::Failed)
         }
         SessionStatus::Idle
-            if before.status == SessionStatus::Working
-                && now.last_completed_turn.is_some()
+            if now.last_completed_turn.is_some()
                 && now.last_completed_turn != before.last_completed_turn =>
         {
             Some(NoticeKind::Finished)
@@ -134,12 +151,15 @@ async fn notice(tools: &Tools, chat_id: &str, kind: NoticeKind) -> Result<Notice
 
 /// Whether nobody has touched the Mac's keyboard or mouse for [`AWAY_AFTER`].
 /// If idle time can't be read, assume away: a missed notice is worse.
-fn away() -> bool {
-    let idle = std::process::Command::new("ioreg")
+async fn away() -> bool {
+    let output = tokio::process::Command::new("ioreg")
         .args(["-c", "IOHIDSystem", "-d", "4"])
-        .output()
-        .ok()
-        .and_then(|o| hid_idle(&String::from_utf8_lossy(&o.stdout)));
+        .kill_on_drop(true)
+        .output();
+    let idle = match tokio::time::timeout(IOREG_TIMEOUT, output).await {
+        Ok(Ok(o)) => hid_idle(&String::from_utf8_lossy(&o.stdout)),
+        _ => None,
+    };
     idle.is_none_or(|idle| idle >= AWAY_AFTER)
 }
 
@@ -187,7 +207,18 @@ mod tests {
                 session(Idle, Some("t1")),
                 Some(Finished),
             ),
+            // The watch skipped `working` after an answered question.
+            (
+                session(AwaitingInput, Some("t1")),
+                session(Idle, Some("t2")),
+                Some(Finished),
+            ),
             // Interrupted: the completed-turn marker stays put.
+            (
+                session(AwaitingInput, Some("t1")),
+                session(Idle, Some("t1")),
+                None,
+            ),
             (
                 session(Working, Some("t1")),
                 session(Idle, Some("t1")),

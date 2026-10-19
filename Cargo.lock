@@ -3519,6 +3519,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "url",
  "uuid",
  "webauthn-rs",

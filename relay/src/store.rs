@@ -220,14 +220,21 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension("tmp");
+    // A fresh file, so the mode applies: a leftover one keeps its own.
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("removing {}", tmp.display()));
+        }
+        _ => {}
+    }
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
         .open(&tmp)
         .with_context(|| format!("writing {}", tmp.display()))?;
     file.write_all(bytes)?;
+    file.sync_all()?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 

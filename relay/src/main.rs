@@ -186,11 +186,24 @@ async fn main() -> Result<()> {
         .with_context(|| format!("binding {}", opts.bind))?;
     eprintln!("listening on {} for {}", opts.bind, opts.public_url);
     axum::serve(listener, router)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+        .with_graceful_shutdown(shutdown()?)
         .await?;
     Ok(())
+}
+
+/// Resolve on Ctrl-C or SIGTERM. Kubernetes stops pods with SIGTERM, and as
+/// PID 1 in its container the relay would ignore it without a handler, so
+/// each deploy would wait out the grace period.
+fn shutdown() -> Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut term = signal(SignalKind::terminate()).context("listening for SIGTERM")?;
+    Ok(async move {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+        eprintln!("shutting down");
+    })
 }
 
 /// Refuse POSTs from any page but the app's own.

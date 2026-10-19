@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use tokio::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -83,19 +83,27 @@ impl Hub {
         };
         let (tx, rx) = oneshot::channel();
         lock(&pending).insert(id, tx);
-        if calls.send(Call { id, tool, args }).await.is_err() {
-            lock(&pending).remove(&id);
-            return Err("this Mac went offline".into());
-        }
-        match tokio::time::timeout(CALL_TIMEOUT, rx).await {
-            Ok(Ok(result)) => result,
-            // The connection ended and dropped the waiting reply.
-            Ok(Err(_)) => Err("this Mac went offline".into()),
-            Err(_) => {
-                lock(&pending).remove(&id);
-                Err("this Mac didn't answer in time".into())
+        // Forget the waiter however the call ends, also when the app hangs up.
+        let _waiting = Waiting {
+            pending: &pending,
+            id,
+        };
+        // The deadline covers queueing too, not just the Mac's answer.
+        let exchange = async move {
+            let sent = calls.send(Call { id, tool, args }).await;
+            // Don't keep the link's call queue open: a replaced connection
+            // ends when its last sender is gone.
+            drop(calls);
+            if sent.is_err() {
+                return Err("this Mac went offline".into());
             }
-        }
+            // An error: the connection ended and dropped the waiting reply.
+            rx.await
+                .unwrap_or_else(|_| Err("this Mac went offline".into()))
+        };
+        tokio::time::timeout(CALL_TIMEOUT, exchange)
+            .await
+            .unwrap_or_else(|_| Err("this Mac didn't answer in time".into()))
     }
 
     /// Disconnect `machine`, if it's connected (after it was removed).
@@ -159,23 +167,31 @@ impl Hub {
             machine.name
         );
         let result = async {
+            // Outgoing calls must not postpone this, so it's a fixed deadline
+            // that only frames from the Mac move.
+            let mut heard = Instant::now();
             loop {
                 tokio::select! {
-                    frame = tokio::time::timeout(SILENCE_LIMIT, stream.next()) => {
-                        match frame.context("the Mac went silent")? {
-                            Some(Ok(Message::Text(body))) => match serde_json::from_str(&body)? {
-                                Up::Reply { id, result } => {
+                    () = tokio::time::sleep_until(heard + SILENCE_LIMIT) => bail!("the Mac went silent"),
+                    frame = stream.next() => {
+                        heard = Instant::now();
+                        match frame {
+                            Some(Ok(Message::Text(body))) => match serde_json::from_str(&body) {
+                                // A frame this relay can't read: skip it, and
+                                // let a reply it held time out.
+                                Err(e) => eprintln!("{}: skipped a bad message: {e}", machine.name),
+                                Ok(Up::Reply { id, result }) => {
                                     if let Some(waiter) = lock(&pending).remove(&id) {
                                         let _ = waiter.send(result);
                                     }
                                 }
-                                Up::Notify(notice) => notify(machine, notice),
-                                Up::Engine(engine) => {
+                                Ok(Up::Notify(notice)) => notify(machine, notice),
+                                Ok(Up::Engine(engine)) => {
                                     if let Some(link) = self.lock().get_mut(&machine.id).filter(|l| l.conn == conn) {
                                         link.engine = Some(engine);
                                     }
                                 }
-                                Up::Hello { .. } => {}
+                                Ok(Up::Hello { .. }) => {}
                             },
                             Some(Ok(Message::Close(_))) | None => return Ok(()),
                             Some(Ok(_)) => {}
@@ -194,16 +210,34 @@ impl Hub {
             }
         }
         .await;
-        let mut links = self.lock();
-        if links.get(&machine.id).is_some_and(|l| l.conn == conn) {
-            links.remove(&machine.id);
+        // Fail this connection's calls now rather than at their timeout:
+        // unlist it, refuse new calls, then drop the waiting replies.
+        {
+            let mut links = self.lock();
+            if links.get(&machine.id).is_some_and(|l| l.conn == conn) {
+                links.remove(&machine.id);
+            }
         }
+        calls.close();
+        lock(&pending).clear();
         eprintln!("{} disconnected", machine.name);
         result
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Link>> {
         lock(&self.links)
+    }
+}
+
+/// Removes a call's waiter from its connection when the call ends.
+struct Waiting<'a> {
+    pending: &'a Pending,
+    id: u64,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        lock(self.pending).remove(&self.id);
     }
 }
 
@@ -216,4 +250,67 @@ fn close(reason: &str) -> Message {
         code: 1008,
         reason: reason.to_owned().into(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::WebSocketUpgrade;
+    use serde_json::json;
+    use tokio_tungstenite::tungstenite::Message as Frame;
+
+    /// A call waiting on a Mac fails as soon as its connection drops.
+    #[tokio::test]
+    async fn calls_fail_at_once_when_the_mac_disconnects() {
+        let hub = Arc::new(Hub::default());
+        let mac = Machine {
+            id: "m".into(),
+            name: "Mac".into(),
+        };
+        let serve = hub.clone();
+        let app = axum::Router::new().route(
+            "/connect",
+            axum::routing::get(move |ws: WebSocketUpgrade| {
+                let (hub, mac) = (serve.clone(), mac.clone());
+                async move { ws.on_upgrade(move |socket| hub.serve(mac, socket, |_, _| {})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/connect"))
+            .await
+            .unwrap();
+        let hello = Up::Hello {
+            protocol: PROTOCOL,
+            version: "1".into(),
+            zeron: "1".into(),
+        };
+        socket
+            .send(Frame::text(serde_json::to_string(&hello).unwrap()))
+            .await
+            .unwrap();
+        while !hub.status("m").online {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let caller = hub.clone();
+        let call =
+            tokio::spawn(async move { caller.call("m", "list_chats".into(), json!({})).await });
+        let Some(Ok(Frame::Text(body))) = socket.next().await else {
+            panic!("the Mac got no call");
+        };
+        assert_eq!(
+            serde_json::from_str::<Call>(&body).unwrap().tool,
+            "list_chats"
+        );
+
+        drop(socket);
+        let result = tokio::time::timeout(Duration::from_secs(5), call)
+            .await
+            .expect("the call waited for its timeout")
+            .unwrap();
+        assert_eq!(result, Err("this Mac went offline".into()));
+        assert!(!hub.status("m").online);
+    }
 }

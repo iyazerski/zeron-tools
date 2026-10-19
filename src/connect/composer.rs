@@ -41,12 +41,13 @@ pub async fn info(zeron: &Zeron, args: &Value) -> Result<Value> {
 }
 
 /// The context usage the host recorded for a chat: the opening frame of its
-/// transcript stream carries it.
+/// transcript stream carries it. `openingTail` keeps that frame to the last
+/// entries instead of the whole transcript.
 async fn context_usage(zeron: &Zeron, chat_id: &str) -> Result<Value> {
     let mut stream = zeron
         .subscribe(
             zeron_rpc::methods::WATCH_DOC_MESSAGES,
-            json!({ "chatId": chat_id }),
+            json!({ "chatId": chat_id, "openingTail": true }),
         )
         .await?;
     let first = tokio::time::timeout(USAGE_TIMEOUT, stream.recv())
@@ -129,7 +130,7 @@ fn default_reasoning(ladder: &[ReasoningLevel]) -> Option<ReasoningLevel> {
 }
 
 /// The `chat` argument: the chat's id.
-fn chat_arg(args: &Value) -> Result<&str> {
+pub(super) fn chat_arg(args: &Value) -> Result<&str> {
     args.get("chat")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())

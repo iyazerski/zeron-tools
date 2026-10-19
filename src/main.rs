@@ -682,6 +682,7 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
+            let _only = connect::single_instance(&data_dir, agent).await?;
             // Zeron records the version it booted in the profile; read it
             // whenever Zeron comes up, since its IPC changes between releases.
             let version: Option<connect::VersionCheck> = (!cli.global.ignore_version).then(|| {

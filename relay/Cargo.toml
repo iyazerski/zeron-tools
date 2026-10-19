@@ -27,3 +27,5 @@ openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3"
+# A Mac's end of the link, in tests; the version axum uses.
+tokio-tungstenite = "0.29"

@@ -12,6 +12,7 @@
 //! [`watch`] reports chats that finish, need an answer, or fail.
 
 mod agent;
+mod chat;
 mod composer;
 mod engine;
 mod watch;
@@ -27,7 +28,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, watch as state};
+use tokio::sync::{Semaphore, mpsc, watch as state};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
@@ -41,6 +42,16 @@ const PING_EVERY: Duration = Duration::from_secs(25);
 const SILENCE_LIMIT: Duration = Duration::from_secs(70);
 /// The longest wait between reconnect attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
+/// A connection that lasted this long worked, so the next reconnect starts
+/// fast again. A shorter one (say, a relay refusing this protocol right
+/// after hello) keeps backing off.
+const STABLE_AFTER: Duration = Duration::from_secs(60);
+/// How long a tool call may run here: under the relay's 30 s, so the error
+/// still reaches the phone. A call that timed out may still have happened.
+const TOOL_TIMEOUT: Duration = Duration::from_secs(25);
+/// Tool calls running at once; more wait. Bounds the work a hung Zeron
+/// piles up.
+const MAX_CALLS: usize = 16;
 
 /// Where `connect` keeps the relay address and this Mac's token.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,20 +73,58 @@ impl Link {
         }
     }
 
-    /// Save the link to `path`, readable only by the user (the token is a secret).
+    /// Save the link to `path` atomically, readable only by the user (the
+    /// token is a secret).
     pub fn save(&self, path: &Path) -> Result<()> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+        // A fresh file, so the mode applies: a leftover one keeps its own.
+        match std::fs::remove_file(&tmp) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(e).with_context(|| format!("removing {}", tmp.display()));
+            }
+            _ => {}
+        }
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
-            .open(path)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .open(&tmp)
+            .with_context(|| format!("writing {}", tmp.display()))?;
         file.write_all(&serde_json::to_vec_pretty(self)?)?;
-        Ok(())
+        file.sync_all()?;
+        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
     }
+}
+
+/// Make sure this is the only `connect` for `data_dir`: two would keep
+/// replacing each other on the relay. The launch agent waits its turn (a
+/// manual run may be holding it); a manual run fails at once. Hold the
+/// returned file while connected.
+pub async fn single_instance(data_dir: &Path, agent: bool) -> Result<std::fs::File> {
+    let path = data_dir.join("zeron-tools-connect.lock");
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => return Ok(file),
+        Err(std::fs::TryLockError::Error(e)) => {
+            return Err(e).with_context(|| format!("locking {}", path.display()));
+        }
+        Err(std::fs::TryLockError::WouldBlock) if !agent => bail!(
+            "connect already runs on this Mac (maybe in the background; stop it with zeron-tools connect --uninstall)"
+        ),
+        Err(std::fs::TryLockError::WouldBlock) => {}
+    }
+    eprintln!("another connect runs on this Mac; waiting for it to stop");
+    tokio::task::spawn_blocking(move || file.lock().map(|()| file))
+        .await?
+        .with_context(|| format!("locking {}", path.display()))
 }
 
 pub struct Opts {
@@ -105,6 +154,7 @@ pub async fn run(opts: Opts) -> Result<()> {
     let mac = Arc::new(Mac {
         zeron: zeron.clone(),
         tools: Arc::new(Tools::new(zeron.clone())),
+        slots: Semaphore::new(MAX_CALLS),
     });
     let mut engine = engine::spawn(zeron.clone(), opts.version);
     // Notices wait here while the relay is unreachable.
@@ -119,7 +169,9 @@ pub async fn run(opts: Opts) -> Result<()> {
     let mut backoff = Duration::from_secs(1);
     let mut save_to = opts.save_to;
     loop {
+        let mut connected = None;
         let accepted = || -> Result<()> {
+            connected = Some(Instant::now());
             if let Some(path) = save_to.take() {
                 link.save(&path)?;
                 eprintln!(
@@ -130,11 +182,11 @@ pub async fn run(opts: Opts) -> Result<()> {
             Ok(())
         };
         let result = session(&url, &link.token, &mac, &mut engine, &mut notices, accepted).await;
+        if connected.is_some_and(|at| at.elapsed() >= STABLE_AFTER) {
+            backoff = Duration::from_secs(1);
+        }
         match result {
-            Ok(()) => {
-                eprintln!("the relay closed the connection; reconnecting");
-                backoff = Duration::from_secs(1);
-            }
+            Ok(()) => eprintln!("the relay closed the connection; reconnecting"),
             Err(e) if rejected(&e) => {
                 let why = "the relay rejected this Mac's token; add the Mac again in the app";
                 // A failing exit would make launchd restart it forever.
@@ -182,7 +234,13 @@ async fn session(
                         let (mac, replies) = (mac.clone(), replies_tx.clone());
                         let now = engine.borrow().clone();
                         tokio::spawn(async move {
-                            let reply = Up::Reply { id: call.id, result: run_tool(&mac, &now, call.tool, call.args).await };
+                            let result = match mac.slots.acquire().await {
+                                Ok(_slot) => tokio::time::timeout(TOOL_TIMEOUT, run_tool(&mac, &now, call.tool, call.args))
+                                    .await
+                                    .unwrap_or_else(|_| Err("Zeron didn't answer in time".into())),
+                                Err(_) => Err("connect is stopping".into()),
+                            };
+                            let reply = Up::Reply { id: call.id, result };
                             // The connection may be gone by now; the relay times the call out.
                             let _ = replies.send(reply).await;
                         });
@@ -249,12 +307,14 @@ fn hello() -> Up {
 struct Mac {
     zeron: Arc<Zeron>,
     tools: Arc<Tools>,
+    /// Limits the tool calls running at once ([`MAX_CALLS`]).
+    slots: Semaphore,
 }
 
 /// Run one allowed tool and return its result, or why it can't run.
 /// `open_zeron` and `restart_zeron` are ours, not Zeron tools: they work
-/// while Zeron is closed or hangs. `composer_info` and `set_chat_model`
-/// are ours too, for the chat's composer ([`composer`]).
+/// while Zeron is closed or hangs. `chat_view` ([`chat`]), `composer_info`,
+/// and `set_chat_model` ([`composer`]) are ours too, for the chat screen.
 async fn run_tool(mac: &Mac, engine: &Engine, tool: String, args: Value) -> Result<Value, String> {
     let started = match tool.as_str() {
         "open_zeron" => Some(engine::open().await),
@@ -266,7 +326,10 @@ async fn run_tool(mac: &Mac, engine: &Engine, tool: String, args: Value) -> Resu
             .map(|()| json!({ "opening": true }))
             .map_err(|e| format!("{e:#}"));
     }
-    let ours = matches!(tool.as_str(), "composer_info" | "set_chat_model");
+    let ours = matches!(
+        tool.as_str(),
+        "chat_view" | "composer_info" | "set_chat_model"
+    );
     let args = if ours {
         args
     } else {
@@ -277,6 +340,7 @@ async fn run_tool(mac: &Mac, engine: &Engine, tool: String, args: Value) -> Resu
         return Err(why);
     }
     let result = match tool.as_str() {
+        "chat_view" => chat::view(&mac.zeron, &args).await,
         "composer_info" => composer::info(&mac.zeron, &args).await,
         "set_chat_model" => composer::set_model(&mac.zeron, &args).await,
         _ => return mac.tools.call(&tool, args).await,
@@ -380,6 +444,7 @@ mod tests {
         let mac = Mac {
             zeron: zeron.clone(),
             tools: Arc::new(Tools::new(zeron)),
+            slots: Semaphore::new(MAX_CALLS),
         };
         let call = |engine: Engine, tool: &str| {
             let (mac, tool) = (&mac, tool.to_owned());
