@@ -28,8 +28,6 @@ pub struct Opts<'a> {
     pub zeron_only: bool,
     /// Codex binary, for `codex delete`.
     pub codex: &'a Path,
-    /// Sessions other apps (Monocode) resume: never deleted, never orphaned.
-    pub resumed_elsewhere: &'a HashSet<String>,
     pub dry_run: bool,
 }
 
@@ -67,7 +65,6 @@ pub fn run(profile: &mut Profile, opts: &Opts) -> Result<Tally> {
         .iter()
         .filter(|c| !doomed_ids.contains(c.id.as_str()))
         .filter_map(|c| c.harness_session_id.as_deref())
-        .chain(opts.resumed_elsewhere.iter().map(String::as_str))
         .collect();
     // Open only the stores this run touches (Codex lists every rollout).
     let mut sources: HashMap<HarnessId, Source> = HashMap::new();
@@ -142,7 +139,6 @@ pub fn run(profile: &mut Profile, opts: &Opts) -> Result<Tally> {
         let linked: HashSet<&str> = every
             .iter()
             .filter_map(|c| c.harness_session_id.as_deref())
-            .chain(opts.resumed_elsewhere.iter().map(String::as_str))
             .collect();
         for harness in [HarnessId::Pi, HarnessId::Codex] {
             let Some(source) = sources.get(&harness) else {

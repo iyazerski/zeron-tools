@@ -1,17 +1,17 @@
 [package]
 name = "zeron-tools"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 publish = false
-description = "Offline maintenance tools for Zeron: sync, import, export, rename, archive, and delete chats, and copy them to MonoCode"
+description = "Offline maintenance tools for Zeron: sync, import, export, rename, archive, and delete chats"
 
 [dependencies]
 # Zeron's crates are not on crates.io; pin them to the release we target
 # (the same version as `zeron_version!` in src/zeron.rs).
-zeron-doc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
-zeron-sync = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
-zeron-proto = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
-zeron-mcp = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.113" }
+zeron-doc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
+zeron-sync = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
+zeron-proto = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
+zeron-mcp = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
 # Versions match Zeron's workspace so cargo unifies them.
 loro = "1.13"
 rusqlite = { version = "0.32", features = ["bundled"] }

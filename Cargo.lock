@@ -2349,8 +2349,8 @@ checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zeron-doc"
-version = "0.2.113"
-source = "git+https://github.com/zeronsh/zeron?tag=v0.2.113#6ac8859998909bc5afd55838afb0635c281f31c3"
+version = "0.2.114"
+source = "git+https://github.com/zeronsh/zeron?tag=v0.2.114#2e8f02ec2dfc521a20a5c43fcdbf4fae2381853a"
 dependencies = [
  "chrono",
  "loro",
@@ -2364,8 +2364,8 @@ dependencies = [
 
 [[package]]
 name = "zeron-mcp"
-version = "0.2.113"
-source = "git+https://github.com/zeronsh/zeron?tag=v0.2.113#6ac8859998909bc5afd55838afb0635c281f31c3"
+version = "0.2.114"
+source = "git+https://github.com/zeronsh/zeron?tag=v0.2.114#2e8f02ec2dfc521a20a5c43fcdbf4fae2381853a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2384,8 +2384,8 @@ dependencies = [
 
 [[package]]
 name = "zeron-proto"
-version = "0.2.113"
-source = "git+https://github.com/zeronsh/zeron?tag=v0.2.113#6ac8859998909bc5afd55838afb0635c281f31c3"
+version = "0.2.114"
+source = "git+https://github.com/zeronsh/zeron?tag=v0.2.114#2e8f02ec2dfc521a20a5c43fcdbf4fae2381853a"
 dependencies = [
  "chrono",
  "pulldown-cmark",
@@ -2396,8 +2396,8 @@ dependencies = [
 
 [[package]]
 name = "zeron-rpc"
-version = "0.2.113"
-source = "git+https://github.com/zeronsh/zeron?tag=v0.2.113#6ac8859998909bc5afd55838afb0635c281f31c3"
+version = "0.2.114"
+source = "git+https://github.com/zeronsh/zeron?tag=v0.2.114#2e8f02ec2dfc521a20a5c43fcdbf4fae2381853a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2415,8 +2415,8 @@ dependencies = [
 
 [[package]]
 name = "zeron-sync"
-version = "0.2.113"
-source = "git+https://github.com/zeronsh/zeron?tag=v0.2.113#6ac8859998909bc5afd55838afb0635c281f31c3"
+version = "0.2.114"
+source = "git+https://github.com/zeronsh/zeron?tag=v0.2.114#2e8f02ec2dfc521a20a5c43fcdbf4fae2381853a"
 dependencies = [
  "block2",
  "futures",
@@ -2435,7 +2435,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-tools"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",

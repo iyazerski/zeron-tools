@@ -1,4 +1,4 @@
-//! Append turns made outside Zeron (in MonoCode, the pi CLI, Codex's own
+//! Append turns made outside Zeron (the pi CLI, Codex's own
 //! apps) to the Zeron chat that resumes the session. Zeron resumes the
 //! session either way; this makes its transcript show those turns too.
 

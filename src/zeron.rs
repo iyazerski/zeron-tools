@@ -27,7 +27,7 @@ use crate::sources::{Message, Seen, Session};
 /// Cargo.toml (see AGENTS.md).
 macro_rules! zeron_version {
     () => {
-        "0.2.113"
+        "0.2.114"
     };
 }
 pub(crate) use zeron_version;
