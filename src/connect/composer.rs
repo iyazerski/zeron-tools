@@ -1,13 +1,14 @@
 //! What the desktop composer shows around a chat's message box, for the
 //! phone: the checkout and branch, how full the context window is, and the
 //! model and reasoning, which the phone can change like the desktop picker.
+//! A new chat's composer shows the footer of the project it will run in.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use zeron_mcp::Zeron;
-use zeron_proto::{ChatConfig, Model, ReasoningLevel};
+use zeron_proto::{ChatConfig, Model, ReasoningLevel, RepoRef};
 
 /// How long to wait for the transcript's first frame, which carries the
 /// context usage.
@@ -15,8 +16,12 @@ const USAGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Return the chat's composer footer: `checkout` (`local` or `worktree`,
 /// only in a git project), `branch`, `contextUsage` (`{tokens, window}`),
-/// and its saved `harness`, `model`, and `reasoning`.
+/// and its saved `harness`, `model`, and `reasoning`. Without `chat`, return
+/// the footer of a chat not created yet ([`draft_info`]).
 pub async fn info(zeron: &Zeron, args: &Value) -> Result<Value> {
+    if args.get("chat").is_none() {
+        return draft_info(zeron, args).await;
+    }
     let chat = zeron.resolve_chat(chat_arg(args)?).await?;
     let spaces = zeron.spaces().await?;
     // Like the desktop footer: checkout and branch only show in a git project.
@@ -38,6 +43,34 @@ pub async fn info(zeron: &Zeron, args: &Value) -> Result<Value> {
         "model": config.and_then(|c| c.model.as_deref()),
         "reasoning": config.and_then(|c| c.reasoning),
     }))
+}
+
+/// The footer for a new chat in the `project` argument: like the desktop's,
+/// the project folder's checkout on its checked-out branch, and nothing
+/// without a project or outside git. The phone records `branch` on the chat
+/// it creates, as the desktop does.
+async fn draft_info(zeron: &Zeron, args: &Value) -> Result<Value> {
+    let spaces = zeron.spaces().await?;
+    let space = args
+        .get("project")
+        .and_then(Value::as_str)
+        .and_then(|id| spaces.iter().find(|s| s.id == id))
+        .filter(|s| s.git_detected);
+    let Some(space) = space else {
+        return Ok(json!({ "checkout": null, "branch": null }));
+    };
+    let refs: Vec<RepoRef> = serde_json::from_value(
+        zeron
+            .call(
+                zeron_rpc::methods::LIST_REFS,
+                json!({ "repoPath": space.path }),
+            )
+            .await?,
+    )
+    .context("unexpected ListRefs reply")?;
+    // A detached HEAD has no current branch.
+    let branch = refs.into_iter().find(|r| r.current).map(|r| r.name);
+    Ok(json!({ "checkout": "local", "branch": branch }))
 }
 
 /// The context usage the host recorded for a chat: the opening frame of its

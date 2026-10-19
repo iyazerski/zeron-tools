@@ -595,27 +595,10 @@ function sheet(build) {
 window.addEventListener("popstate", () => openSheetClose?.(true));
 
 /** A sheet row: icon, label (with an optional second line), value. */
-function itemRow({ iconName, label, sub, value, onclick, cls = "", extra }) {
+function itemRow({ iconName, lead, label, sub, value, onclick, cls = "", extra }) {
   return h(onclick ? "button" : "div", { class: `item-row ${cls}`, onclick },
-    iconName && icon(iconName), h("div", { class: "label" }, label, sub && h("div", { class: "sub" }, sub)),
+    lead || (iconName && icon(iconName)), h("div", { class: "label" }, label, sub && h("div", { class: "sub" }, sub)),
     value != null && h("span", { class: "value" }, value), extra);
-}
-
-/** A sheet row that picks from `options` ([value, label]) with the native picker. */
-function pickRow(iconName, label, onchange) {
-  const select = h("select");
-  const value = h("span", { class: "value" });
-  const row = itemRow({ iconName, label, extra: select });
-  row.append(value);
-  select.addEventListener("change", () => { onchange(select.value); });
-  return {
-    row,
-    set(options, current) {
-      select.replaceChildren(...options.map(([v, l]) => h("option", { value: v }, l)));
-      select.value = current;
-      value.textContent = options.find(([v]) => v === select.value)?.[1] || "";
-    },
-  };
 }
 
 // ---- routing ------------------------------------------------------------------
@@ -627,8 +610,10 @@ function route() {
   const parts = hash.split("/").map(decodeURIComponent);
   const previous = current;
   let view;
+  const fromList = previous?.kind === "list" || (previous?.kind === "new" && previous.fromList);
   if (parts[1] === "setup") view = signInView(parts[2]);
-  else if (parts[1] === "m" && parts[3] === "chat") view = chatView(parts[2], parts[4], previous?.kind === "list");
+  else if (parts[1] === "new") view = chatView(null, null, fromList);
+  else if (parts[1] === "m" && parts[3] === "chat") view = chatView(parts[2], parts[4], fromList);
   else view = listView();
   current = view;
   if (previous) {
@@ -713,7 +698,7 @@ function listView() {
   const bar = h("div", { class: "bar" },
     h("div", { class: "circle" }),
     h("div", { class: "grow" }, h("div", { class: "t fade" }, "Chats")),
-    h("button", { class: "circle glass", "aria-label": "New chat", onclick: () => { haptic(); newChatSheet(); } }, icon("plus")),
+    h("button", { class: "circle glass", "aria-label": "New chat", onclick: () => { haptic(); go("#/new"); } }, icon("plus")),
     h("button", { class: "circle glass", "aria-label": "Settings", onclick: settingsSheet }, icon("more")));
   const macs = h("div", { class: "macs" });
   const input = h("input", { type: "search", placeholder: "Search", value: listState.query, enterkeyhint: "search" });
@@ -886,8 +871,9 @@ function toolSummary(tools) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function toolGroup(message, open, onToggle) {
-  const tools = message.tools.map(parseTool);
+/** A run of consecutive tool calls, folded under the desktop's summary. */
+function toolGroup(lines, open, onToggle) {
+  const tools = lines.map(parseTool);
   const live = tools.some(t => t.state === "run");
   const block = h("div", { class: `tools${open ? " open" : ""}` });
   const head = h("button", { onclick: () => { block.classList.toggle("open"); onToggle(block.classList.contains("open")); haptic(4); } },
@@ -903,28 +889,45 @@ function toolGroup(message, open, onToggle) {
   return block;
 }
 
+/** A message's prose: its text parts, joined as read_chat joins them. */
+const textOf = m => m.parts.filter(p => p.kind === "text").map(p => p.text).join("\n\n");
+
 /** Messages from another Zeron chat carry a routing header; show it as a label. */
 function splitFrom(text) {
   const m = text.match(/^\[Message from Zeron chat (.+?)\. Reply to it with the Zeron `send_message` tool, chat [^\]]+\]\n\n/);
   return m ? [m[1], text.slice(m[0].length)] : [null, text];
 }
 
+/** The text a new chat was started with, shown in it until the transcript has it. */
+let handoff = null;
+
+/** A chat, or with no `id` a new one: the same screen, empty until the first
+ * message creates the chat on `machine` (the selected Mac when null). */
 function chatView(machine, id, fromList) {
+  const isDraft = !id;
+  // The new chat's picks, seeded from the last one started.
+  const draft = isDraft ? newDraft() : null;
+  if (isDraft) machine = draft.machine;
   const cached = store.chats?.find(c => c.id === id && c.machine === machine);
-  const titleEl = h("div", { class: "t" }, cached?.title || " ");
+  const titleEl = h("div", { class: "t" }, isDraft ? "New chat" : cached?.title || " ");
   const subEl = h("div", { class: "s" }, " ");
   const bar = h("div", { class: "bar" },
     h("button", { class: "circle glass", "aria-label": "Back", onclick: () => { haptic(5); fromList ? history.back() : go("#/"); } }, icon("back")),
     h("div", { class: "grow" }, titleEl, subEl),
-    h("button", { class: "circle glass", "aria-label": "More", onclick: () => menu() }, icon("more")));
+    isDraft ? h("div", { class: "circle" }) : h("button", { class: "circle glass", "aria-label": "More", onclick: () => menu() }, icon("more")));
   const older = h("button", { class: "older hide", onclick: () => { limit += 40; keepAnchor = true; poll.now(); } }, "Load earlier messages");
-  const msgs = h("div", { class: "msgs" }, older, h("div", { class: "skeleton", style: { margin: "0", alignSelf: "flex-end", width: "60%" } }), h("div", { class: "skeleton", style: { margin: "0", height: "120px" } }));
+  const started = !isDraft && handoff?.chat === id ? handoff.text : null;
+  if (started) handoff = null;
+  const msgs = h("div", { class: `msgs${isDraft ? " blank" : ""}` }, older,
+    isDraft ? h("div", { class: "hero" }, machine ? "What are we building?" : "No Mac is ready")
+      : started ? null
+      : [h("div", { class: "skeleton", style: { margin: "0", alignSelf: "flex-end", width: "60%" } }), h("div", { class: "skeleton", style: { margin: "0", height: "120px" } })]);
   const secs = h("span", { class: "secs" });
   const working = h("div", { class: "working hide" }, glyph("trail"), h("span", { class: "shimmer" }, "Working"), secs);
   const questionSlot = h("div");
   msgs.append(working, questionSlot);
   const scroll = h("div", { class: "scroll" }, msgs);
-  const textarea = h("textarea", { rows: 1, placeholder: "Message" });
+  const textarea = h("textarea", { rows: 1, placeholder: isDraft ? "Describe the task" : "Message" });
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
@@ -950,6 +953,12 @@ function chatView(machine, id, fromList) {
   const openGroups = new Set();
   let questionId = null;
   const api = (tool, args = {}) => call(machine, tool, { chat: id, ...args });
+  const draftKey = id || "new";
+  if (started) {
+    const bubble = userBubble({ parts: [{ kind: "text", text: started }] }, true);
+    pending.push({ text: started, el: bubble });
+    msgs.insertBefore(bubble, working);
+  }
 
   const nearBottom = () => scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
   const toBottom = smooth => scroll.scrollTo({ top: scroll.scrollHeight, behavior: smooth ? "smooth" : "auto" });
@@ -961,7 +970,7 @@ function chatView(machine, id, fromList) {
     const stop = !text && isWorking();
     sendBtn.classList.toggle("stop", stop);
     sendBtn.replaceChildren(icon(stop ? "stop" : "send"));
-    sendBtn.disabled = !text && !stop;
+    sendBtn.disabled = isDraft ? !text || !machine || !draft.harness : !text && !stop;
     sendBtn.setAttribute("aria-label", stop ? "Stop" : "Send");
     hint.classList.toggle("hide", !(text && isWorking()));
   }
@@ -969,16 +978,17 @@ function chatView(machine, id, fromList) {
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, window.innerHeight * 0.4)}px`;
     updateComposer();
-    drafts[id] = textarea.value;
+    drafts[draftKey] = textarea.value;
   });
   textarea.addEventListener("keydown", e => {
     // Enter sends on a hardware keyboard; phones keep Enter for new lines.
     if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer: coarse)").matches) { e.preventDefault(); sendBtn.click(); }
   });
-  textarea.value = drafts[id] || "";
+  textarea.value = drafts[draftKey] || "";
   sendBtn.addEventListener("click", () => (sendBtn.classList.contains("stop") ? stop() : send()));
 
   async function send() {
+    if (isDraft) return create();
     const text = textarea.value.trim();
     if (!text) return;
     haptic(10);
@@ -1036,7 +1046,7 @@ function chatView(machine, id, fromList) {
   }
 
   function userBubble(m, isPending = false) {
-    const [from, text] = splitFrom(m.text || "");
+    const [from, text] = splitFrom(textOf(m));
     // Composer references become labels; the rest stays literal text.
     const parts = [];
     let last = 0;
@@ -1050,17 +1060,24 @@ function chatView(machine, id, fromList) {
       h("div", { class: "bubble" }, parts));
   }
 
+  // Prose, tool groups, and errors in transcript order, as on the desktop.
   function assistantMessage(m, isLast) {
     const streaming = m.status === "streaming" || (isLast && isWorking());
-    const body = h("div", { class: "md", html: markdown(m.text || "") });
-    if (streaming && m.text) {
-      const lastBlock = body.lastElementChild;
-      (lastBlock && !lastBlock.classList.contains("code") ? lastBlock : body).append(h("span", { class: "caret" }));
-    }
-    return h("div", { class: "msg assistant" },
-      m.tools?.length ? toolGroup(m, openGroups.has(m.id), on => (on ? openGroups.add(m.id) : openGroups.delete(m.id))) : null,
-      m.text ? body : null,
-      ...(m.errors || []).map(e => h("div", { class: "errbox" }, e)),
+    const blocks = m.parts.map((p, i) => {
+      if (p.kind === "error") return h("div", { class: "errbox" }, p.error);
+      if (p.kind === "tools") {
+        const key = `${m.id}#${i}`;
+        return toolGroup(p.tools, openGroups.has(key), on => (on ? openGroups.add(key) : openGroups.delete(key)));
+      }
+      const body = h("div", { class: "md", html: markdown(p.text) });
+      // The caret trails the reply while it streams, not prose a tool followed.
+      if (streaming && i === m.parts.length - 1) {
+        const lastBlock = body.lastElementChild;
+        (lastBlock && !lastBlock.classList.contains("code") ? lastBlock : body).append(h("span", { class: "caret" }));
+      }
+      return body;
+    });
+    return h("div", { class: "msg assistant" }, ...blocks,
       m.status === "aborted" ? h("div", { class: "aborted" }, "Stopped") : null);
   }
 
@@ -1073,7 +1090,7 @@ function chatView(machine, id, fromList) {
     for (const m of read.messages) {
       if (m.role === "system") continue;
       const isLast = m === last;
-      const sig = JSON.stringify([m.text, m.tools, m.status, m.errors, isLast && isWorking(), openGroups.has(m.id)]);
+      const sig = JSON.stringify([m.parts, m.status, isLast && isWorking()]);
       let entry = rendered.get(m.id);
       if (!entry || entry.sig !== sig) {
         const node = m.role === "user" ? userBubble(m) : assistantMessage(m, isLast);
@@ -1085,7 +1102,7 @@ function chatView(machine, id, fromList) {
     }
     // Drop optimistic bubbles once the transcript has the real message.
     pending = pending.filter(p => {
-      const landed = read.messages.some(m => m.role === "user" && splitFrom(m.text || "")[1].trim() === p.text);
+      const landed = read.messages.some(m => m.role === "user" && splitFrom(textOf(m))[1].trim() === p.text);
       if (landed) p.el.remove();
       return !landed;
     });
@@ -1100,7 +1117,8 @@ function chatView(machine, id, fromList) {
   // "Working 38s" until the agent shows text or a running tool.
   function drawWorking() {
     const last = read?.messages[read.messages.length - 1];
-    const quiet = !last || last.role === "user" || (!last.text && !(last.tools || []).some(t => t.endsWith("(running)")));
+    const quiet = !last || last.role === "user"
+      || !last.parts.some(p => p.kind === "text" || (p.kind === "tools" && p.tools.some(t => t.endsWith("(running)"))));
     working.classList.toggle("hide", !(isWorking() && quiet));
     const lastUser = [...(read?.messages || [])].reverse().find(m => m.role === "user");
     // Epoch milliseconds.
@@ -1154,20 +1172,41 @@ function chatView(machine, id, fromList) {
 
   async function loadInfo() {
     infoAt = Date.now();
-    try { info = await api("composer_info"); drawInfo(); } catch (e) { console.warn("composer_info", e); }
+    try {
+      if (!isDraft) info = await api("composer_info");
+      else {
+        const [from, project] = [machine, draft.project];
+        const got = await call(from, "composer_info", project ? { project } : {});
+        // The new chat's Mac or project may have changed while this loaded.
+        if (from !== machine || project !== draft.project) return;
+        info = got;
+      }
+      drawInfo();
+    } catch (e) { console.warn("composer_info", e); }
   }
 
+  /** The model and reasoning the composer shows: the new chat's picks, else the chat's. */
+  const config = () => (isDraft ? draft
+    : { harness: info?.harness || chat?.harness, model: info ? info.model : chat?.model, reasoning: info ? info.reasoning : chat?.reasoning });
+
   function drawInfo() {
-    const harness = info?.harness || chat?.harness;
-    const model = info ? info.model : chat?.model;
-    const reasoning = info ? info.reasoning : chat?.reasoning;
+    const { harness, model, reasoning } = config();
     const entry = harness && catalog(machine, harness);
     if (entry && !entry.ready) entry.promise.then(drawInfo, () => {});
     const label = entry?.ready?.[0].find(m => m.id === model)?.label || shortModel(model) || "Default";
     modelChip.disabled = !harness;
     modelChip.replaceChildren(harness ? mark(harness) : "", h("span", { class: "name" }, label),
       reasoning && h("span", { class: "lvl" }, reasoningName(reasoning)));
-    if (!info) return;
+    // A new chat picks its project (and Mac) here, in front of the checkout;
+    // the header names the Mac.
+    const project = isDraft && draft.projects.find(p => p.id === draft.project);
+    const projectChip = isDraft && machine && h("button", { class: "project-chip", "aria-label": "Project", onclick: () => projectSheet() },
+      tile(project || null), h("span", { class: "txt" }, project?.name || "No project"));
+    if (!info) {
+      footer.replaceChildren(projectChip || "");
+      footer.classList.toggle("hide", !projectChip);
+      return;
+    }
     const usage = info.contextUsage;
     const fraction = usage?.window > 0 && usage.tokens != null ? usage.tokens / usage.window : null;
     const tone = fraction >= 0.9 ? "var(--danger)" : fraction >= 0.75 ? "var(--warning)" : "var(--secondary)";
@@ -1178,19 +1217,27 @@ function chatView(machine, id, fromList) {
     const right = usage?.window > 0 && h("button", { class: "ctx", style: { color: fraction == null ? "var(--tertiary)" : tone },
       "aria-label": "Context window", onclick: () => toast({ title: "Context window", body: contextDetails(usage), kind: "info", timeout: 4000 }) },
       ring(fraction || 0, tone), fraction == null ? "—" : `${Math.round(fraction * 100)}%`);
-    footer.replaceChildren(...(left || []), h("span", { class: "grow" }), right || "");
-    footer.classList.toggle("hide", !left && !right);
+    footer.replaceChildren(projectChip || "", ...(left || []), h("span", { class: "grow" }), right || "");
+    footer.classList.toggle("hide", !projectChip && !left && !right);
   }
 
   /** Pick the model and reasoning for the next turns, like the desktop's picker. */
   function modelSheet() {
-    const harness = info?.harness || chat?.harness;
-    if (!harness) return;
+    if (!config().harness) return;
     haptic(5);
     sheet(() => {
+      const title = h("h2", {}, harnessName(config().harness));
       const body = h("div", {}, h("div", { class: "skeleton", style: { margin: "0 0 14px" } }));
       const pick = async change => {
         haptic(5);
+        if (isDraft) {
+          if (change.harness && change.harness !== draft.harness) Object.assign(draft, { model: "", reasoning: "" });
+          Object.assign(draft, change);
+          title.textContent = harnessName(draft.harness);
+          drawHeader();
+          load();
+          return;
+        }
         try {
           const saved = await api("set_chat_model", change);
           info = { ...info, ...saved };
@@ -1200,13 +1247,16 @@ function chatView(machine, id, fromList) {
       };
       let first = true;
       const draw = () => {
+        const { harness, model: current, reasoning } = config();
         const [models, harnessLevels] = catalog(machine, harness).ready;
-        const current = info ? info.model : chat?.model;
-        const reasoning = info ? info.reasoning : chat?.reasoning;
-        const levels = models.find(m => m.id === current)?.reasoningLevels?.length ? models.find(m => m.id === current).reasoningLevels : harnessLevels;
+        const levels = levelsOf(models, harnessLevels, current);
+        if (isDraft) fitDraft(models, levels);
         const check = on => (on ? icon("check") : null);
+        const agents = isDraft && draft.harnesses.length > 1 ? [h("div", { class: "group-label" }, "Agent"),
+          h("div", { class: "pills" }, draft.harnesses.map(x => h("button", { class: `pill${x.id === harness ? " on" : ""}`, "aria-pressed": String(x.id === harness),
+            onclick: () => x.id !== harness && pick({ harness: x.id }) }, harnessName(x.id))))] : [];
         // Reasoning first, as pills: a harness like Pi lists dozens of models.
-        body.replaceChildren(
+        body.replaceChildren(...agents,
           levels.length ? h("div", { class: "group-label" }, "Reasoning") : "",
           levels.length ? h("div", { class: "pills" }, levels.map(l => h("button", { class: `pill${l === reasoning ? " on" : ""}`, "aria-pressed": String(l === reasoning),
             onclick: () => l !== reasoning && pick({ reasoning: l }) }, reasoningName(l)))) : "",
@@ -1217,14 +1267,118 @@ function chatView(machine, id, fromList) {
         if (first) body.querySelector(".item-row.on")?.scrollIntoView({ block: "nearest" });
         first = false;
       };
-      catalog(machine, harness).promise.then(draw, e => body.replaceChildren(h("div", { class: "note" }, `Couldn't load the models: ${e.message}`)));
-      return [h("h2", {}, harnessName(harness)), body];
+      const load = () => {
+        const harness = config().harness;
+        catalog(machine, harness).promise.then(() => harness === config().harness && draw(),
+          e => body.replaceChildren(h("div", { class: "note" }, `Couldn't load the models: ${e.message}`)));
+      };
+      load();
+      return [title, body];
     });
   }
 
+  /** Keep the new chat's model in its agent's catalog and its reasoning on the model's levels. */
+  function fitDraft(models, levels) {
+    if (draft.model && !models.some(m => m.id === draft.model)) draft.model = "";
+    if (draft.reasoning && !levels.includes(draft.reasoning)) draft.reasoning = "";
+  }
+
+  /** Pick the new chat's project, and its Mac when there are several. */
+  function projectSheet() {
+    haptic(5);
+    sheet(close => {
+      const macs = ready();
+      const check = on => (on ? icon("check") : null);
+      const pickMac = m => {
+        close();
+        if (m === machine) return;
+        machine = draft.machine = m;
+        Object.assign(draft, { project: null, projects: [], harnesses: [] });
+        info = null;
+        loadDraft();
+      };
+      const pickProject = p => {
+        close();
+        if (p === draft.project) return;
+        draft.project = p;
+        info = null;
+        drawHeader();
+        loadInfo();
+      };
+      return [
+        h("h2", {}, "Project"),
+        macs.length > 1 && h("div", { class: "group-label" }, "Mac"),
+        macs.length > 1 && h("div", { class: "group" }, macs.map(m => itemRow({ iconName: "laptop", label: m.name,
+          value: check(m.id === machine), cls: m.id === machine ? "on" : "", onclick: () => pickMac(m.id) }))),
+        macs.length > 1 && h("div", { class: "group-label" }, "Project"),
+        h("div", { class: "group" },
+          itemRow({ lead: tile(null), label: "No project", value: check(!draft.project), cls: draft.project ? "" : "on", onclick: () => pickProject(null) }),
+          draft.projects.map(p => itemRow({ lead: tile(p), label: p.name, value: check(p.id === draft.project),
+            cls: p.id === draft.project ? "on" : "", onclick: () => pickProject(p.id) }))),
+      ];
+    });
+  }
+
+  /** Load the new chat's projects and agents on its Mac, keeping valid picks. */
+  async function loadDraft() {
+    drawHeader();
+    if (!machine) return;
+    try {
+      const [p, x] = await Promise.all([call(machine, "list_projects"), call(machine, "list_harnesses")]);
+      draft.projects = p.projects.sort((a, b) => a.name.localeCompare(b.name));
+      draft.harnesses = x.harnesses.filter(item => item.available);
+      const recent = store.chats?.find(c => c.machine === machine);
+      if (draft.project === null && recent?.project) draft.project = recent.project.id;
+      if (!draft.projects.some(item => item.id === draft.project)) draft.project = null;
+      if (!draft.harnesses.some(item => item.id === draft.harness)) {
+        draft.harness = (draft.harnesses.find(item => item.id === recent?.harness) || draft.harnesses[0])?.id || null;
+        Object.assign(draft, { model: "", reasoning: "" });
+      }
+      drawHeader();
+      loadInfo();
+      const harness = draft.harness;
+      if (harness) {
+        catalog(machine, harness).promise.then(([models, harnessLevels]) => {
+          if (harness !== draft.harness) return;
+          fitDraft(models, levelsOf(models, harnessLevels, draft.model));
+          drawInfo();
+        }, () => {});
+      }
+    } catch (e) { toast({ title: "Couldn't load the options", body: e.message, kind: "error" }); }
+  }
+
+  /** Create the chat with the first message, then show it in place of this screen. */
+  async function create() {
+    const text = textarea.value.trim();
+    if (!text || !machine || !draft.harness) return;
+    haptic(12);
+    sendBtn.disabled = true;
+    const args = { prompt: text, harness: draft.harness };
+    if (draft.project) args.project = draft.project;
+    if (draft.model) args.model = draft.model;
+    if (draft.reasoning) args.reasoning = draft.reasoning;
+    // The desktop records the project's branch on the chat it creates.
+    if (info?.branch) args.branch = info.branch;
+    try {
+      const made = await call(machine, "create_chat", args);
+      prefs.set({ machine, project: draft.project, harness: draft.harness, model: draft.model, reasoning: draft.reasoning });
+      delete drafts[draftKey];
+      handoff = { chat: made.chatId, text };
+      location.replace(chatHash(machine, made.chatId));
+    } catch (e) {
+      toast({ title: "Couldn't start the chat", body: e.message, kind: "error" });
+      updateComposer();
+    }
+  }
+
   function drawHeader() {
-    titleEl.textContent = chat.title || "Untitled chat";
-    subEl.textContent = [harnessName(chat.harness), shortModel(chat.model), chat.project?.name].filter(Boolean).join(" · ");
+    if (isDraft) {
+      const project = draft.projects.find(p => p.id === draft.project);
+      subEl.textContent = machine ? [draft.harness && harnessName(draft.harness), project?.name, severalMacs() && machineName(machine)].filter(Boolean).join(" · ") : " ";
+    } else {
+      titleEl.textContent = chat.title || "Untitled chat";
+      subEl.textContent = [harnessName(chat.harness), shortModel(chat.model), chat.project?.name].filter(Boolean).join(" · ");
+    }
     updateComposer();
     drawInfo();
   }
@@ -1257,12 +1411,17 @@ function chatView(machine, id, fromList) {
     version = view.version;
   }
 
-  const poll = poller(() => refresh(), () => (isWorking() ? 1100 : 3500));
+  const poll = isDraft ? null : poller(() => refresh(), () => (isWorking() ? 1100 : 3500));
+  if (isDraft) loadDraft();
   return {
-    kind: "chat",
+    kind: isDraft ? "new" : "chat",
+    fromList,
     el,
-    mounted() { updateComposer(); },
-    destroy() { poll.stop(); offline.stop(); dockSize.disconnect(); clearInterval(clock); },
+    mounted() {
+      updateComposer();
+      if (isDraft && machine) textarea.focus();
+    },
+    destroy() { poll?.stop(); offline.stop(); dockSize.disconnect(); clearInterval(clock); },
   };
 }
 
@@ -1284,85 +1443,18 @@ const prefs = {
   set: value => localStorage.setItem("zeron.new", JSON.stringify(value)),
 };
 
-function newChatSheet() {
+/** A new chat's picks: last time's, on the selected Mac when it's ready. */
+function newDraft() {
   const online = ready();
-  if (!online.length) { toast({ title: "No Mac is ready", body: "Zeron needs to be open on a connected Mac.", kind: "info" }); return; }
-  sheet(close => {
-    const saved = prefs.get();
-    const choice = {
-      machine: online.find(m => m.id === selectedMac()?.id)?.id || (online.some(m => m.id === saved.machine) ? saved.machine : online[0].id),
-      project: saved.project ?? null, harness: saved.harness ?? null, model: saved.model ?? "", reasoning: saved.reasoning ?? "",
-    };
-    let projects = [], harnesses = [], models = [];
-    const mac = pickRow("laptop", "Mac", v => { choice.machine = v; choice.project = null; load(); });
-    const project = pickRow("folder", "Project", v => { choice.project = v || null; drawProjects(); });
-    const agent = pickRow("bot", "Agent", v => { choice.harness = v; choice.model = ""; choice.reasoning = ""; drawHarnesses(); loadModels(); });
-    const model = pickRow("tool", "Model", v => { choice.model = v; drawModels(); });
-    const reasoning = pickRow("info", "Reasoning", v => { choice.reasoning = v; drawModels(); });
-    const prompt = h("textarea", { class: "field", rows: 5, placeholder: "What should the agent do?" });
-    const start = h("button", { class: "btn solid full", disabled: true }, "Start chat");
-    prompt.addEventListener("input", () => (start.disabled = !prompt.value.trim()));
+  const saved = prefs.get();
+  const machine = (online.find(m => m.id === selectedMac()?.id) || online.find(m => m.id === saved.machine) || online[0])?.id || null;
+  return { machine, project: saved.project ?? null, harness: saved.harness || null, model: saved.model || "", reasoning: saved.reasoning || "", projects: [], harnesses: [] };
+}
 
-    const drawMac = () => mac.set(online.map(m => [m.id, m.name]), choice.machine);
-    const drawProjects = () => project.set([["", "No project"], ...projects.map(p => [p.id, p.name])], choice.project || "");
-    const drawHarnesses = () => agent.set(harnesses.map(x => [x.id, x.name]), choice.harness);
-    function drawModels() {
-      model.set([["", "Default"], ...models.map(m => [m.id, m.label || m.id])], models.some(m => m.id === choice.model) ? choice.model : "");
-      if (!models.some(m => m.id === choice.model)) choice.model = "";
-      const levels = models.find(m => m.id === choice.model)?.reasoningLevels?.length
-        ? models.find(m => m.id === choice.model).reasoningLevels
-        : harnesses.find(x => x.id === choice.harness)?.reasoningLevels || [];
-      if (choice.reasoning && !levels.includes(choice.reasoning)) choice.reasoning = "";
-      reasoning.set([["", "Default"], ...levels.map(l => [l, l[0].toUpperCase() + l.slice(1)])], choice.reasoning);
-    }
-    async function loadModels() {
-      models = [];
-      drawModels();
-      try { models = (await call(choice.machine, "list_models", { harness: choice.harness })).models || []; } catch (e) { toast({ title: "Couldn't load models", body: e.message, kind: "error" }); }
-      drawModels();
-    }
-    async function load() {
-      drawMac();
-      try {
-        const [p, x] = await Promise.all([call(choice.machine, "list_projects"), call(choice.machine, "list_harnesses")]);
-        projects = p.projects.sort((a, b) => a.name.localeCompare(b.name));
-        harnesses = x.harnesses.filter(item => item.available);
-        const recent = store.chats?.find(c => c.machine === choice.machine);
-        if (choice.project === null && recent?.project) choice.project = recent.project.id;
-        if (!projects.some(p => p.id === choice.project)) choice.project = null;
-        if (!harnesses.some(item => item.id === choice.harness)) choice.harness = (harnesses.find(item => item.id === recent?.harness) || harnesses[0])?.id;
-        drawProjects();
-        drawHarnesses();
-        await loadModels();
-      } catch (e) { toast({ title: "Couldn't load options", body: e.message, kind: "error" }); }
-    }
-
-    start.addEventListener("click", async () => {
-      if (!prompt.value.trim()) return;
-      start.disabled = true;
-      haptic(12);
-      const args = { prompt: prompt.value.trim(), harness: choice.harness };
-      if (choice.project) args.project = choice.project;
-      if (choice.model) args.model = choice.model;
-      if (choice.reasoning) args.reasoning = choice.reasoning;
-      try {
-        const made = await call(choice.machine, "create_chat", args);
-        prefs.set(choice);
-        close();
-        setTimeout(() => go(chatHash(choice.machine, made.chatId)), 50);
-      } catch (e) { toast({ title: "Couldn't start the chat", body: e.message, kind: "error" }); start.disabled = false; }
-    });
-
-    load();
-    setTimeout(() => prompt.focus(), 400);
-    return [
-      h("h2", {}, "New chat"),
-      h("div", { class: "group" }, online.length > 1 && mac.row, project.row),
-      h("div", { class: "group" }, agent.row, model.row, reasoning.row),
-      prompt,
-      start,
-    ];
-  });
+/** The reasoning levels for `model`: its own, else its harness's. */
+function levelsOf(models, harnessLevels, model) {
+  const own = models.find(m => m.id === model)?.reasoningLevels;
+  return own?.length ? own : harnessLevels;
 }
 
 // ---- settings: Macs, notifications, sign out ------------------------------------
