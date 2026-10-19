@@ -238,8 +238,9 @@ struct WriteOpts {
 /// The model that writes titles.
 #[derive(Args)]
 struct PiOpts {
-    /// Title model, as `provider/model` from `pi --list-models`
-    #[arg(long, default_value = "openai-codex/gpt-6-luna")]
+    /// Title model id from `pi --list-models`; pi finds the provider. Prefix
+    /// it as `provider/model` to pick one when several serve the model
+    #[arg(long, default_value = "gpt-6-luna")]
     model: String,
     /// Thinking level for the title model
     #[arg(long, default_value = "low")]

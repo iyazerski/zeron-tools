@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 publish = false
 description = "Offline maintenance tools for Zeron: sync, import, export, rename, archive, and delete chats"

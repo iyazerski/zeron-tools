@@ -75,7 +75,8 @@ pub struct Title {
 #[derive(Debug, Clone)]
 pub struct Pi {
     pub binary: PathBuf,
-    /// `provider/model`, as `pi --list-models` shows.
+    /// A model id (pi picks the provider) or `provider/model`, as
+    /// `pi --list-models` shows.
     pub model: String,
     pub thinking: String,
 }
