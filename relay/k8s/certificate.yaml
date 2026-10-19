@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: zeron-relay
+  labels:
+    app: zeron-relay
+spec:
+  secretName: zeron-relay-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - __PUBLIC_HOST__

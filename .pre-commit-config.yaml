@@ -5,6 +5,8 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: check-yaml
+        # Kubernetes manifests hold several documents.
+        args: [--allow-multiple-documents]
       - id: check-toml
 
   - repo: local
@@ -18,7 +20,7 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: cargo clippy --all-targets --locked -- -D warnings
+        entry: cargo clippy --workspace --all-targets --locked -- -D warnings
         language: system
         pass_filenames: false
-        files: ^(src/|tests/|Cargo\.(toml|lock))
+        files: ^(src/|tests/|relay/|relay-proto/|Cargo\.(toml|lock)|.*/Cargo\.toml)

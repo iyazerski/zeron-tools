@@ -1,0 +1,29 @@
+[package]
+name = "zeron-relay"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A tiny relay between a phone browser and the Zeron apps on your Macs"
+
+[dependencies]
+zeron-relay-proto = { path = "../relay-proto" }
+anyhow = "1"
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+# Web Push: rustls on ring, which also does the push encryption and signing.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+ring = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+webauthn-rs = "0.5"
+# webauthn-rs verifies passkeys with OpenSSL; build it in, so the binary is
+# static (scratch image) and local builds need no system OpenSSL.
+openssl = { version = "0.10", features = ["vendored"] }
+
+[dev-dependencies]
+tempfile = "3"

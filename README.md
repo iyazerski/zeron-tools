@@ -1,15 +1,16 @@
 # zeron-tools
 
-Offline tools for a local [Zeron](https://github.com/zeronsh/zeron) profile:
-- `sync`: keep Zeron up to date with one command
-- import pi sessions and Codex threads (for example from the ChatGPT/Codex app) that were created outside Zeron
-- title chats with a small model through pi
-- export chats as Markdown or JSONL, for example to have an agent review them
-- archive older chats so the sidebar shows only recent ones per project
-- delete unfinished chats (interrupted, failed, never answered) and orphaned sessions, together with their pi/Codex sessions
-- show turns made outside Zeron (in the pi CLI, Codex's apps) in the Zeron chat
+Tools for a local [Zeron](https://github.com/zeronsh/zeron) profile (macOS, Apple silicon):
 
-Supports macOS on Apple silicon, the same as Zeron. See `AGENTS.md` for how it works and how to update it for a new Zeron release.
+- `sync`: one-command upkeep (import, refresh, title, archive, clean up)
+- `import`: pi sessions and Codex threads made outside Zeron, as chats that resume them
+- `refresh`: show turns made outside Zeron in the Zeron chat
+- `rename`: title chats with a small model through pi
+- `archive`, `delete`: keep the sidebar short; remove unfinished chats and orphaned sessions
+- `export`: chats as Markdown or JSONL, for example for an agent to review
+- `connect`: use Zeron on all your Macs from a phone web app, with notifications
+
+See `AGENTS.md` for how it works. `zeron-tools <command> --help` lists every option.
 
 ## Installation
 
@@ -17,66 +18,38 @@ Supports macOS on Apple silicon, the same as Zeron. See `AGENTS.md` for how it w
 curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | sh
 ```
 
-This installs the latest release to `~/.local/bin/zeron-tools`. Each release targets one Zeron version, shown by `zeron-tools --version`. If your Zeron is older, pin a matching release:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | ZERON_TOOLS_VERSION=v0.1.0 sh
-```
-
-To build from source instead, run `make install`.
+It installs to `~/.local/bin`. Each release targets one Zeron version (`zeron-tools --version`); pin an older one with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
 
 ## Usage
 
-Quit Zeron (Cmd+Q), then run this from time to time:
+Commands that write need Zeron quit (Cmd+Q) and back up `docs.sqlite3` to `~/.zeron/zeron-tools-backups/` first. Reading commands and `--dry-run` work while Zeron runs.
 
 ```sh
-zeron-tools sync --dry-run                 # see what it would do (works while Zeron runs)
-zeron-tools sync
-open -a Zeron
+zeron-tools sync --dry-run      # then without --dry-run, then: open -a Zeron
+zeron-tools sessions codex      # sessions not in Zeron yet
+zeron-tools import pi 01a0f866
+zeron-tools export --project guid-service --since 30d -o ~/tmp/review
+zeron-tools delete --unfinished --orphaned --dry-run
 ```
 
-`sync` backs up `docs.sqlite3`, then:
-1. deletes orphaned sessions (`delete --orphaned`);
-2. imports new pi and Codex sessions, creating a project for a new folder only if it's a git repository root;
-3. adds turns made outside Zeron to the chats that resume those sessions (`refresh`);
-4. titles untitled chats (`rename --untitled`);
-5. archives all but the 10 most recent chats per project (`archive`, change with `--keep`).
+- `sync` deletes orphaned sessions, imports new sessions, adds outside turns, titles untitled chats, and archives all but the 10 latest chats per project. It skips sessions active in the last hour, in excluded folders, or whose folder is gone.
+- A chat gets Zeron's default model if its session's model is no longer offered.
+- `delete` also deletes the chat's pi session (to the Trash) or Codex thread (`codex delete`), unless `--zeron-only`.
+- `rename` uses the `pi` CLI (default `--model gpt-6-luna`), 20 chats per call.
 
-It doesn't import sessions whose folder is gone, sessions in `--exclude` folders (default: Codex's scratch folder `~/Documents/Codex` and temp folders), or sessions active in the last hour, which may still be running. It never deletes chats; use `delete --unfinished` for that. `--no-rename` skips titling. A failing step is reported and the others still run.
+## Phone
 
-The single commands:
-
-```sh
-zeron-tools sessions codex                 # sessions not in Zeron yet (works while Zeron runs)
-zeron-tools sessions pi --all              # also linked and hidden ones
-zeron-tools import codex 019e5f9c-1bf2 --dry-run
-
-# Export (works while Zeron runs)
-zeron-tools export --project guid-service --since 30d -o ~/tmp/guid-review
-zeron-tools export --chat 88bf3b20 --reasoning > chat.md
-zeron-tools export --since 2026-09-01 --until 2026-09-30 --limit 20 --format jsonl
-
-# Writes: quit Zeron (Cmd+Q) first. Each write backs up docs.sqlite3
-# to ~/.zeron/zeron-tools-backups/<time>/ first (<time>-2, -3, … for runs in the same second).
-zeron-tools import codex 019e5f9c-1bf2 019d80ca-bcc6 --create-project
-zeron-tools import pi 01a0f866-31fb
-zeron-tools rename --untitled              # or --chat <id-prefix>..., or --all
-zeron-tools delete --unfinished --orphaned --dry-run   # then without --dry-run
-zeron-tools archive --keep 10 --dry-run    # keep 10 recent chats per project
-zeron-tools refresh                        # turns made outside Zeron
-open -a Zeron
+```
+phone ──HTTPS──▶ relay ◀──WebSocket── zeron-tools connect (each Mac) ──▶ Zeron
 ```
 
-- **Sources:** pi sessions come from `~/.pi/agent/sessions` (or `PI_CODING_AGENT_DIR`). Codex threads come from `~/.codex` (or `CODEX_HOME`), including archived ones, which import as archived chats.
-- **Hidden by `sessions`:** subagent threads, `codex exec` runs, empty sessions, and Zeron's own leftovers. `--all` shows them with a tag.
-- **Titles:** imported chats keep the harness's own name for the session (Codex's thread name, or the pi session name). Chats without one stay untitled until you run `rename --untitled` (or `sync`).
-- **Models:** if Zeron no longer offers a session's model, the chat uses Zeron's default model, and `import` prints a note.
-- **Missing folders:** sessions whose folder is gone are tagged `[cwd missing]`. They still import, but can't resume until the folder exists again.
-- **Re-import:** `import --replace` deletes the chat already linked to a session and imports it again, including anything added in Zeron since.
-- **Export:** picks chats by `--chat` id prefixes and/or `--project` (name or folder); with neither, every chat. `--since` (a date or an age like `30d`) keeps chats active since then, `--until` (a date, included) keeps chats started by then, and `--limit N` keeps the N most recently active. Output is oldest first, with whole transcripts: user and assistant text plus one line per tool call. `--reasoning` adds the model's thinking, and `--no-tools` drops the tool lines. Without `-o`, everything goes to stdout. With `-o DIR`, it writes one file per chat.
-- **Forks in export:** a forked chat starts with a copy of its source chat's history. If the source chat is in the same export, the copy is left out, so nothing repeats, and a fork with no messages of its own is skipped. Otherwise the copied messages stay, marked `copied` (JSONL) or ", copied" (Markdown), followed by a "Forked here" line. Either way the header says which chat it was forked from (`forkedFrom` in JSONL).
-- **Messages from other chats:** when an agent in another chat sends a message with Zeron's `send_message` tool (sub-agents, reviews, second opinions), it arrives as a user message. Export labels it "Message from chat <title>" instead of "User" and removes the routing header. In JSONL it keeps `role: "user"` and gets `fromChat: {id, title}`. User messages without `fromChat` are the ones a person typed in Zeron.
-- **Archive:** Zeron's sidebar draws every unarchived chat, which gets slow with hundreds. `archive` keeps the `--keep N` (default 10) most recently active chats of each project and archives the rest. `--older-than 30d` (or a date) archives only chats inactive at least that long, and `--project` limits it to one project. Pinned chats and chats in sidebar sections are never archived. Archived chats stay searchable and resumable; turn on the Archived shelf in the sidebar options to browse them, and unarchive any chat from its menu.
-- **Delete:** `delete --chat <id>...` deletes chats you pick. `--unfinished` picks every chat where the agent never finished a turn with an answer: you interrupted it, it failed with an error, or it never replied. A chat with at least one finished answer is never unfinished. `--orphaned` picks pi and Codex sessions that Zeron started but no chat resumes anymore. `--keep <id>` protects a chat or session. Each deleted chat's harness session is deleted too, unless another chat still resumes it or you pass `--zeron-only`. Pi session files go to the Trash. Codex threads are deleted for good with `codex delete` (set `CODEX_BIN` or `--codex` if it isn't on `PATH`). Run `--dry-run` first.
-- **Turns made elsewhere:** Zeron resumes a session even when you continued it in another app, but its transcript doesn't show those turns. `refresh` adds them. A turn counts as new only if its prompt comes after the chat's last one both by count and by time, so it may miss a turn but never adds one twice. Sessions written in the last 2 minutes wait for the next run, as they may be mid-turn.
-- **Rename:** `rename` (and `sync`) ask a small model through the `pi` CLI, logged in to the model's provider. Pi runs one-shot with nothing loaded but the model (no session file, tools, extensions, skills, or context files), 20 chats per call, so a batch costs a few hundred tokens. Defaults: `--model gpt-6-luna --thinking low`. A bare model id works with any provider that serves it (pi resolves it); use `provider/model` from `pi --list-models` to pick one. Set `PI_BIN` or pass `--pi` if `pi` isn't on `PATH`.
+Each Mac dials out to a small relay, so no VPN or open ports are needed. You sign in with a passkey. The app lists the chats of all Macs, follows them live, sends messages, and notifies you when a chat finishes, needs you, or fails.
+
+- **Relay:** `.github/workflows/deploy-relay.yml` deploys `relay/` to the k3s cluster (secret `KUBE_CONFIG_B64`). Before the first deploy, create the setup token, then open the setup link on the phone to create your passkey:
+
+  ```sh
+  kubectl create secret generic zeron-relay-secrets --from-literal=SETUP_TOKEN="$(openssl rand -hex 32)"
+  echo "https://zeron.iyazerski.dev/#/setup/$(kubectl get secret zeron-relay-secrets -o jsonpath='{.data.SETUP_TOKEN}' | base64 -d)"
+  ```
+
+- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows. Later runs need just `zeron-tools connect`. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).

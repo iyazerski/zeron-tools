@@ -1,0 +1,14 @@
+# state.json (passkeys, sessions, Mac tokens), the VAPID key, and push
+# subscriptions: a few KB.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zeron-relay-data
+  labels:
+    app: zeron-relay
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 64Mi

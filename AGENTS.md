@@ -1,83 +1,45 @@
 # zeron-tools
 
-Offline maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile. It assumes the user does not sync with Zeron's server (the `local` profile), so local writes are final.
-
-- `sessions`: list harness sessions that no Zeron chat resumes yet.
-- `import`: turn native pi sessions and Codex threads into Zeron chats. Each chat shows the history and stores `harnessSessionId`/`harnessSessionCwd`, so Zeron resumes the original session.
-- `sync`: one-command upkeep: delete orphaned sessions, import new pi/Codex sessions (`import::pending`), add turns made elsewhere, title untitled chats, archive old ones. One lock, one backup; a failing step is reported and the rest still run.
-- `refresh`: append turns made outside Zeron to the chat resuming the session.
-- `rename`: title chats with a small model through `pi -p` (no session, no tools, nothing else loaded).
-- `archive`: archive all but the N most recently active chats per project, so the sidebar stays short.
-- `delete`: delete chats (picked, or every unfinished one) and the harness sessions they resume, plus orphaned sessions Zeron started.
-- `export`: write chats (picked by id, project, date window, limit) as Markdown or JSONL, for people or agents to review.
+Maintenance CLI for a local [Zeron](https://github.com/zeronsh/zeron) profile, plus a relay for using the running Zeron from a phone. It assumes the `local` profile (no sync with Zeron's server), so local writes are final. Commands are listed in `README.md`.
 
 ## How it works
 
-- Zeron's own crates (`zeron-doc`, `zeron-sync`, `zeron-proto`, `zeron-mcp`) are git dependencies pinned to one release tag. The tool writes through their APIs and never hand-edits bytes. `export` renders messages with `zeron_mcp::render_entries`, the renderer behind Zeron's `read_chat` MCP tool.
-- Zeron data lives in `~/.zeron/profiles/local/docs.sqlite3`:
-  - `snapshots` table: one row per doc.
-  - Registry doc `registry1`: chat, space (project), and device rows.
-  - One Loro doc per chat: the transcript.
-- Imports mirror the engine's "born chat2" path (`crates/engine/src/local_import.rs`): save the chat doc with cursor 0 and epoch 2, then upsert the row with `room_gen` 2. Tool outputs are dropped and tool inputs go through `sanitize_tool_call`, same as Zeron's render-parts policy.
-- Zeron keeps the registry in memory and would overwrite offline writes. So writes take Zeron's `engine.lock` flock, which fails while Zeron runs, and back up `docs.sqlite3` to `~/.zeron/zeron-tools-backups/<time>/` first (a `-2`, `-3`, … suffix keeps runs in the same second apart). Read-only commands and `--dry-run` work while Zeron runs.
-- Writes are refused if the device row's `version` (what Zeron last booted) differs from `ZERON_VERSION`.
-- A session's model is kept only if Zeron's cached catalog for that harness (`~/.zeron/model-catalogs/<harness>/`, newest fetch) still lists it. Otherwise the chat gets no model and Zeron uses its default. Zeron passes the chat's model on resume, and a retired one breaks it.
-- Sessions whose folder is gone still import (the history is readable), but never get a project, and can't resume until the folder exists.
+- Zeron's crates (`zeron-doc`, `zeron-sync`, `zeron-proto`, `zeron-mcp`, `zeron-rpc`) are git dependencies pinned to one release tag. The tool writes through their APIs and never hand-edits bytes.
+- Data: `~/.zeron/profiles/local/docs.sqlite3`, table `snapshots`: one Loro doc per chat (the transcript) plus the registry doc `registry1` (chat, space, and device rows).
+- Imports mirror the engine's born-chat path (`local_import.rs`): chat doc saved with cursor 0 and epoch 2, row upserted with `room_gen` 2. Tool outputs are dropped; tool inputs go through `sanitize_tool_call`.
+- Zeron holds the registry in memory and would overwrite offline writes, so writes take its `engine.lock` flock (fails while Zeron runs) and back up `docs.sqlite3` first. They are refused if the device row's `version` differs from `ZERON_VERSION`.
+- A session's model is kept only if Zeron's cached catalog (`~/.zeron/model-catalogs/<harness>/`) still lists it: Zeron passes the chat's model on resume, and a retired one breaks it.
+- Phone: phone → HTTPS → relay ← outbound WebSocket ← `connect` on each Mac. `connect` calls the engine's loopback IPC through `zeron_mcp::Tools` and runs only the tools the app needs (`allowed_args`, checked on the Mac: the raw IPC also runs terminals and writes files). It watches `WatchSessions` for finished, waiting, and failed chats, and the relay sends them as Web Push. The relay keeps no chat data, only passkeys, hashed tokens, and push subscriptions.
 
 ## Layout
 
-- `src/main.rs`: the CLI and shared helpers only. Each command's logic is a `run` function in its module (`import`, `rename`, `delete`, `archive`), so `sync` can chain them. They print per-item lines and return a `Tally` of done and failed items.
-- `src/import.rs`: importing files one by one, and `pending`: what `sync` imports (listed by `sessions`, folder exists and isn't excluded, not written in the last hour).
-- `src/zeron.rs`: profile access (lock, version check, backup, import, append, rename). It has no harness knowledge. `append` adds entries to an existing chat doc and saves it with its cursor and epoch, like the engine's own saves (`chat_persistence.rs`).
-- `src/refresh.rs`: turns made outside Zeron. `sources::after` decides what's new: prompts after the app's last by count and by time, since apps stamp a prompt when sent and harnesses when they start on it (seen 38 s apart after a pi restart).
-- `src/sources/`: one reader per harness, each producing a harness-neutral `Session`. `Source` in `mod.rs` dispatches to them.
-  - `pi.rs`: `~/.pi/agent/sessions/*/*.jsonl`, active branch via `parentId`. Mirrors `crates/harness/src/pi/normalize.rs`.
-  - `codex.rs`: `~/.codex/sessions/**/rollout-*.jsonl` and `archived_sessions/`. A long thread continues in `rollout-<ts>-<id>_<segment>.jsonl` files; `threads()` groups them by the id in the name and they are read in order. It reads `event_msg`/`item_completed` items (Codex core `TurnItem`s: PascalCase types, snake_case fields) and mirrors `crates/harness/src/codex/normalize.rs::map_item`, which reads the app-server spelling of the same items. It also strips Codex Desktop's injected prompt context and takes names from `session_index.jsonl`. Subagent, `exec`, empty and Zeron-originated threads are hidden from `sessions`.
-- `src/rename.rs`: transcript excerpts, the `pi` call (20 chats per call, JSON answer parsed from plain text), and output parsing.
-- `src/archive.rs`: which chats to archive. It mirrors the sidebar: unarchived top-level chats (`Chat::is_top_level`), grouped by `view::project_key`, ordered by last activity. Pinned and sectioned chats (`RegistryDoc::sidebar_preferences`) are skipped. Writing uses `set_chat_archived`, like Zeron's `setChatArchived`.
-- `src/delete.rs`: the unfinished-chat rule: no assistant turn (continuations folded by `render_entries`) completed with text and no error. Harness-side deletion lives in the sources: `pi::delete_session` trashes the file like Pi's session picker and removes Zeron's `zeron-sessions/<sha256(id)>.json` record; `codex::delete_thread` runs `codex delete --force`. Deleting a chat mirrors Zeron's `DeleteChat` (row tombstone + `purge_chat` snapshot delete); Zeron itself never deletes harness sessions.
-- `src/export.rs`: chat metadata plus rendered messages, Markdown/JSONL output, file names, and the `--since`/`--until` window. Headings inside message bodies are demoted two levels so `#` (chat) and `##` (message) stay unambiguous.
+- `src/main.rs`: the CLI. Each command is a `run` in its module, returning a `Tally`, so `sync` can chain them.
+- `src/zeron.rs`: profile access (lock, version check, backup, import, append, rename, delete). No harness knowledge.
+- `src/sources/`: one reader per harness (`pi.rs`, `codex.rs`) producing a neutral `Session`, mirroring Zeron's normalizers. They also delete harness sessions.
+- `src/import.rs`, `refresh.rs`, `rename.rs`, `archive.rs`, `delete.rs`, `export.rs`: the commands. `archive` mirrors the sidebar's grouping and order; `export` renders with `zeron_mcp::render_entries`.
+- `src/connect/`: the relay link and the status watcher. `relay-proto/`: wire types shared with the relay.
+- `relay/`: the relay crate, its app (`assets/`, plain JS styled after Zeron's iOS app), a `scratch`-image `Dockerfile`, and `k8s/` for the `hetzner` cluster.
 - Tests: unit tests next to the code; fixtures in `tests/fixtures/`.
 
 ## Syncing with a new Zeron release
 
-1. Find the latest tag: `git ls-remote --tags https://github.com/zeronsh/zeron 'v*'`.
-2. Clone Zeron (or fetch both tags) and read `git diff <old>..<new> --stat` and the diffs for these paths:
-   - `crates/proto/src/entities.rs`: `Chat`, `Space`, `ChatConfig`, `Device` fields
-   - `crates/proto/src/` events: `AgentEvent`, `ToolCall`, `ToolDiff`, `HarnessId`, `ReasoningLevel`
-   - `crates/doc/src/parts.rs` `MessagePart::Fork` (the fork seam), `crates/mcp/src/tools.rs` `attribute` and `crates/ui/src/transcript.rs` `agent_message_display` (the "[Message from Zeron chat …]" header): `export.rs` depends on both.
-   - `crates/doc/src/registry.rs`: `upsert_chat`, `upsert_space`, `rename_chat`, `read_*`, `set_local_only`, `to_bytes`/`from_bytes`, `REGISTRY_DOC_ID`
-   - `crates/doc/src/schema.rs`: `SessionDoc`, `SessionMessageEntry`, `MessagePart`, `fold_event_into_parts`, `sanitize_tool_call`
-   - `crates/sync/src/store.rs`: `DocsStore::open`, `load_snapshot`, `save_snapshot(_with_cursor)`, and the `snapshots` schema
-   - `crates/engine/src/`:
-     - `local_import.rs`: the born-chat shape
-     - `chat2_host.rs`: `CHAT2_DOC_EPOCH`, room generation
-     - `instance_lock.rs`: lock file name and flock
-     - `profile.rs`: profile paths
-     - `spaces.rs`: git probing of new spaces
-   - `crates/harness/src/pi/`:
-     - `normalize.rs`: the tool mapping to copy into `sources/pi.rs`
-     - `sessions.rs`: resume by id, the `zeron-sessions` map
-   - `crates/harness/src/codex/`:
-     - `normalize.rs`: `map_item`, `file_change_call`, `ReasoningStream` separators, to mirror in `sources/codex.rs`
-     - `mod.rs`: `thread/resume` by `harnessSessionId`, and which items become text (`contextCompaction`, `exitedReviewMode`)
-   - `crates/engine/src/model_catalogs.rs`: the catalog cache format read by `Profile::model_catalog`
-   - `crates/engine/src/rpc.rs` `MutateParams::DeleteChat` and `doc_host.rs` `purge_chat`: what deleting a chat removes (mirrored by `Profile::delete_chat`)
-   - `crates/harness/src/pi/sessions.rs`: the `zeron-sessions` record that `pi::delete_session` removes
-   - `crates/ui/src/state.rs` `visible_chats`/`sidebar_chats` and `crates/ui/src/shell/spaces.rs` `compare_sidebar_chats`: which chats the sidebar lists and how it orders them (mirrored by `archive`); `crates/doc/src/registry/sidebar_*.rs`: pins and sections
-   - `crates/mcp/src/transcript.rs`: `render_entries`, `RenderOptions`, `RenderedMessage` (used by `export`)
-3. Bump the tag in all `zeron-*` deps in `Cargo.toml` and in `zeron_version!` in `src/zeron.rs`. Then run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto -p zeron-mcp`. Match `loro`/`rusqlite`/`tokio` versions to Zeron's workspace `Cargo.toml`.
-4. Port relevant changes. Typical ones: new required fields, renamed APIs, changed doc epochs or room generations, and new tool mappings.
-   - The rollout format belongs to Codex, not Zeron. If Codex was updated too, run `zeron-tools sessions codex` and `import codex <ids> --dry-run` on everything, and look for new item types: `rg -o --no-filename '"item":\{"type":"[A-Za-z]+"' ~/.codex/sessions | sort | uniq -c`.
-5. Verify:
-   - `cargo clippy --all-targets` and `cargo test`
-   - Smoke test against a copy of the real profile: copy `docs.sqlite3` into `<tmp>/profiles/local/`, then run `zeron-tools --data-dir <tmp> import pi <id>`, `import codex <id>`, `rename --chat <id> --dry-run`, `export --chat <id>`, `delete --unfinished --orphaned --dry-run`, `archive --dry-run`, `refresh`, and `sync` (without `--dry-run`: the copy is disposable, but orphan deletion touches the real pi/Codex stores, so check `sync --dry-run` on the real profile first). Copy `~/.zeron/model-catalogs` too, so the model check runs.
-   - Real import: quit Zeron, import one session, reopen Zeron, check that the chat shows and that a new message resumes the old context.
-6. Release: bump `version` in `Cargo.toml` (minor for a new Zeron release), commit, then push a matching tag (`git tag vX.Y.Z && git push origin vX.Y.Z`). `release.yml` checks that the tag matches the version, builds the macOS arm64 binary, and publishes it with a checksum. `install.sh` installs the latest release.
+1. Find the tag: `git ls-remote --tags https://github.com/zeronsh/zeron 'v*'`. Diff it against the pinned one, mainly:
+   - `crates/proto/src/entities.rs` and events: `Chat`, `Space`, `Device`, `Session`, `AgentEvent`, `ToolCall`, `HarnessId`
+   - `crates/doc/src/`: `registry.rs` (and `registry/sidebar_*.rs`), `schema.rs`, `parts.rs`
+   - `crates/sync/src/store.rs`: snapshot load/save and schema
+   - `crates/engine/src/`: `local_import.rs`, `chat2_host.rs` (epoch, room generation), `instance_lock.rs`, `profile.rs`, `spaces.rs`, `model_catalogs.rs`, `rpc.rs` `DeleteChat`, `doc_host.rs` `purge_chat`
+   - `crates/harness/src/pi/` and `codex/`: `normalize.rs` (tool mapping), session resume, the `zeron-sessions` record
+   - `crates/mcp/src/`: `transcript.rs` (`render_entries`, `tool_line`) and `tools.rs` (tool names and fields used by `relay/assets/app.js`)
+   - `crates/ui/src/`: sidebar order (`state.rs`, `shell/spaces.rs`) and the "[Message from Zeron chat …]" header (`transcript.rs`)
+2. Bump the tag in the `zeron-*` deps and in `zeron_version!` (`src/zeron.rs`), run `cargo update -p zeron-doc -p zeron-sync -p zeron-proto -p zeron-mcp -p zeron-rpc`, and match `loro`/`rusqlite`/`tokio` to Zeron's workspace.
+3. Port the changes. If Codex changed too, check new rollout item types: `rg -o --no-filename '"item":\{"type":"[A-Za-z]+"' ~/.codex/sessions | sort | uniq -c`.
+4. Verify:
+   - `cargo clippy --workspace --all-targets` and `cargo test --workspace`.
+   - Copy `docs.sqlite3` (and `model-catalogs`) to `<tmp>/profiles/local/` and run the commands with `--data-dir <tmp>`. Orphan deletion touches the real pi/Codex stores, so run `sync --dry-run` on the real profile first.
+   - Phone: with Zeron running, start a local relay (`PUBLIC_URL=http://localhost:8790 BIND_ADDR=127.0.0.1:8790 DATA_DIR=<tmp> SETUP_TOKEN=dev cargo run -p zeron-relay`), open `/#/setup/dev` in Chrome with a virtual authenticator, add a Mac, run `connect`, and send a message.
+   - Real import: quit Zeron, import one session, reopen, and check that a new message resumes it.
+5. Release: bump `version` (minor for a new Zeron release), commit, and push the tag `vX.Y.Z`. `release.yml` builds and publishes the binary.
 
 ## Adding a source
 
-- Add `src/sources/<harness>.rs` with `session_files`, `file_id`, `summarize`, `parse` → `Session`. Then add a `Source` variant and a `Harness` CLI variant.
-- `Session.id` must be the id Zeron hands back to the harness for resume. Check Zeron's harness code for how it resumes (id, cwd, which home dir) before relying on it.
-- Reuse Zeron's normalizer mapping for that harness, so imported tool chips look native.
-- Mark sessions that aren't someone's conversation (subagents, scripted runs, Zeron's own leftovers) with `hidden_reason`.
+Add `src/sources/<harness>.rs` (`session_files`, `file_id`, `summarize`, `parse` → `Session`), a `Source` variant, and a `Harness` CLI variant. `Session.id` must be the id Zeron resumes with; check Zeron's harness code. Reuse its normalizer mapping, and mark non-conversations (subagents, scripted runs) with `hidden_reason`.

@@ -1,10 +1,12 @@
-//! zeron-tools: offline maintenance for a local Zeron profile.
+//! zeron-tools: offline maintenance for a local Zeron profile, plus
+//! `connect`, which links the running Zeron to a relay for phone access.
 //!
 //! Commands that write require Zeron to be quit (Cmd+Q); they take Zeron's
 //! instance lock and back up `docs.sqlite3` first. Each command's logic lives
 //! in its module's `run`; `sync` chains them under one lock and one backup.
 
 mod archive;
+mod connect;
 mod delete;
 mod export;
 mod import;
@@ -222,6 +224,29 @@ enum Cmd {
         /// Write one file per chat into this folder (default: all to stdout)
         #[arg(long, short)]
         output: Option<PathBuf>,
+    },
+    /// Link the running Zeron to a relay, so you can use it from a phone
+    ///
+    /// Dials out to the relay (zeron-relay) and stays connected, so the
+    /// phone app can list chats, follow them live, send messages, stop
+    /// turns, answer agent questions, and start chats. Reports chats that
+    /// finish, need an answer, or fail, for notifications. Needs Zeron
+    /// running. Pass --relay and --token once (the app shows them when you
+    /// add a Mac); they're saved for later runs.
+    Connect {
+        /// The relay's address, like https://zeron.example.com
+        #[arg(long, requires = "token")]
+        relay: Option<String>,
+        /// This Mac's token from the app
+        #[arg(long, requires = "relay")]
+        token: Option<String>,
+        /// Zeron engine's IPC port
+        #[arg(long, env = "ZERON_IPC_PORT", default_value_t = 27654)]
+        ipc_port: u16,
+        /// Notify even while someone uses the Mac (by default, notifications
+        /// wait until it has had no keyboard or mouse input for 2 minutes)
+        #[arg(long)]
+        notify_always: bool,
     },
 }
 
@@ -587,6 +612,39 @@ async fn main() -> Result<()> {
                     .map(|d| format!(" to {}", d.display()))
                     .unwrap_or_default()
             );
+            0
+        }
+        Cmd::Connect {
+            relay,
+            token,
+            ipc_port,
+            notify_always,
+        } => {
+            // Only for the version check: the relay's calls go to the engine,
+            // whose IPC changes with Zeron releases like the profile does.
+            open(false)?;
+            let path = connect::link_path(&data_dir);
+            // A new link is saved once the relay accepts it, so a mistyped
+            // token doesn't replace a working one.
+            let (link, save_to) = match relay.zip(token) {
+                Some((relay, token)) => (connect::Link { relay, token }, Some(path)),
+                None => {
+                    let link = connect::Link::load(&path)?.with_context(|| {
+                        format!(
+                            "not set up yet: add this Mac in the phone app, then run the command it shows (saved to {})",
+                            path.display()
+                        )
+                    })?;
+                    (link, None)
+                }
+            };
+            connect::run(connect::Opts {
+                link,
+                save_to,
+                ipc_port,
+                notify_always,
+            })
+            .await?;
             0
         }
     };

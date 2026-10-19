@@ -1,0 +1,89 @@
+name: Deploy relay
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "relay/**"
+      - "relay-proto/**"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-relay.yml"
+  workflow_dispatch:
+    inputs:
+      confirm_deployment:
+        description: 'Type "deploy" to confirm deployment'
+        required: true
+        default: ""
+
+concurrency:
+  group: zeron-relay-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_dispatch' || inputs.confirm_deployment == 'deploy'
+    runs-on: ubuntu-latest
+    env:
+      APP_IMAGE: ghcr.io/${{ github.repository }}/relay:${{ github.sha }}
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+      KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG_B64 }}
+      NAMESPACE: ${{ vars.KUBE_NAMESPACE || 'default' }}
+      PUBLIC_HOST: ${{ vars.RELAY_PUBLIC_HOST || 'zeron.iyazerski.dev' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: relay/Dockerfile
+          platforms: linux/amd64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ env.APP_IMAGE }}
+            ghcr.io/${{ github.repository }}/relay:latest
+
+      - uses: azure/setup-kubectl@v5
+        with:
+          version: v1.29.0
+
+      - name: Configure kubeconfig
+        run: |
+          if [ -z "${KUBE_CONFIG}" ] && [ -z "${KUBE_CONFIG_B64}" ]; then
+            echo "KUBE_CONFIG or KUBE_CONFIG_B64 is required." >&2
+            exit 1
+          fi
+          mkdir -p ~/.kube
+          if [ -n "${KUBE_CONFIG}" ]; then
+            echo "${KUBE_CONFIG}" > ~/.kube/config
+          else
+            echo "${KUBE_CONFIG_B64}" | base64 -d > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+
+      # The cluster already has ghcr-pull-secret and the letsencrypt-prod
+      # ClusterIssuer (shared with the other apps). The setup token is made
+      # once by hand; see README.
+      - name: Deploy
+        run: |
+          kubectl -n "${NAMESPACE}" apply -f relay/k8s/storage.yaml
+          kubectl -n "${NAMESPACE}" apply -f relay/k8s/service.yaml
+          kubectl -n "${NAMESPACE}" apply -f relay/k8s/traefik.yaml
+          sed -e "s|__PUBLIC_HOST__|${PUBLIC_HOST}|g" relay/k8s/certificate.yaml | kubectl -n "${NAMESPACE}" apply -f -
+          sed -e "s|__PUBLIC_HOST__|${PUBLIC_HOST}|g" relay/k8s/ingressroute.yaml | kubectl -n "${NAMESPACE}" apply -f -
+          sed -e "s|__APP_IMAGE__|${APP_IMAGE}|g" -e "s|__PUBLIC_HOST__|${PUBLIC_HOST}|g" relay/k8s/deployment.yaml | kubectl -n "${NAMESPACE}" apply -f -
+          kubectl -n "${NAMESPACE}" rollout status deployment/zeron-relay --timeout=180s
