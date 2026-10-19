@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2024"
 publish = false
 description = "Tools for Zeron: sync, import, export, rename, archive, and delete chats, and connect the running app to a relay for phone access"
