@@ -30,8 +30,6 @@ pub enum Up {
         protocol: u32,
         /// The zeron-tools version.
         version: String,
-        /// The Zeron version it was built for.
-        zeron: String,
     },
     /// The answer to the [`Call`] with this `id`: the tool's result or its error.
     Reply {
@@ -48,14 +46,22 @@ pub enum Up {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum Engine {
-    Running,
+    /// Open and taking calls. `running` is its version, if Zeron reports one.
+    Running {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        running: Option<String>,
+    },
     /// Not open; the `open_zeron` call starts it.
     Closed,
-    /// Open, but at a version this zeron-tools doesn't target, so calls are
-    /// refused until zeron-tools is updated.
-    Outdated {
-        running: String,
-    },
+    /// Open, but its IPC changed in a way this zeron-tools can't read, so
+    /// calls are refused until zeron-tools is updated.
+    Outdated { running: String },
+}
+
+impl Engine {
+    pub fn is_running(&self) -> bool {
+        matches!(self, Self::Running { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,5 +118,18 @@ mod tests {
             json!({ "type": "engine", "state": "outdated", "running": "0.3.0" })
         );
         assert_eq!(serde_json::from_value::<Up>(value).unwrap(), engine);
+        let running = Up::Engine(Engine::Running {
+            running: Some("0.2.114".into()),
+        });
+        let value = serde_json::to_value(&running).unwrap();
+        assert_eq!(
+            value,
+            json!({ "type": "engine", "state": "running", "running": "0.2.114" })
+        );
+        assert_eq!(serde_json::from_value::<Up>(value).unwrap(), running);
+        assert_eq!(
+            serde_json::from_value::<Engine>(json!({ "state": "running" })).unwrap(),
+            Engine::Running { running: None }
+        );
     }
 }

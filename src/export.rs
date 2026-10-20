@@ -1,9 +1,9 @@
 //! Export chats as plain text for people and agents to read.
 //!
-//! Messages go through Zeron's own transcript renderer
-//! (`zeron_mcp::render_entries`, what its `read_chat` MCP tool returns):
-//! continuation entries fold into their turn, prose parts join, and every
-//! tool call becomes one capped line.
+//! It reads the running Zeron over its IPC. Messages render as Zeron's
+//! `read_chat` shows them ([`transcript::render`]): continuation entries
+//! fold into their turn, prose parts join, and every tool call becomes one
+//! capped line.
 //!
 //! Two things are made explicit for readers: a forked chat starts with a copy
 //! of its source's history (left out when the source is in the same export),
@@ -12,14 +12,16 @@
 
 use std::collections::HashSet;
 use std::fmt::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use clap::ValueEnum;
 use serde::Serialize;
-use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
-use zeron_mcp::{RenderOptions, RenderedMessage, render_entries};
-use zeron_proto::{Chat, HarnessId, Space};
+
+use crate::zeron::transcript::{self, Entry, Part, RenderOptions, Rendered, Role};
+use crate::zeron::types::{Chat, Space};
+use crate::zeron::{Zeron, find_chat};
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
@@ -38,6 +40,101 @@ impl Format {
     }
 }
 
+/// Which chats to export, and how.
+pub struct Opts {
+    /// Chat ids or id prefixes.
+    pub chats: Vec<String>,
+    /// A project name or folder.
+    pub project: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    /// At most this many chats, the most recently active ones.
+    pub limit: Option<usize>,
+    pub skip_archived: bool,
+    pub format: Format,
+    pub render: RenderOptions,
+    /// One file per chat in this folder, else everything to stdout.
+    pub output: Option<PathBuf>,
+}
+
+/// Export the chats `opts` picks, oldest first, and report the count.
+pub async fn run(zeron: &Zeron, opts: Opts) -> Result<()> {
+    let (every, spaces) = tokio::try_join!(zeron.chats(), zeron.spaces())?;
+    let space = opts
+        .project
+        .as_deref()
+        .map(|p| find_space(&spaces, p))
+        .transpose()?;
+    let picked = opts
+        .chats
+        .iter()
+        .map(|key| find_chat(&every, key).map(|c| c.id.as_str()))
+        .collect::<Result<HashSet<_>>>()?;
+    let mut selected: Vec<&Chat> = every
+        .iter()
+        .filter(|c| picked.is_empty() || picked.contains(c.id.as_str()))
+        .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
+        .filter(|c| active_between(c, opts.since, opts.until))
+        .filter(|c| !(opts.skip_archived && c.archived))
+        .collect();
+    selected.sort_by_key(|c| std::cmp::Reverse(c.last_activity()));
+    selected.truncate(opts.limit.unwrap_or(usize::MAX));
+    selected.sort_by_key(|c| c.created_at);
+    if let Some(dir) = &opts.output {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    // A fork's copied history is left out when its source is exported too.
+    let ids: HashSet<&str> = selected.iter().map(|c| c.id.as_str()).collect();
+    let (mut written, mut messages) = (0, 0);
+    let mut stdout = std::io::stdout().lock();
+    for chat in selected {
+        let space = spaces
+            .iter()
+            .find(|s| Some(&s.id) == chat.space_id.as_ref());
+        let entries = zeron.transcript(chat).await?;
+        let exported = ExportedChat::new(chat, space, &entries, opts.render, &ids);
+        if exported.messages.is_empty() {
+            continue;
+        }
+        let text = exported.render(opts.format)?;
+        match &opts.output {
+            Some(dir) => std::fs::write(dir.join(exported.file_name(opts.format)), text)?,
+            None => {
+                use std::io::Write;
+                // Separate markdown documents with a rule.
+                if written > 0 && opts.format == Format::Markdown {
+                    stdout.write_all(b"\n---\n\n")?;
+                }
+                stdout.write_all(text.as_bytes())?;
+            }
+        }
+        written += 1;
+        messages += exported.messages.len();
+    }
+    eprintln!(
+        "exported {written} chat(s), {messages} message(s){}",
+        opts.output
+            .map(|d| format!(" to {}", d.display()))
+            .unwrap_or_default()
+    );
+    Ok(())
+}
+
+/// The project named `arg` (case-insensitive) or at folder `arg`.
+fn find_space<'a>(spaces: &'a [Space], arg: &str) -> Result<&'a Space> {
+    let folder = crate::expand_tilde(arg);
+    let folder = folder.canonicalize().unwrap_or(folder);
+    spaces
+        .iter()
+        .find(|s| s.display_name().eq_ignore_ascii_case(arg))
+        .or_else(|| spaces.iter().find(|s| Path::new(&s.path) == folder))
+        .with_context(|| {
+            let mut names: Vec<_> = spaces.iter().map(|s| s.display_name()).collect();
+            names.sort_unstable();
+            format!("no project {arg:?}; projects: {}", names.join(", "))
+        })
+}
+
 /// A chat ready to write out.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,7 +143,7 @@ pub struct ExportedChat {
     pub title: Option<String>,
     pub project: Option<String>,
     pub cwd: Option<String>,
-    pub harness: Option<HarnessId>,
+    pub harness: Option<String>,
     pub model: Option<String>,
     pub archived: bool,
     pub created_at: DateTime<Utc>,
@@ -80,7 +177,7 @@ pub struct Fork {
 #[serde(rename_all = "camelCase")]
 pub struct ExportedMessage {
     #[serde(flatten)]
-    pub message: RenderedMessage,
+    pub message: Rendered,
     /// A user-role message another agent sent from this chat (Zeron's
     /// `send_message` tool), not something the person typed. `text` has
     /// the routing header removed.
@@ -92,19 +189,19 @@ pub struct ExportedMessage {
 }
 
 impl ExportedChat {
-    /// Render `entries` of `chat` (in `space`, if any) with Zeron's renderer.
-    /// A fork's copied history is left out when its source is in `exported`
-    /// (the ids of all chats in this export).
+    /// Render `entries` of `chat` (in `space`, if any). A fork's copied
+    /// history is left out when its source is in `exported` (the ids of all
+    /// chats in this export).
     pub fn new(
         chat: &Chat,
         space: Option<&Space>,
-        entries: &[SessionMessageEntry],
+        entries: &[Entry],
         options: RenderOptions,
         exported: &HashSet<&str>,
     ) -> Self {
         let (forked_from, messages) = match fork_seam(entries) {
             Some((seam, source)) => {
-                let copied = render_entries(&entries[..seam], options);
+                let copied = transcript::render(&entries[..seam], options);
                 let include = !exported.contains(source.id.as_str());
                 let fork = Fork {
                     chat: source,
@@ -115,14 +212,14 @@ impl ExportedChat {
                     .into_iter()
                     .filter(|_| include)
                     .map(|m| ExportedMessage::new(m, true));
-                let own = render_entries(&entries[seam + 1..], options)
+                let own = transcript::render(&entries[seam + 1..], options)
                     .into_iter()
                     .map(|m| ExportedMessage::new(m, false));
                 (Some(fork), copied.chain(own).collect())
             }
             None => (
                 None,
-                render_entries(entries, options)
+                transcript::render(entries, options)
                     .into_iter()
                     .map(|m| ExportedMessage::new(m, false))
                     .collect(),
@@ -139,11 +236,11 @@ impl ExportedChat {
                 .clone()
                 .or_else(|| chat.harness_session_cwd.clone())
                 .or_else(|| space.map(|s| s.path.clone())),
-            harness: chat.config.as_ref().map(|c| c.harness),
-            model: chat.config.as_ref().and_then(|c| c.model.clone()),
+            harness: chat.harness().map(str::to_owned),
+            model: chat.model().map(str::to_owned),
             archived: chat.archived,
             created_at: chat.created_at,
-            last_activity: last_activity(chat),
+            last_activity: chat.last_activity(),
         }
     }
 
@@ -192,7 +289,7 @@ impl ExportedChat {
             (None, Some(cwd)) => meta.push(format!("- Folder: {}", tilde(cwd))),
             (None, None) => {}
         }
-        match (self.harness.map(crate::harness_name), &self.model) {
+        match (&self.harness, &self.model) {
             (Some(h), Some(m)) => meta.push(format!("- Agent: {h}, {m}")),
             (Some(h), None) => meta.push(format!("- Agent: {h}")),
             _ => {}
@@ -237,9 +334,9 @@ impl ExportedChat {
                     from.title,
                     crate::short_id(&from.id)
                 ),
-                (None, MessageRole::User) => "User".into(),
-                (None, MessageRole::Assistant) => "Assistant".into(),
-                (None, MessageRole::System) => "System".into(),
+                (None, Role::User) => "User".into(),
+                (None, Role::Assistant) => "Assistant".into(),
+                (None, Role::System | Role::Other) => "System".into(),
             };
             let at = DateTime::from_timestamp_millis(m.created_at)
                 .map(local)
@@ -274,9 +371,9 @@ impl ExportedChat {
 }
 
 impl ExportedMessage {
-    fn new(mut message: RenderedMessage, copied: bool) -> Self {
+    fn new(mut message: Rendered, copied: bool) -> Self {
         let mut from_chat = None;
-        if message.role == MessageRole::User
+        if message.role == Role::User
             && let Some((from, body)) = split_agent_message(&message.text)
         {
             message.text = body.to_owned();
@@ -293,13 +390,12 @@ impl ExportedMessage {
 /// The fork seam (Zeron's fork RPC writes one entry with a `Fork` part:
 /// everything above it was copied from the source chat), as its index and
 /// the source.
-fn fork_seam(entries: &[SessionMessageEntry]) -> Option<(usize, ChatRef)> {
+fn fork_seam(entries: &[Entry]) -> Option<(usize, ChatRef)> {
     entries.iter().enumerate().find_map(|(i, e)| {
         e.parts.iter().find_map(|p| match p {
-            MessagePart::Fork {
+            Part::Fork {
                 source_chat_id,
                 source_title,
-                ..
             } => Some((
                 i,
                 ChatRef {
@@ -337,18 +433,13 @@ fn split_agent_message(text: &str) -> Option<(ChatRef, &str)> {
     ))
 }
 
-/// A chat's last activity: its newest message, else its creation.
-pub fn last_activity(chat: &Chat) -> DateTime<Utc> {
-    chat.last_message_at.unwrap_or(chat.created_at)
-}
-
 /// Whether a chat was active within `[since, until)`.
 pub fn active_between(
     chat: &Chat,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
 ) -> bool {
-    since.is_none_or(|t| last_activity(chat) >= t) && until.is_none_or(|t| chat.created_at < t)
+    since.is_none_or(|t| chat.last_activity() >= t) && until.is_none_or(|t| chat.created_at < t)
 }
 
 /// Parse `--since`: a local date (`2026-09-17`) or an age (`30d`, `4w`).
@@ -418,18 +509,18 @@ fn local(t: DateTime<Utc>) -> String {
 }
 
 fn tilde(path: &str) -> String {
-    crate::short_path(std::path::Path::new(path))
+    crate::short_path(Path::new(path))
 }
 
 #[cfg(test)]
 mod tests {
-    use zeron_doc::MessagePart;
-    use zeron_proto::ToolCall;
+    use serde_json::{Value, json};
 
     use super::*;
+    use crate::zeron::transcript::tests::entry;
 
     fn chat() -> Chat {
-        serde_json::from_value(serde_json::json!({
+        serde_json::from_value(json!({
             "id": "01a0d3bf-536f-79b2-ae0b-bcf3502434d5",
             "deviceId": "d",
             "title": "Advance PO_GUID IDR demo",
@@ -442,57 +533,20 @@ mod tests {
         .unwrap()
     }
 
-    fn entry(id: &str, role: MessageRole, parts: Vec<MessagePart>) -> SessionMessageEntry {
-        SessionMessageEntry {
-            id: id.into(),
-            role,
-            parts,
-            created_at: 1_790_258_926_000,
-            device_id: "d".into(),
-            status: None,
-            continuation_of: None,
-            duration_ms: None,
-        }
-    }
-
-    fn text(t: &str) -> MessagePart {
-        MessagePart::Text {
-            id: "p".into(),
-            text: t.into(),
-        }
+    fn text(t: &str) -> Value {
+        json!({ "kind": "text", "id": "p", "text": t })
     }
 
     fn exported(options: RenderOptions) -> ExportedChat {
-        let tool = MessagePart::Tool {
-            id: "t".into(),
-            call: ToolCall::Exec {
-                command: "make test".into(),
-            },
-            is_error: false,
-            resolved: true,
-            output: None,
-            diff: None,
-            output_ref: None,
-            output_bytes: None,
-            diff_ref: None,
-            diff_stats: None,
-            subagent_ref: None,
-            subagent_status: None,
-            subagent_tail: None,
-        };
-        let thinking = MessagePart::Reasoning {
-            id: "r".into(),
-            text: "Check the tests".into(),
-        };
-        let mut cont = entry("a2", MessageRole::Assistant, vec![text("All green.")]);
-        cont.continuation_of = Some("a1".into());
+        let tool = json!({ "kind": "tool", "id": "t", "call": { "kind": "exec", "command": "make test" }, "resolved": true });
+        let thinking = json!({ "kind": "reasoning", "id": "r", "text": "Check the tests" });
         ExportedChat::new(
             &chat(),
             None,
             &[
-                entry("u1", MessageRole::User, vec![text("Run the tests")]),
-                entry("a1", MessageRole::Assistant, vec![thinking, tool]),
-                cont,
+                entry("u1", "user", None, json!([text("Run the tests")])),
+                entry("a1", "assistant", None, json!([thinking, tool])),
+                entry("a2", "assistant", Some("a1"), json!([text("All green.")])),
             ],
             options,
             &HashSet::new(),
@@ -502,21 +556,17 @@ mod tests {
     /// A fork of chat `src`: two copied messages, the seam, then its own turn,
     /// which another chat sent.
     fn fork(exported: &[&str]) -> ExportedChat {
-        let seam = MessagePart::Fork {
-            id: "f".into(),
-            source_chat_id: "src-chat-id".into(),
-            source_title: "Review Rollout".into(),
-        };
+        let seam = json!({ "kind": "fork", "id": "f", "sourceChatId": "src-chat-id", "sourceTitle": "Review Rollout" });
         let peer = "[Message from Zeron chat Fault Injector (127d9f07). Reply to it with the Zeron `send_message` tool, chat 127d9f07-dbd0-4c3e.]\n\nOver to you.";
         ExportedChat::new(
             &chat(),
             None,
             &[
-                entry("u1", MessageRole::User, vec![text("Review the rollout")]),
-                entry("a1", MessageRole::Assistant, vec![text("Looks fine.")]),
-                entry("fork:x", MessageRole::System, vec![seam]),
-                entry("u2", MessageRole::User, vec![text(peer)]),
-                entry("a2", MessageRole::Assistant, vec![text("Thanks.")]),
+                entry("u1", "user", None, json!([text("Review the rollout")])),
+                entry("a1", "assistant", None, json!([text("Looks fine.")])),
+                entry("fork:x", "system", None, json!([seam])),
+                entry("u2", "user", None, json!([text(peer)])),
+                entry("a2", "assistant", None, json!([text("Thanks.")])),
             ],
             RenderOptions::default(),
             &exported.iter().copied().collect(),

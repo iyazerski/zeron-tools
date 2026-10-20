@@ -3,29 +3,18 @@ name = "zeron-tools"
 version = "0.10.3"
 edition = "2024"
 publish = false
-description = "Tools for Zeron: sync, import, export, rename, archive, and delete chats, and connect the running app to a relay for phone access"
+description = "A background service for Zeron: archive old chats, title untitled ones, and link the running app to a relay for phone access"
 
 [dependencies]
-# Zeron's crates are not on crates.io; pin them to the release we target
-# (the same version as `zeron_version!` in src/zeron.rs).
-zeron-doc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
-zeron-sync = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
-zeron-proto = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
-zeron-mcp = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
-zeron-rpc = { git = "https://github.com/zeronsh/zeron", tag = "v0.2.114" }
-# Versions match Zeron's workspace so cargo unifies them.
-loro = "1.13"
-rusqlite = { version = "0.32", features = ["bundled"] }
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 libc = "0.2"
-sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "sync", "time"] }
-# The relay link; Zeron's own IPC client uses the same version.
+# The relay link and Zeron's IPC.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # tokio-tungstenite leaves the TLS crypto provider to the app; with only
 # `ring` enabled, rustls picks it on its own.

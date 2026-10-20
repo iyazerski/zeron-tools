@@ -1,97 +1,131 @@
-//! Pick chats to archive so the sidebar shows only recent work.
+//! Archive older chats so the sidebar lists only recent ones.
 //!
 //! Zeron's sidebar draws a row for every unarchived top-level chat, with no
 //! paging (`crates/ui/src/state.rs::visible_chats`), while archived chats
 //! live on a paged shelf that can be hidden. Archiving all but the most
-//! recent chats of each project keeps the list short.
+//! recent chats of each project keeps the list short. Archived chats stay
+//! searchable and resumable.
+//!
+//! This runs again and again in the background, so it remembers what it
+//! archived: a chat you restored stays restored until it has new activity.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use zeron_proto::{Chat, Space, view::project_key};
+use serde_json::json;
 
-use crate::export::last_activity;
-use crate::zeron::Profile;
-use crate::{Tally, date, find_space, one_line, short_id};
+use crate::zeron::Zeron;
+use crate::zeron::types::{Chat, Space};
+use crate::{one_line, short_id};
 
-/// Archive [`stale`] chats (only those of `project`, if given; a name or
-/// folder), skipping pinned and sectioned ones, and print a per-project
-/// summary.
-pub fn run(
-    profile: &mut Profile,
-    keep: usize,
-    idle_before: Option<DateTime<Utc>>,
-    project: Option<&str>,
-    dry_run: bool,
-) -> Result<Tally> {
-    let every = profile.chats()?;
-    let spaces = profile.spaces()?;
-    let space = project.map(|p| find_space(&spaces, p)).transpose()?;
-    let placed = profile.sidebar_placed_chats();
-    let protected: HashSet<&str> = placed.iter().map(String::as_str).collect();
-    let chosen: Vec<_> = stale(&every, &spaces, keep, idle_before, &protected)
-        .into_iter()
-        .filter(|c| space.is_none_or(|s| c.space_id.as_deref() == Some(s.id.as_str())))
-        .collect();
-    let verb = if dry_run { "would archive" } else { "archived" };
-    let mut per_project: HashMap<&str, usize> = HashMap::new();
-    for chat in &chosen {
-        let name = spaces
-            .iter()
-            .find(|s| Some(&s.id) == chat.space_id.as_ref())
-            .map_or("no project", |s| s.display_name());
-        *per_project.entry(name).or_default() += 1;
-        println!(
-            "{verb} {}  {}  {name}  {}",
-            short_id(&chat.id),
-            date(last_activity(chat).timestamp_millis()),
-            one_line(chat.title.as_deref().unwrap_or("Untitled"), 50)
-        );
-        if !dry_run {
-            profile.set_archived(&chat.id, true)?;
+/// The chats this tool archived, each with its last activity then.
+#[derive(Debug)]
+pub struct Memory {
+    path: PathBuf,
+    archived: HashMap<String, DateTime<Utc>>,
+}
+
+impl Memory {
+    /// An empty memory, saved to `path`.
+    pub fn empty(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+            archived: HashMap::new(),
         }
     }
-    profile.save()?;
-    let mut summary: Vec<_> = per_project.into_iter().collect();
-    summary.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    let active = every
-        .iter()
-        .filter(|c| !c.archived && c.is_top_level())
-        .count();
-    eprintln!(
-        "{verb} {} of {active} sidebar chats{}",
-        chosen.len(),
-        summary
-            .iter()
-            .map(|(p, n)| format!("\n  {n:>4}  {p}"))
-            .collect::<String>()
-    );
-    Ok(Tally {
-        done: chosen.len(),
-        failed: 0,
-    })
+
+    /// Read the memory saved at `path`; a missing file is an empty memory.
+    pub fn load(path: &Path) -> Result<Self> {
+        let archived = match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing {}", path.display()))?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        Ok(Self {
+            path: path.to_owned(),
+            archived,
+        })
+    }
+
+    /// Whether this tool archived `chat` before, and it had no activity since.
+    fn restored(&self, chat: &Chat) -> bool {
+        self.archived.get(&chat.id) == Some(&chat.last_activity())
+    }
+
+    fn save(&self) -> Result<()> {
+        let tmp = self.path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.archived)?)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, &self.path)
+            .with_context(|| format!("writing {}", self.path.display()))
+    }
+}
+
+/// Archive the [`stale`] chats, except pinned ones, those in sidebar
+/// sections, and those restored since this tool archived them. Returns how
+/// many it archived; a chat that fails is logged and skipped.
+pub async fn run(zeron: &Zeron, keep: usize, memory: &mut Memory) -> Result<usize> {
+    let (chats, spaces, sidebar) =
+        tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sidebar())?;
+    let placed: HashSet<&str> = sidebar.placed().collect();
+    let chosen: Vec<&Chat> = stale(&chats, &spaces, keep, &placed)
+        .into_iter()
+        .filter(|c| !memory.restored(c))
+        .collect();
+    let mut archived = 0;
+    for chat in chosen {
+        let op = json!({ "op": "setChatArchived", "chatId": chat.id, "archived": true });
+        match zeron.mutate(op).await {
+            Ok(_) => {
+                archived += 1;
+                memory
+                    .archived
+                    .insert(chat.id.clone(), chat.last_activity());
+                eprintln!(
+                    "archived {}  {}  {}",
+                    short_id(&chat.id),
+                    chat.last_activity().format("%Y-%m-%d"),
+                    one_line(chat.title().unwrap_or("Untitled"), 50)
+                );
+            }
+            Err(e) => eprintln!("couldn't archive {}: {e:#}", short_id(&chat.id)),
+        }
+    }
+    // Forget deleted chats, and ones that are back in use.
+    let known: HashMap<&str, &Chat> = chats.iter().map(|c| (c.id.as_str(), c)).collect();
+    let before = memory.archived.len();
+    memory.archived.retain(|id, at| {
+        known
+            .get(id.as_str())
+            .is_some_and(|c| c.last_activity() == *at)
+    });
+    if archived > 0 || memory.archived.len() != before {
+        memory.save()?;
+    }
+    Ok(archived)
 }
 
 /// Unarchived top-level chats beyond the `keep` most recently active in their
-/// project (project-less chats form one group), optionally only those idle
-/// since before `idle_before`. Chats in `protected` (pinned or placed in a
-/// sidebar section) never count as stale and don't use up `keep`.
+/// project (project-less chats form one group), oldest first. Chats in
+/// `placed` (pinned or in a sidebar section) never count as stale and don't
+/// use up `keep`.
 pub fn stale<'a>(
     chats: &'a [Chat],
     spaces: &[Space],
     keep: usize,
-    idle_before: Option<DateTime<Utc>>,
-    protected: &HashSet<&str>,
+    placed: &HashSet<&str>,
 ) -> Vec<&'a Chat> {
     // Group like the sidebar does: every checkout of one repository is one project.
     let project: HashMap<&str, String> = spaces
         .iter()
-        .map(|s| (s.id.as_str(), project_key(s)))
+        .map(|s| (s.id.as_str(), s.project_key()))
         .collect();
     let mut groups: HashMap<Option<&str>, Vec<&Chat>> = HashMap::new();
     for chat in chats {
-        if chat.archived || !chat.is_top_level() || protected.contains(chat.id.as_str()) {
+        if chat.archived || !chat.is_top_level() || placed.contains(chat.id.as_str()) {
             continue;
         }
         let key = chat
@@ -104,18 +138,13 @@ pub fn stale<'a>(
     for mut group in groups.into_values() {
         // The sidebar's "last updated" order, newest first.
         group.sort_by(|a, b| {
-            last_activity(b)
-                .cmp(&last_activity(a))
+            b.last_activity()
+                .cmp(&a.last_activity())
                 .then_with(|| a.id.cmp(&b.id))
         });
-        out.extend(
-            group
-                .into_iter()
-                .skip(keep)
-                .filter(|c| idle_before.is_none_or(|t| last_activity(c) < t)),
-        );
+        out.extend(group.into_iter().skip(keep));
     }
-    out.sort_by_key(|c| last_activity(c));
+    out.sort_by_key(|c| c.last_activity());
     out
 }
 
@@ -124,10 +153,9 @@ mod tests {
     use super::*;
 
     fn chat(id: &str, space: Option<&str>, day: u32) -> Chat {
-        serde_json::from_value(serde_json::json!({
+        serde_json::from_value(json!({
             "id": id,
             "deviceId": "d",
-            "archived": false,
             "createdAt": "2026-09-01T00:00:00Z",
             "lastMessageAt": format!("2026-09-{day:02}T00:00:00Z"),
             "spaceId": space,
@@ -136,13 +164,8 @@ mod tests {
     }
 
     fn space(id: &str, repo: Option<&str>) -> Space {
-        serde_json::from_value(serde_json::json!({
-            "id": id,
-            "deviceId": "d",
-            "path": format!("/w/{id}"),
-            "createdAt": "2026-09-01T00:00:00Z",
-            "gitDetected": true,
-            "repositoryId": repo,
+        serde_json::from_value(json!({
+            "id": id, "deviceId": "d", "path": format!("/w/{id}"), "repositoryId": repo,
         }))
         .unwrap()
     }
@@ -176,14 +199,23 @@ mod tests {
         ];
         let pinned = HashSet::from(["pinned"]);
         assert_eq!(
-            ids(stale(&chats, &spaces, 1, None, &pinned)),
+            ids(stale(&chats, &spaces, 1, &pinned)),
             ["none-old", "a-old", "b-old", "a2-mid"]
         );
-        let idle_before = "2026-09-03T00:00:00Z".parse().ok();
-        assert_eq!(
-            ids(stale(&chats, &spaces, 1, idle_before, &pinned)),
-            ["none-old", "a-old"]
-        );
-        assert!(stale(&chats, &spaces, 2, None, &pinned).len() == 1);
+        assert_eq!(ids(stale(&chats, &spaces, 2, &pinned)), ["a-old"]);
+    }
+
+    #[test]
+    fn a_restored_chat_stays_until_it_has_new_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("archived.json");
+        let mut memory = Memory::load(&path).unwrap();
+        let old = chat("old", None, 1);
+        memory.archived.insert(old.id.clone(), old.last_activity());
+        memory.save().unwrap();
+        let memory = Memory::load(&path).unwrap();
+        assert!(memory.restored(&old));
+        assert!(!memory.restored(&chat("old", None, 2)));
+        assert!(!memory.restored(&chat("other", None, 1)));
     }
 }

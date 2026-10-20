@@ -9,12 +9,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use serde_json::{Value, json};
+use anyhow::{Context, Result, bail};
+use serde_json::json;
 use tokio::sync::{mpsc, watch};
-use zeron_mcp::{Tools, Zeron};
-use zeron_proto::{Session, SessionStatus};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
+
+use crate::zeron::transcript::{self, RenderOptions};
+use crate::zeron::types::{Session, SessionStatus};
+use crate::zeron::{Zeron, methods};
 
 /// The Mac counts as in use if it had keyboard or mouse input this recently.
 const AWAY_AFTER: Duration = Duration::from_secs(120);
@@ -28,19 +30,18 @@ const IOREG_TIMEOUT: Duration = Duration::from_secs(5);
 /// Follow chat statuses whenever Zeron runs, and send notices for changes.
 pub async fn run(
     zeron: Arc<Zeron>,
-    tools: Arc<Tools>,
     mut engine: watch::Receiver<Engine>,
     notices: mpsc::Sender<Notice>,
     always: bool,
 ) {
     loop {
         // An outdated Zeron may speak another IPC, so it isn't watched either.
-        if engine.wait_for(|e| *e == Engine::Running).await.is_err() {
+        if engine.wait_for(Engine::is_running).await.is_err() {
             return;
         }
-        if let Err(e) = watch_once(&zeron, &tools, &notices, always).await {
+        if let Err(e) = watch_once(&zeron, &notices, always).await {
             // Zeron quitting ends the stream too; the engine log covers that.
-            if *engine.borrow() == Engine::Running {
+            if engine.borrow().is_running() {
                 eprintln!("notifications paused: {e:#}");
             }
         }
@@ -49,17 +50,14 @@ pub async fn run(
 }
 
 async fn watch_once(
-    zeron: &Zeron,
-    tools: &Arc<Tools>,
+    zeron: &Arc<Zeron>,
     notices: &mpsc::Sender<Notice>,
     always: bool,
 ) -> Result<()> {
-    let mut stream = zeron
-        .subscribe(zeron_rpc::methods::WATCH_SESSIONS, json!({}))
-        .await?;
+    let mut stream = zeron.subscribe(methods::WATCH_SESSIONS, json!({})).await?;
     // The first snapshot is the baseline: nothing has changed yet.
     let mut known: Option<HashMap<String, Session>> = None;
-    while let Some(item) = stream.recv().await {
+    while let Some(item) = stream.next().await? {
         let sessions: Vec<Session> =
             serde_json::from_value(item).context("WatchSessions: bad snapshot")?;
         let current: HashMap<String, Session> = sessions
@@ -81,9 +79,9 @@ async fn watch_once(
                 // Read the chat off the stream's path: the engine's status
                 // watch keeps only its latest value, so a slow read here
                 // would make it skip transitions.
-                let (tools, notices) = (tools.clone(), notices.clone());
+                let (zeron, notices) = (zeron.clone(), notices.clone());
                 tokio::spawn(async move {
-                    match tokio::time::timeout(NOTICE_TIMEOUT, notice(&tools, &chat, kind)).await {
+                    match tokio::time::timeout(NOTICE_TIMEOUT, notice(&zeron, &chat, kind)).await {
                         // A full queue means the relay has been away for long; drop it.
                         Ok(Ok(notice)) => _ = notices.try_send(notice),
                         Ok(Err(e)) => eprintln!("notification for {chat}: {e:#}"),
@@ -122,29 +120,33 @@ fn change(before: &Session, now: &Session) -> Option<NoticeKind> {
     }
 }
 
-/// Build the notice for `chat_id` from the chat's current state.
-async fn notice(tools: &Tools, chat_id: &str, kind: NoticeKind) -> Result<Notice> {
-    let chat = tools
-        .call("get_chat", json!({ "chat": chat_id }))
-        .await
-        .map_err(|e| anyhow!(e))?;
-    let text = |v: &Value| v.as_str().unwrap_or_default().trim().to_owned();
-    let title = match text(&chat["title"]) {
-        t if t.is_empty() => "Untitled chat".to_owned(),
-        t => t,
-    };
+/// Build the notice for `chat_id` from the chat's current state: the
+/// question it asks, or its last message.
+async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice> {
+    let chat = zeron.chat(chat_id).await?;
     let body = match kind {
-        NoticeKind::Input => {
-            let question = text(&chat["pendingInput"]["questions"][0]["question"]);
-            format!("Needs your answer: {question}")
-        }
         NoticeKind::Failed => "The turn failed.".to_owned(),
-        NoticeKind::Finished => text(&chat["lastMessage"]["text"]),
+        NoticeKind::Input | NoticeKind::Finished => {
+            let entries = zeron.transcript(&chat).await?;
+            let rendered = transcript::render(&entries, RenderOptions::default());
+            if kind == NoticeKind::Input {
+                let pending = transcript::pending_input(&rendered).unwrap_or_default();
+                let question = pending["questions"][0]["question"]
+                    .as_str()
+                    .unwrap_or_default();
+                format!("Needs your answer: {}", question.trim())
+            } else {
+                rendered
+                    .last()
+                    .map(|m| m.text.trim().to_owned())
+                    .unwrap_or_default()
+            }
+        }
     };
     Ok(Notice {
         kind,
-        chat: chat_id.to_owned(),
-        title,
+        chat: chat.id.clone(),
+        title: chat.title().unwrap_or("Untitled chat").trim().to_owned(),
         body: clip(&body, 240),
     })
 }
@@ -186,8 +188,7 @@ mod tests {
     fn session(status: SessionStatus, completed: Option<&str>) -> Session {
         serde_json::from_value(json!({
             "chatId": "c", "deviceId": "d", "status": status,
-            "lastCompletedTurn": completed, "startedAt": null,
-            "updatedAt": "2026-10-19T10:00:00Z",
+            "lastCompletedTurn": completed, "updatedAt": "2026-10-19T10:00:00Z",
         }))
         .unwrap()
     }

@@ -34,7 +34,6 @@ struct Link {
     calls: mpsc::Sender<Call>,
     pending: Pending,
     version: String,
-    zeron: String,
     /// Unknown until the Mac reports it, right after its hello.
     engine: Option<Engine>,
 }
@@ -45,7 +44,6 @@ struct Link {
 pub struct Status {
     pub online: bool,
     pub version: Option<String>,
-    pub zeron: Option<String>,
     pub engine: Option<Engine>,
 }
 
@@ -61,13 +59,11 @@ impl Hub {
             Some(link) => Status {
                 online: true,
                 version: Some(link.version.clone()),
-                zeron: Some(link.zeron.clone()),
                 engine: link.engine.clone(),
             },
             None => Status {
                 online: false,
                 version: None,
-                zeron: None,
                 engine: None,
             },
         }
@@ -130,13 +126,9 @@ impl Hub {
         notify: impl Fn(&Machine, Notice) + Send,
     ) -> Result<()> {
         let (mut sink, mut stream) = socket.split();
-        let (version, zeron) = match tokio::time::timeout(HELLO_TIMEOUT, stream.next()).await {
+        let version = match tokio::time::timeout(HELLO_TIMEOUT, stream.next()).await {
             Ok(Some(Ok(Message::Text(body)))) => match serde_json::from_str(&body)? {
-                Up::Hello {
-                    protocol,
-                    version,
-                    zeron,
-                } if protocol == PROTOCOL => (version, zeron),
+                Up::Hello { protocol, version } if protocol == PROTOCOL => version,
                 Up::Hello { version, .. } => {
                     let reason = format!(
                         "zeron-tools {version} speaks another relay protocol; update zeron-tools or the relay"
@@ -158,14 +150,10 @@ impl Hub {
                 calls: calls_tx,
                 pending: pending.clone(),
                 version: version.clone(),
-                zeron: zeron.clone(),
                 engine: None,
             },
         );
-        eprintln!(
-            "{} connected (zeron-tools {version}, Zeron {zeron})",
-            machine.name
-        );
+        eprintln!("{} connected (zeron-tools {version})", machine.name);
         let result = async {
             // Outgoing calls must not postpone this, so it's a fixed deadline
             // that only frames from the Mac move.
@@ -285,7 +273,6 @@ mod tests {
         let hello = Up::Hello {
             protocol: PROTOCOL,
             version: "1".into(),
-            zeron: "1".into(),
         };
         socket
             .send(Frame::text(serde_json::to_string(&hello).unwrap()))

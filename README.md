@@ -1,41 +1,35 @@
 # zeron-tools
 
-Tools for a local [Zeron](https://github.com/zeronsh/zeron) profile (macOS, Apple silicon):
+A background service for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, it:
 
-- `sync`: one-command upkeep (import, refresh, title, archive, clean up)
-- `import`: pi sessions and Codex threads made outside Zeron, as chats that resume them
-- `refresh`: show turns made outside Zeron in the Zeron chat
-- `rename`: title chats with a small model through pi
-- `archive`, `delete`: keep the sidebar short; remove unfinished chats and orphaned sessions
-- `export`: chats as Markdown or JSONL, for example for an agent to review
-- `connect`: use Zeron on all your Macs from a phone web app, with notifications
+- archives all but the 10 most recently active chats of each project (pinned chats and chats in sidebar sections stay),
+- titles chats that stayed untitled, with a small model through pi,
+- links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications.
 
-See `AGENTS.md` for how it works. `zeron-tools <command> --help` lists every option.
+It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools export` also writes chats as Markdown or JSONL, for example for an agent to review. See `AGENTS.md` for how it works. `zeron-tools <command> --help` lists every option.
 
 ## Installation
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | sh
+zeron-tools connect --install
 ```
 
-It installs to `~/.local/bin`. Each release targets one Zeron version (`zeron-tools --version`); pin an older one with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
+It installs to `~/.local/bin`. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
+
+`connect --install` runs the service in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log`. `connect --uninstall` stops it. Run `--install` again to change its options.
 
 ## Usage
 
-Commands that write need Zeron quit (Cmd+Q) and back up `docs.sqlite3` to `~/.zeron/zeron-tools-backups/` first. Reading commands and `--dry-run` work while Zeron runs.
-
 ```sh
-zeron-tools sync --dry-run      # then without --dry-run, then: open -a Zeron
-zeron-tools sessions codex      # sessions not in Zeron yet
-zeron-tools import pi 01a0f866
+zeron-tools connect --install --keep 20 --title-model gpt-6-luna
+zeron-tools connect --install --no-rename        # archive only
 zeron-tools export --project guid-service --since 30d -o ~/tmp/review
-zeron-tools delete --unfinished --orphaned --dry-run
 ```
 
-- `sync` deletes orphaned sessions, imports new sessions, adds outside turns, titles untitled chats, and archives all but the 10 latest chats per project. It skips sessions active in the last hour, in excluded folders, or whose folder is gone.
-- A chat gets Zeron's default model if its session's model is no longer offered.
-- `delete` also deletes the chat's pi session (to the Trash) or Codex thread (`codex delete`), unless `--zeron-only`.
-- `rename` uses the `pi` CLI (default `--model gpt-6-luna`), 20 chats per call.
+- The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
+- Titling waits until a chat has been idle for 10 minutes and doesn't touch chats Zeron or you titled. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
+- `export` needs Zeron running.
 
 ## Phone
 
@@ -52,4 +46,4 @@ Each Mac dials out to a small relay, so no VPN or open ports are needed. You sig
   echo "https://zeron.iyazerski.dev/#/setup/$(kubectl get secret zeron-relay-secrets -o jsonpath='{.data.SETUP_TOKEN}' | base64 -d)"
   ```
 
-- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows. With `--install`, `connect` runs in the background from then on: it starts at login and logs to `~/Library/Logs/zeron-tools-connect.log` (`connect --uninstall` stops it). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).
+- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows (`connect --install` with the relay and token; the link is saved). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).

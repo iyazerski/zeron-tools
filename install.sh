@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Install the latest zeron-tools release into ~/.local/bin.
-# Set ZERON_TOOLS_VERSION=vX.Y.Z to pin a release (e.g. to match an older Zeron).
+# Set ZERON_TOOLS_VERSION=vX.Y.Z to pin a release.
 set -eu
 
 repo="iyazerski/zeron-tools"

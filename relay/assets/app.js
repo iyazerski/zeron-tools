@@ -239,6 +239,9 @@ function macState(m) {
   return engine === "closed" || engine === "outdated" ? engine : "ready";
 }
 const ready = () => (store.machines || []).filter(m => macState(m) === "ready");
+/** The Zeron and zeron-tools versions a ready Mac runs. */
+const versions = m => [m.status.engine?.running && `Zeron ${m.status.engine.running}`, `zeron-tools ${m.status.version}`]
+  .filter(Boolean).join(" · ");
 
 /** The Mac the list shows: the one picked last, else the first ready one. */
 function selectedMac() {
@@ -1528,7 +1531,7 @@ function settingsSheet() {
     const macRows = (store.machines || []).map(m => itemRow({
       iconName: "laptop", label: m.name,
       sub: { offline: "Offline", closed: "Zeron is closed", outdated: `Runs Zeron ${m.status.engine?.running}: update zeron-tools`,
-        ready: `Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` }[macState(m)],
+        ready: versions(m) }[macState(m)],
       value: glyph("dot", { ready: "var(--tone-done)", offline: "var(--tertiary)" }[macState(m)] || "var(--tone-input)"),
       extra: icon("chevRight", "chev"),
       onclick: () => fill(macPage(m, close)),
@@ -1552,7 +1555,7 @@ function macPage(m, close) {
   const state = macState(m);
   const sub = { offline: "Offline. Run zeron-tools connect --install on it.", closed: "Zeron is closed.",
     outdated: `Runs Zeron ${m.status.engine?.running}. Update zeron-tools on it.`,
-    ready: `Zeron ${m.status.zeron} · zeron-tools ${m.status.version}` }[state];
+    ready: versions(m) }[state];
   return [
     h("h2", {}, m.name),
     h("div", { class: "note", style: { marginTop: "-8px" } }, sub),

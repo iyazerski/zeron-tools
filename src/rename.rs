@@ -1,16 +1,32 @@
-//! Retitle chats with a small model through Pi (`pi -p`, nothing else loaded).
+//! Title untitled chats with a small model through Pi (`pi -p`, nothing
+//! else loaded).
+//!
+//! Zeron titles a chat itself from its first prompt and again after the
+//! first turn (`crates/engine/src/titles.rs`), so chats stay untitled only
+//! when that failed or never ran (say, a chat created without a prompt).
+//! This runs in the background, after Zeron had its chance, and never
+//! replaces a title.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use zeron_doc::{MessagePart, MessageRole, SessionMessageEntry};
+use serde_json::json;
 
-use crate::zeron::Profile;
-use crate::{Tally, find_chat, one_line, short_id};
+use crate::zeron::transcript::{Entry, Part, Role};
+use crate::zeron::types::{Chat, SessionStatus};
+use crate::zeron::{Zeron, session_for};
+use crate::{one_line, short_id};
+
+/// How long a chat stays untitled before this titles it: Zeron's own
+/// titler gets the first go.
+const SETTLE: chrono::Duration = chrono::Duration::minutes(10);
+/// The most chats titled per run, to bound one run's model calls.
+const MAX_PER_RUN: usize = 40;
 
 /// Per-field cap on transcript excerpts sent to the model.
 const EXCERPT_CHARS: usize = 600;
@@ -36,11 +52,7 @@ pub struct Excerpt {
 
 impl Excerpt {
     /// Build an excerpt from a chat's transcript; `None` if it has no user text.
-    pub fn from_transcript(
-        id: &str,
-        project: Option<String>,
-        entries: &[SessionMessageEntry],
-    ) -> Option<Self> {
+    pub fn from_transcript(id: &str, project: Option<String>, entries: &[Entry]) -> Option<Self> {
         let texts = |role| {
             entries
                 .iter()
@@ -48,13 +60,13 @@ impl Excerpt {
                 .map(|e| text(&e.parts))
                 .filter(|t| !t.trim().is_empty())
         };
-        let mut users = texts(MessageRole::User);
+        let mut users = texts(Role::User);
         let first_user = users.next()?;
         Some(Self {
             id: id.into(),
             project,
             first_user: clip(&first_user),
-            first_reply: texts(MessageRole::Assistant)
+            first_reply: texts(Role::Assistant)
                 .next()
                 .map(|t| clip(&t))
                 .unwrap_or_default(),
@@ -179,88 +191,97 @@ fn parse(raw: &str, asked: &[Excerpt]) -> Result<Vec<Title>> {
     Ok(titles)
 }
 
-/// Which chats to retitle.
-#[derive(Debug, Clone, Copy)]
-pub struct Selection<'a> {
-    /// Chat ids or id prefixes.
-    pub chats: &'a [String],
-    /// Every chat without a title.
-    pub untitled: bool,
-    /// Every chat.
-    pub all: bool,
-}
+/// Untitled chats that couldn't be titled (no user text, or the model gave
+/// no title), with their last activity then: they're retried only after
+/// new activity.
+pub type Tried = HashMap<String, DateTime<Utc>>;
 
-/// Retitle the selected chats with `pi` and print old and new titles.
-pub fn run(profile: &mut Profile, selection: Selection, pi: &Pi, dry_run: bool) -> Result<Tally> {
-    if selection.chats.is_empty() && !selection.untitled && !selection.all {
-        bail!("pick chats with --chat, --untitled, or --all");
-    }
-    let spaces = profile.spaces()?;
-    let every = profile.chats()?;
-    let mut picked = HashSet::new();
-    for prefix in selection.chats {
-        picked.insert(find_chat(&every, prefix)?.id.clone());
-    }
-    let selected: Vec<_> = every
+/// Title untitled top-level chats that are idle and have been untitled for
+/// [`SETTLE`]. Returns how many it titled. Fails only if the model can't be
+/// reached at all; then nothing counts as tried.
+pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
+    let (chats, spaces, sessions) =
+        tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sessions())?;
+    let now = Utc::now();
+    let mut candidates: Vec<&Chat> = chats
         .iter()
+        .filter(|c| c.is_top_level() && c.title().is_none())
+        .filter(|c| now - c.last_activity() >= SETTLE)
+        .filter(|c| tried.get(&c.id) != Some(&c.last_activity()))
+        // A running turn may still get Zeron's title.
         .filter(|c| {
-            selection.all || picked.contains(&c.id) || (selection.untitled && c.title.is_none())
+            session_for(&sessions, c).is_none_or(|s| {
+                !matches!(
+                    s.status,
+                    SessionStatus::Working | SessionStatus::AwaitingInput
+                )
+            })
         })
         .collect();
+    // Newest first: those are the ones in the sidebar.
+    candidates.sort_by_key(|c| std::cmp::Reverse(c.last_activity()));
+    candidates.truncate(MAX_PER_RUN);
     let mut excerpts = vec![];
-    for chat in &selected {
+    for chat in &candidates {
         let project = spaces
             .iter()
             .find(|s| Some(&s.id) == chat.space_id.as_ref())
             .map(|s| s.display_name().to_owned());
-        match Excerpt::from_transcript(&chat.id, project, &profile.transcript(&chat.id)?) {
+        let entries = match zeron.transcript(chat).await {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("can't read {} to title it: {e:#}", short_id(&chat.id));
+                continue;
+            }
+        };
+        match Excerpt::from_transcript(&chat.id, project, &entries) {
             Some(e) => excerpts.push(e),
-            None => eprintln!("skip {}: no user message", short_id(&chat.id)),
+            None => _ = tried.insert(chat.id.clone(), chat.last_activity()),
         }
     }
     if excerpts.is_empty() {
-        eprintln!("nothing to rename");
-        return Ok(Tally::default());
+        return Ok(0);
     }
-    eprintln!(
-        "asking {} ({}) for {} titles…",
-        pi.model,
-        pi.thinking,
-        excerpts.len()
-    );
-    let titles = pi.titles(&excerpts)?;
-    for t in &titles {
-        let old = selected
+    let (model, asked) = (pi.clone(), excerpts.clone());
+    let titles = tokio::task::spawn_blocking(move || model.titles(&asked)).await??;
+    // The model took a while: skip chats someone titled meanwhile.
+    let current = zeron.chats().await?;
+    let mut titled = 0;
+    for excerpt in &excerpts {
+        let Some(chat) = candidates.iter().find(|c| c.id == excerpt.id) else {
+            continue;
+        };
+        let Some(title) = titles.iter().find(|t| t.id == excerpt.id) else {
+            tried.insert(chat.id.clone(), chat.last_activity());
+            continue;
+        };
+        if current
             .iter()
-            .find(|c| c.id == t.id)
-            .and_then(|c| c.title.clone())
-            .unwrap_or_default();
-        println!(
-            "{}  {}  ->  {}",
-            short_id(&t.id),
-            one_line(&old, 40),
-            t.title
-        );
-        if !dry_run {
-            profile.rename(&t.id, &t.title)?;
+            .any(|c| c.id == chat.id && c.title().is_some())
+        {
+            continue;
+        }
+        let op = json!({ "op": "renameChat", "chatId": chat.id, "title": title.title });
+        match zeron.mutate(op).await {
+            Ok(_) => {
+                titled += 1;
+                eprintln!(
+                    "titled {}  {}",
+                    short_id(&chat.id),
+                    one_line(&title.title, 60)
+                );
+            }
+            Err(e) => eprintln!("couldn't title {}: {e:#}", short_id(&chat.id)),
         }
     }
-    profile.save()?;
-    let missing = excerpts.len() - titles.len();
-    if missing > 0 {
-        eprintln!("{missing} chat(s) got no title");
-    }
-    Ok(Tally {
-        done: titles.len(),
-        failed: missing,
-    })
+    Ok(titled)
 }
 
-fn text(parts: &[MessagePart]) -> String {
+fn text(parts: &[Part]) -> String {
     parts
         .iter()
         .filter_map(|p| match p {
-            MessagePart::Text { text, .. } => Some(text.as_str()),
+            Part::Text { text } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
