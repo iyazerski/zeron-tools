@@ -996,7 +996,7 @@ function chatView(machine, id, fromList) {
     delete drafts[id];
     textarea.style.height = "auto";
     updateComposer();
-    const bubble = userBubble({ text }, true);
+    const bubble = userBubble({ parts: [{ kind: "text", text }] }, true);
     pending.push({ text, el: bubble });
     msgs.insertBefore(bubble, working);
     toBottom(true);
