@@ -132,7 +132,7 @@ function catalog(machine, harness) {
   return catalogs.get(key);
 }
 
-/** The desktop's footer ring: a faint track under the used arc. */
+/** The desktop's context ring: a faint track under the used arc. */
 function ring(fraction, color) {
   const r = 6.25, c = 2 * Math.PI * r;
   const wrap = document.createElement("span");
@@ -932,12 +932,14 @@ function chatView(machine, id, fromList) {
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
-  // Like the desktop composer: model and reasoning beside Send, then the
-  // branch and context ring under the box.
+  // Inside the box: the model chip with the project and branch under it, then
+  // the context ring beside Send.
   const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
-  const footer = h("div", { class: "composer-foot glass hide" });
+  const meta = h("div", { class: "composer-meta hide" });
+  const ctxSlot = h("div", { class: "ctx-slot" });
   const dock = h("div", { class: "dock" }, jump,
-    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, sendBtn)), footer, hint);
+    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" },
+      h("div", { class: "composer-left" }, modelChip, meta), ctxSlot, sendBtn)), hint);
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
@@ -947,7 +949,7 @@ function chatView(machine, id, fromList) {
   dockSize.observe(dock);
 
   let chat = null, read = null, limit = 40, version = "", keepAnchor = false, pending = [];
-  // The composer's footer and model (composer_info): re-read when the chat
+  // The composer's branch, context, and model (composer_info): re-read when the chat
   // moves, at most every few seconds.
   let info = null, infoFor = "", infoAt = 0;
   const rendered = new Map();
@@ -1204,8 +1206,9 @@ function chatView(machine, id, fromList) {
     const projectChip = isDraft && machine && h("button", { class: "project-chip", "aria-label": "Project", onclick: () => projectSheet() },
       tile(project || null), h("span", { class: "txt" }, project?.name || "No project"));
     if (!info) {
-      footer.replaceChildren(projectChip || "");
-      footer.classList.toggle("hide", !projectChip);
+      meta.replaceChildren(projectChip || "");
+      meta.classList.toggle("hide", !projectChip);
+      ctxSlot.replaceChildren();
       return;
     }
     const usage = info.contextUsage;
@@ -1217,8 +1220,9 @@ function chatView(machine, id, fromList) {
     const right = usage?.window > 0 && h("button", { class: "ctx", style: { color: fraction == null ? "var(--tertiary)" : tone },
       "aria-label": "Context window", onclick: () => toast({ title: "Context window", body: contextDetails(usage), kind: "info", timeout: 4000 }) },
       ring(fraction || 0, tone), fraction == null ? "—" : `${Math.round(fraction * 100)}%`);
-    footer.replaceChildren(projectChip || "", left || "", h("span", { class: "grow" }), right || "");
-    footer.classList.toggle("hide", !projectChip && !left && !right);
+    meta.replaceChildren(projectChip || "", left || "");
+    meta.classList.toggle("hide", !projectChip && !left);
+    ctxSlot.replaceChildren(right || "");
   }
 
   /** Pick the model and reasoning for the next turns, like the desktop's picker. */
