@@ -3,6 +3,7 @@ kind: Deployment
 metadata:
   name: zeron-relay
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   replicas: 1

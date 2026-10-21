@@ -3,6 +3,7 @@ kind: IngressRoute
 metadata:
   name: zeron-relay-web
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   entryPoints:
@@ -21,6 +22,7 @@ kind: IngressRoute
 metadata:
   name: zeron-relay-websecure
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   entryPoints:

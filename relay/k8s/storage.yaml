@@ -5,6 +5,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: zeron-relay-data
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   accessModes:

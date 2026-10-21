@@ -3,6 +3,7 @@ kind: Middleware
 metadata:
   name: zeron-relay-https-redirect
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   redirectScheme:
@@ -14,6 +15,7 @@ kind: Middleware
 metadata:
   name: zeron-relay-security-headers
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   headers:
@@ -30,6 +32,7 @@ kind: Middleware
 metadata:
   name: zeron-relay-rate-limit
   labels:
+    app.kubernetes.io/part-of: zeron-tools
     app: zeron-relay
 spec:
   rateLimit:
