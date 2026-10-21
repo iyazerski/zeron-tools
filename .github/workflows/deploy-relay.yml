@@ -78,6 +78,10 @@ jobs:
       # The cluster already has ghcr-pull-secret and the letsencrypt-prod
       # ClusterIssuer (shared with the other apps). The setup token is made
       # once by hand; see README.
+      - name: Record running release
+        # Remember the live revisions, so a failed deploy or smoke check can restore them.
+        run: scripts/release_guard.sh record deployment/zeron-relay
+
       - name: Deploy
         run: |
           kubectl -n "${NAMESPACE}" apply -f relay/k8s/storage.yaml
@@ -87,3 +91,12 @@ jobs:
           sed -e "s|__PUBLIC_HOST__|${PUBLIC_HOST}|g" relay/k8s/ingressroute.yaml | kubectl -n "${NAMESPACE}" apply -f -
           sed -e "s|__APP_IMAGE__|${APP_IMAGE}|g" -e "s|__PUBLIC_HOST__|${PUBLIC_HOST}|g" relay/k8s/deployment.yaml | kubectl -n "${NAMESPACE}" apply -f -
           kubectl -n "${NAMESPACE}" rollout status deployment/zeron-relay --timeout=180s
+
+      - name: Smoke check public site
+        run: |
+          scripts/release_guard.sh smoke \
+            200 "https://${PUBLIC_HOST}/healthz"
+
+      - name: Restore previous release
+        if: failure()
+        run: scripts/release_guard.sh restore
