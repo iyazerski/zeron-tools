@@ -6,7 +6,7 @@ A background service for [Zeron](https://github.com/zeronsh/zeron) on macOS (App
 - titles chats that stayed untitled, with a small model through pi,
 - links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications.
 
-It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools export` also writes chats as Markdown or JSONL, for example for an agent to review. See `AGENTS.md` for how it works. `zeron-tools <command> --help` lists every option.
+It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools export` also writes chats as Markdown or JSONL, for example for an agent to review. `zeron-tools <command> --help` lists every option.
 
 ## Installation
 
