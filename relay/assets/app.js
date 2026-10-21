@@ -912,10 +912,10 @@ function chatView(machine, id, fromList) {
   const cached = store.chats?.find(c => c.id === id && c.machine === machine);
   const titleEl = h("div", { class: "t" }, isDraft ? "New chat" : cached?.title || " ");
   const subEl = h("div", { class: "s" }, " ");
-  const bar = h("div", { class: "bar" },
-    h("button", { class: "circle glass", "aria-label": "Back", onclick: () => { haptic(5); fromList ? history.back() : go("#/"); } }, icon("back")),
+  const bar = h("div", { class: "bar floating" }, h("div", { class: "bar-card glass" },
+    h("button", { class: "circle", "aria-label": "Back", onclick: () => { haptic(5); fromList ? history.back() : go("#/"); } }, icon("back")),
     h("div", { class: "grow" }, titleEl, subEl),
-    isDraft ? h("div", { class: "circle" }) : h("button", { class: "circle glass", "aria-label": "More", onclick: () => menu() }, icon("more")));
+    isDraft ? h("div", { class: "circle" }) : h("button", { class: "circle", "aria-label": "More", onclick: () => menu() }, icon("more"))));
   const older = h("button", { class: "older hide", onclick: () => { limit += 40; keepAnchor = true; poll.now(); } }, "Load earlier messages");
   const started = !isDraft && handoff?.chat === id ? handoff.text : null;
   if (started) handoff = null;
@@ -943,7 +943,6 @@ function chatView(machine, id, fromList) {
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
-  solidOnScroll(scroll, bar);
   // The transcript scrolls under the floating composer; keep room for it.
   const dockSize = new ResizeObserver(() => el.style.setProperty("--dock", `${dock.offsetHeight}px`));
   dockSize.observe(dock);
