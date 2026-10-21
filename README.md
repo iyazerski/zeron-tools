@@ -3,7 +3,7 @@
 A background service for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, it:
 
 - archives all but the 10 most recently active chats of each project (pinned chats and chats in sidebar sections stay),
-- titles chats that stayed untitled, with a small model through pi,
+- titles chats that stayed untitled or got Zeron's fallback title (the prompt's first words), with a small model through pi,
 - links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications.
 
 It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools export` also writes chats as Markdown or JSONL, for example for an agent to review. `zeron-tools <command> --help` lists every option.
@@ -28,7 +28,7 @@ zeron-tools export --project guid-service --since 30d -o ~/tmp/review
 ```
 
 - The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
-- Titling waits until a chat has been idle for 10 minutes and doesn't touch chats Zeron or you titled. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
+- Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
 - `export` needs Zeron running.
 
 ## Phone

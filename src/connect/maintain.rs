@@ -1,5 +1,5 @@
 //! Background upkeep while Zeron runs: archive old chats ([`archive`]) and
-//! title untitled ones ([`rename`]), a while after Zeron opens and then on
+//! title ones Zeron couldn't ([`rename`]), a while after Zeron opens and then on
 //! a fixed interval. Both write through the engine, so Zeron applies the
 //! changes as if made in its window.
 
@@ -24,7 +24,7 @@ pub struct Opts {
     /// Keep this many most recently active chats per project; `None`
     /// doesn't archive.
     pub keep: Option<usize>,
-    /// The model that titles untitled chats; `None` doesn't title them.
+    /// The model that titles chats Zeron couldn't; `None` doesn't title them.
     pub pi: Option<Pi>,
     /// Where the archive's memory lives.
     pub memory: PathBuf,

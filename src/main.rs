@@ -46,7 +46,7 @@ enum Cmd {
     ///
     /// While Zeron runs, it archives all but the most recently active chats
     /// of each project (pinned chats and chats in sidebar sections stay) and
-    /// titles chats that stayed untitled, with a small model through pi.
+    /// titles chats that stayed untitled or got Zeron's fallback title, with a small model through pi.
     ///
     /// With a relay link, it dials out to the relay and stays connected, so
     /// the phone app can list chats, follow them live, send messages, stop
@@ -71,7 +71,7 @@ enum Cmd {
         /// Don't archive old chats
         #[arg(long)]
         no_archive: bool,
-        /// Don't title untitled chats
+        /// Don't title chats Zeron couldn't
         #[arg(long)]
         no_rename: bool,
         #[command(flatten)]

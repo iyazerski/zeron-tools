@@ -1,11 +1,12 @@
-//! Title untitled chats with a small model through Pi (`pi -p`, nothing
-//! else loaded).
+//! Title chats Zeron couldn't title, with a small model through Pi
+//! (`pi -p`, nothing else loaded).
 //!
-//! Zeron titles a chat itself from its first prompt and again after the
-//! first turn (`crates/engine/src/titles.rs`), so chats stay untitled only
-//! when that failed or never ran (say, a chat created without a prompt).
-//! This runs in the background, after Zeron had its chance, and never
-//! replaces a title.
+//! Zeron titles an untitled chat itself from its first prompt
+//! (`crates/engine/src/titles.rs`). When its title model fails or isn't
+//! set up, it stores the prompt's first words instead ([`fallback_title`]),
+//! and a chat created without a prompt stays untitled. This runs in the
+//! background, after Zeron had its chance, and titles both kinds. It never
+//! replaces any other title.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -22,8 +23,8 @@ use crate::zeron::types::{Chat, SessionStatus};
 use crate::zeron::{Zeron, session_for};
 use crate::{one_line, short_id};
 
-/// How long a chat stays untitled before this titles it: Zeron's own
-/// titler gets the first go.
+/// How long a chat stays idle before this titles it: Zeron's own titler
+/// gets the first go.
 const SETTLE: chrono::Duration = chrono::Duration::minutes(10);
 /// The most chats titled per run, to bound one run's model calls.
 const MAX_PER_RUN: usize = 40;
@@ -191,21 +192,57 @@ fn parse(raw: &str, asked: &[Excerpt]) -> Result<Vec<Title>> {
     Ok(titles)
 }
 
-/// Untitled chats that couldn't be titled (no user text, or the model gave
-/// no title), with their last activity then: they're retried only after
-/// new activity.
+/// The most characters in Zeron's fallback title.
+const FALLBACK_CHARS: usize = 48;
+
+/// The title Zeron stores when its title model gives none: the prompt's
+/// first 7 words, cut to [`FALLBACK_CHARS`] (`TitleGenerator::generate` in
+/// Zeron).
+fn fallback_title(prompt: &str) -> String {
+    prompt
+        .split_whitespace()
+        .take(7)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(FALLBACK_CHARS)
+        .collect()
+}
+
+/// Whether a title could be Zeron's fallback, judged without the transcript.
+fn may_be_fallback(title: Option<&str>) -> bool {
+    title.is_none_or(|t| t.chars().count() <= FALLBACK_CHARS)
+}
+
+/// Whether a chat with this title and transcript needs a title: it has
+/// none, or it has Zeron's fallback for its first prompt.
+fn needs_title(title: Option<&str>, entries: &[Entry]) -> bool {
+    let Some(title) = title else {
+        return true;
+    };
+    entries
+        .iter()
+        .filter(|e| e.role == Role::User)
+        .map(|e| text(&e.parts))
+        .find(|t| !t.trim().is_empty())
+        .is_some_and(|prompt| fallback_title(&prompt) == title)
+}
+
+/// Chats checked and left as they were (titled by Zeron or the user, no
+/// user text, or the model gave no title), with their last activity then:
+/// they're checked again only after new activity.
 pub type Tried = HashMap<String, DateTime<Utc>>;
 
-/// Title untitled top-level chats that are idle and have been untitled for
-/// [`SETTLE`]. Returns how many it titled. Fails only if the model can't be
-/// reached at all; then nothing counts as tried.
+/// Title idle top-level chats that are untitled or have Zeron's fallback
+/// title, once idle for [`SETTLE`]. Returns how many it titled. Fails only
+/// if the model can't be reached at all; then nothing counts as tried.
 pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     let (chats, spaces, sessions) =
         tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sessions())?;
     let now = Utc::now();
     let mut candidates: Vec<&Chat> = chats
         .iter()
-        .filter(|c| c.is_top_level() && c.title().is_none())
+        .filter(|c| c.is_top_level() && may_be_fallback(c.title()))
         .filter(|c| now - c.last_activity() >= SETTLE)
         .filter(|c| tried.get(&c.id) != Some(&c.last_activity()))
         // A running turn may still get Zeron's title.
@@ -234,7 +271,9 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
                 continue;
             }
         };
-        match Excerpt::from_transcript(&chat.id, project, &entries) {
+        match Excerpt::from_transcript(&chat.id, project, &entries)
+            .filter(|_| needs_title(chat.title(), &entries))
+        {
             Some(e) => excerpts.push(e),
             None => _ = tried.insert(chat.id.clone(), chat.last_activity()),
         }
@@ -244,7 +283,7 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     }
     let (model, asked) = (pi.clone(), excerpts.clone());
     let titles = tokio::task::spawn_blocking(move || model.titles(&asked)).await??;
-    // The model took a while: skip chats someone titled meanwhile.
+    // The model took a while: skip chats someone retitled meanwhile.
     let current = zeron.chats().await?;
     let mut titled = 0;
     for excerpt in &excerpts {
@@ -257,7 +296,7 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
         };
         if current
             .iter()
-            .any(|c| c.id == chat.id && c.title().is_some())
+            .any(|c| c.id == chat.id && c.title() != chat.title())
         {
             continue;
         }
@@ -326,6 +365,35 @@ mod tests {
             (titles[0].id.as_str(), titles[0].title.as_str()),
             ("a", "Fix Login Bug")
         );
+    }
+
+    fn user(text: &str) -> Entry {
+        serde_json::from_value(json!({
+            "id": "u",
+            "role": "user",
+            "parts": [{ "kind": "text", "text": text }],
+            "createdAt": 0,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn needs_title_when_untitled_or_zeron_fell_back_to_the_prompt() {
+        let prompt = user(
+            "zeron-tools (https://github.com/iyazerski/zeron-tools)\n\nwhy doesn't rename run?",
+        );
+        // As Zeron's log shows it.
+        let fallback = "zeron-tools (https://github.com/iyazerski/zeron-";
+        assert_eq!(fallback_title(&text(&prompt.parts)), fallback);
+        assert!(may_be_fallback(Some(fallback)));
+        let entries = [prompt];
+        assert!(needs_title(Some(fallback), &entries));
+        assert!(needs_title(None, &entries));
+        assert!(!needs_title(Some("Debug Rename Upkeep"), &entries));
+        let short = user("  fix   the\nlogin bug ");
+        assert!(needs_title(Some("fix the login bug"), &[short]));
+        assert!(!needs_title(Some("fix"), &[]));
+        assert!(!may_be_fallback(Some(&"x".repeat(FALLBACK_CHARS + 1))));
     }
 
     #[test]
