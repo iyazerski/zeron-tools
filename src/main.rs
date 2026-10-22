@@ -30,8 +30,8 @@ struct Cli {
 
 #[derive(Args)]
 struct Global {
-    /// Zeron data dir, where zeron-tools keeps its files [default:
-    /// $ZERON_DATA_DIR or ~/.zeron]
+    /// Zeron data dir, where Zeron writes its IPC token and zeron-tools keeps
+    /// its files [default: $ZERON_DATA_DIR or ~/.zeron]
     #[arg(long, global = true)]
     data_dir: Option<PathBuf>,
     /// Zeron engine's IPC port
@@ -240,7 +240,7 @@ async fn main() -> Result<()> {
             connect::run(connect::Opts {
                 link,
                 save_to,
-                ipc_port,
+                zeron: Zeron::new(ipc_port, &data_dir),
                 notify_always,
                 upkeep,
                 agent,
@@ -273,7 +273,7 @@ async fn main() -> Result<()> {
                 },
                 output,
             };
-            export::run(&Zeron::new(ipc_port), opts).await
+            export::run(&Zeron::new(ipc_port, &data_dir), opts).await
         }
     }
 }

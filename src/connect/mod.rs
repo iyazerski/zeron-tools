@@ -137,7 +137,7 @@ pub struct Opts {
     pub link: Option<Link>,
     /// Where to save `link` once the relay accepts it, if it is new.
     pub save_to: Option<PathBuf>,
-    pub ipc_port: u16,
+    pub zeron: Zeron,
     /// Notify even while the Mac is in use.
     pub notify_always: bool,
     pub upkeep: Upkeep,
@@ -148,7 +148,7 @@ pub struct Opts {
 /// Run until the process is stopped, or the relay rejects the token of a
 /// manual run.
 pub async fn run(opts: Opts) -> Result<()> {
-    let zeron = Arc::new(Zeron::new(opts.ipc_port));
+    let zeron = Arc::new(opts.zeron);
     let engine = engine::spawn(zeron.clone());
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.clone(), opts.upkeep));
     if let Some(link) = opts.link {
@@ -408,7 +408,7 @@ mod tests {
     async fn calls_wait_for_a_readable_zeron() {
         // Nothing listens here: a call that got through would fail differently.
         let mac = Mac {
-            zeron: Arc::new(Zeron::new(9)),
+            zeron: Arc::new(Zeron::new(9, Path::new("/nonexistent"))),
             slots: Semaphore::new(MAX_CALLS),
         };
         let call = |engine: Engine, tool: &str| {

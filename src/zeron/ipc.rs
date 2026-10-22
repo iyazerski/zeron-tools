@@ -8,9 +8,12 @@
 //!   then `{id, done: true}` (or `{id, err}`) for a stream.
 //!
 //! The engine rejects a handshake that carries an `Origin` header (a browser
-//! dial); tungstenite sends none. There is no other authentication.
+//! dial); tungstenite sends none. It also wants `Authorization: Bearer
+//! <token>`, where the token is what the engine wrote to
+//! `{data_dir}/ipc-token` when it started (`crates/rpc/src/ipc_auth.rs`).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
@@ -21,6 +24,8 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 /// How long dialing may take. It's localhost, but another process holding
 /// the port could accept TCP and never finish the handshake.
@@ -33,6 +38,9 @@ const UNKNOWN_METHOD: &str = "unknown method: ";
 /// A lazily dialed, reconnecting connection to the engine.
 pub struct Ipc {
     url: String,
+    /// The engine's token file; read on every dial, as each engine start
+    /// writes a new token.
+    token: PathBuf,
     conn: Mutex<Option<Arc<Conn>>>,
 }
 
@@ -46,10 +54,12 @@ enum CallError {
 }
 
 impl Ipc {
-    /// Return a client for `url`; nothing connects until the first call.
-    pub fn new(url: String) -> Self {
+    /// Return a client for `url` that authenticates with the token in
+    /// `token`; nothing connects until the first call.
+    pub fn new(url: String, token: PathBuf) -> Self {
         Self {
             url,
+            token,
             conn: Mutex::new(None),
         }
     }
@@ -87,7 +97,7 @@ impl Ipc {
         if let Some(conn) = slot.as_ref().filter(|c| !c.out.is_closed()) {
             return Ok(conn.clone());
         }
-        let conn = Conn::dial(&self.url).await?;
+        let conn = Conn::dial(&self.url, &self.token).await?;
         *slot = Some(conn.clone());
         Ok(conn)
     }
@@ -114,8 +124,22 @@ struct Pending {
 }
 
 impl Conn {
-    async fn dial(url: &str) -> Result<Arc<Self>> {
-        let dial = tokio_tungstenite::connect_async(url);
+    async fn dial(url: &str, token: &std::path::Path) -> Result<Arc<Self>> {
+        // The engine writes the file when it starts, so a missing one means
+        // Zeron isn't running (or never ran with this data dir).
+        let token = match std::fs::read_to_string(token) {
+            Ok(token) => token.trim().to_owned(),
+            Err(e) => bail!(
+                "no Zeron engine at {url} (reading {}: {e}); is Zeron running?",
+                token.display()
+            ),
+        };
+        let mut request = url.into_client_request()?;
+        request.headers_mut().insert(
+            "authorization",
+            HeaderValue::try_from(format!("Bearer {token}"))?,
+        );
+        let dial = tokio_tungstenite::connect_async(request);
         let (socket, _) = match tokio::time::timeout(CONNECT_TIMEOUT, dial).await {
             Ok(Ok(socket)) => socket,
             Ok(Err(e)) => bail!("no Zeron engine at {url} ({e}); is Zeron running?"),
@@ -300,17 +324,44 @@ fn lock(pending: &StdMutex<Pending>) -> MutexGuard<'_, Pending> {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+    use tokio_tungstenite::tungstenite::http::StatusCode;
 
-    /// Serve one connection like the engine: `Echo` answers its params,
-    /// `Null` answers `null`, `Count` streams 1, 2 and ends, `Forever`
-    /// streams until cancelled (then reports it with a `Cancelled` call),
-    /// and anything else is an unknown method.
+    const TOKEN: &str = "the-token";
+
+    /// Write `token` as an engine would and return its dir and file.
+    fn token_file(token: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ipc-token");
+        std::fs::write(&path, format!("{token}\n")).unwrap();
+        (dir, path)
+    }
+
+    /// Serve one connection like the engine, refusing a handshake without
+    /// `TOKEN` as its bearer: `Echo` answers its params, `Null` answers
+    /// `null`, `Count` streams 1, 2 and ends, `Forever` streams until
+    /// cancelled (then reports it with a `Cancelled` call), and anything else
+    /// is an unknown method.
+    // tungstenite's handshake callback fixes the error type.
+    #[allow(clippy::result_large_err)]
+    fn auth(request: &Request, response: Response) -> Result<Response, ErrorResponse> {
+        let bearer = request.headers().get("authorization");
+        if bearer.is_some_and(|b| b == format!("Bearer {TOKEN}").as_str()) {
+            return Ok(response);
+        }
+        let mut refusal = ErrorResponse::new(None);
+        *refusal.status_mut() = StatusCode::UNAUTHORIZED;
+        Err(refusal)
+    }
+
     async fn engine() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.unwrap();
-            let socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            let Ok(socket) = tokio_tungstenite::accept_hdr_async(tcp, auth).await else {
+                return;
+            };
             let (mut sink, mut stream) = socket.split();
             let mut cancelled = Vec::new();
             while let Some(Ok(Message::Text(text))) = stream.next().await {
@@ -342,7 +393,8 @@ mod tests {
 
     #[tokio::test]
     async fn calls_streams_and_errors_follow_the_engine_frames() {
-        let ipc = Ipc::new(engine().await);
+        let (_dir, token) = token_file(TOKEN);
+        let ipc = Ipc::new(engine().await, token);
         assert_eq!(
             ipc.call("Echo", json!({ "a": 1 })).await.unwrap(),
             json!({ "a": 1 })
@@ -364,12 +416,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nothing_listening_is_reported_as_zeron_not_running() {
-        let ipc = Ipc::new("ws://127.0.0.1:9".into());
+    async fn a_wrong_token_is_refused() {
+        let (_dir, token) = token_file("a-stale-token");
+        let ipc = Ipc::new(engine().await, token);
         let error = ipc.call("Echo", json!({})).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("is Zeron running"),
-            "{error:#}"
-        );
+        assert!(format!("{error:#}").contains("401"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_is_reported_as_zeron_not_running() {
+        let (dir, token) = token_file(TOKEN);
+        let listening = Ipc::new("ws://127.0.0.1:9".into(), token);
+        let no_token = Ipc::new(engine().await, dir.path().join("missing"));
+        for ipc in [listening, no_token] {
+            let error = ipc.call("Echo", json!({})).await.unwrap_err();
+            assert!(
+                format!("{error:#}").contains("is Zeron running"),
+                "{error:#}"
+            );
+        }
     }
 }

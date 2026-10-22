@@ -9,7 +9,7 @@ pub mod ipc;
 pub mod transcript;
 pub mod types;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -56,10 +56,11 @@ pub struct Zeron {
 }
 
 impl Zeron {
-    /// Return a client for the engine on `port`; it dials on first use.
-    pub fn new(port: u16) -> Self {
+    /// Return a client for the engine on `port` that uses `data_dir`; it
+    /// dials on first use.
+    pub fn new(port: u16, data_dir: &Path) -> Self {
         Self {
-            ipc: Ipc::new(format!("ws://127.0.0.1:{port}")),
+            ipc: Ipc::new(format!("ws://127.0.0.1:{port}"), data_dir.join("ipc-token")),
         }
     }
 
