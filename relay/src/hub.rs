@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Duration, Instant};
-use zeron_relay_proto::{Call, Engine, Notice, PROTOCOL, Up};
+use zeron_relay_proto::{Battery, Call, Engine, Notice, PROTOCOL, Up};
 
 use crate::store::Machine;
 
@@ -43,6 +43,8 @@ struct Link {
     version: String,
     /// Unknown until the Mac reports it, right after its hello.
     engine: Option<Engine>,
+    /// `None` until the Mac reports it, and on a Mac without a battery.
+    battery: Option<Battery>,
 }
 
 /// A Mac's live state, for the app.
@@ -52,6 +54,7 @@ pub struct Status {
     pub online: bool,
     pub version: Option<String>,
     pub engine: Option<Engine>,
+    pub battery: Option<Battery>,
 }
 
 /// The connected Macs, by machine id.
@@ -69,11 +72,13 @@ impl Hub {
                 online: true,
                 version: Some(link.version.clone()),
                 engine: link.engine.clone(),
+                battery: link.battery,
             },
             None => Status {
                 online: false,
                 version: None,
                 engine: None,
+                battery: None,
             },
         }
     }
@@ -147,6 +152,7 @@ impl Hub {
                 pending: pending.clone(),
                 version: version.clone(),
                 engine: None,
+                battery: None,
             },
         );
         eprintln!("{} connected (zeron-tools {version})", machine.name);
@@ -217,6 +223,12 @@ impl Hub {
                 let mut links = self.lock();
                 if let Some(link) = links.get_mut(&machine.id).filter(|l| l.conn == conn) {
                     link.engine = Some(engine);
+                }
+            }
+            Up::Power { battery } => {
+                let mut links = self.lock();
+                if let Some(link) = links.get_mut(&machine.id).filter(|l| l.conn == conn) {
+                    link.battery = battery;
                 }
             }
             Up::Hello { .. } => {}

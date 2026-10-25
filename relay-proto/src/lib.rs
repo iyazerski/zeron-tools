@@ -40,6 +40,28 @@ pub enum Up {
     Notify(Notice),
     /// Zeron's state on the Mac: sent after [`Up::Hello`] and on each change.
     Engine(Engine),
+    /// The Mac's battery, `None` on a Mac without one: sent after
+    /// [`Up::Hello`] and on each change.
+    Power { battery: Option<Battery> },
+}
+
+/// A Mac's battery charge and whether it's plugged in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Battery {
+    pub percent: u8,
+    pub state: BatteryState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatteryState {
+    /// On power and charging.
+    Charging,
+    /// On power, but not charging (full, or holding its charge).
+    Plugged,
+    /// Running on the battery.
+    Unplugged,
 }
 
 /// Whether the Mac's Zeron can take calls.
@@ -131,5 +153,19 @@ mod tests {
             serde_json::from_value::<Engine>(json!({ "state": "running" })).unwrap(),
             Engine::Running { running: None }
         );
+        let power = Up::Power {
+            battery: Some(Battery {
+                percent: 85,
+                state: BatteryState::Charging,
+            }),
+        };
+        let value = serde_json::to_value(&power).unwrap();
+        assert_eq!(
+            value,
+            json!({ "type": "power", "battery": { "percent": 85, "state": "charging" } })
+        );
+        assert_eq!(serde_json::from_value::<Up>(value).unwrap(), power);
+        let none = serde_json::to_value(Up::Power { battery: None }).unwrap();
+        assert_eq!(none, json!({ "type": "power", "battery": null }));
     }
 }

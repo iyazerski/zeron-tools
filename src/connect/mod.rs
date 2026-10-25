@@ -11,13 +11,15 @@
 //! [`composer`]), checked here and not on the relay: the raw IPC also opens
 //! terminals and writes files, and a compromised relay must not reach those.
 //! [`engine`] tracks whether Zeron is open (and opens it), and [`watch`]
-//! reports chats that finish, need an answer, or fail.
+//! reports chats that finish, need an answer, or fail. [`power`] reports the
+//! battery.
 
 mod agent;
 mod chat;
 mod composer;
 mod engine;
 mod maintain;
+mod power;
 mod tools;
 mod watch;
 
@@ -39,7 +41,7 @@ use tokio::sync::{Semaphore, mpsc, watch as state};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
-use zeron_relay_proto::{CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
+use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
 
 use self::tools::{Tool, Unavailable};
 use crate::zeron::Zeron;
@@ -221,6 +223,7 @@ impl Relay {
         // Notices wait here while the relay is unreachable.
         let (notices_tx, mut notices) = mpsc::channel(QUEUE);
         tokio::spawn(watch::run(zeron, engine.clone(), notices_tx, self.notify));
+        let mut battery = power::spawn();
         let mut backoff = MIN_BACKOFF;
         loop {
             let mut connected = None;
@@ -229,7 +232,7 @@ impl Relay {
                 eprintln!("connected to {url}");
                 connected = Some(Instant::now());
                 self.save_accepted_link()?;
-                serve(socket, &mac, &mut engine, &mut notices).await
+                serve(socket, &mac, &mut engine, &mut battery, &mut notices).await
             }
             .await;
             if connected.is_some_and(|at| at.elapsed() >= STABLE_AFTER) {
@@ -273,12 +276,15 @@ async fn serve(
     socket: Socket,
     mac: &Arc<Mac>,
     engine: &mut state::Receiver<Engine>,
+    battery: &mut state::Receiver<Option<Battery>>,
     notices: &mut mpsc::Receiver<Notice>,
 ) -> Result<()> {
     let (mut sink, mut stream) = socket.split();
     sink.send(text(&hello())?).await?;
     let now = engine.borrow_and_update().clone();
     sink.send(text(&Up::Engine(now))?).await?;
+    let now = *battery.borrow_and_update();
+    sink.send(text(&Up::Power { battery: now })?).await?;
     // Replies from tool calls running in their own tasks.
     let (replies_tx, mut replies) = mpsc::channel::<Up>(QUEUE);
     let mut ping = tokio::time::interval(PING_EVERY);
@@ -303,6 +309,10 @@ async fn serve(
             Ok(()) = engine.changed() => {
                 let now = engine.borrow_and_update().clone();
                 sink.send(text(&Up::Engine(now))?).await?;
+            }
+            Ok(()) = battery.changed() => {
+                let now = *battery.borrow_and_update();
+                sink.send(text(&Up::Power { battery: now })?).await?;
             }
             _ = ping.tick() => {
                 if heard.elapsed() > SILENCE_LIMIT {

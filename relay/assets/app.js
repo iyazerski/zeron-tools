@@ -241,6 +241,15 @@ const ready = () => (store.machines || []).filter(m => macState(m) === "ready");
 /** The Zeron and zeron-tools versions a ready Mac runs. */
 const versions = m => [m.status.engine?.running && `Zeron ${m.status.engine.running}`, `zeron-tools ${m.status.version}`]
   .filter(Boolean).join(" · ");
+/** A Mac's battery, like "Battery 85%, charging", if it reported one. */
+function batteryText(m) {
+  const b = m.status.battery;
+  if (!b) return null;
+  const state = { charging: ", charging", plugged: ", plugged in" }[b.state] || "";
+  return `Battery ${b.percent}%${state}`;
+}
+/** A Mac's state line with its battery, if it has one. */
+const withBattery = (m, text) => [text, batteryText(m)].filter(Boolean).join(" · ");
 
 /** The Mac the list shows: the one picked last, else the first ready one. */
 function selectedMac() {
@@ -1611,8 +1620,8 @@ function settingsSheet() {
 
     const macRows = (store.machines || []).map(m => itemRow({
       iconName: "laptop", label: m.name,
-      sub: { offline: "Offline", closed: "Zeron is closed", outdated: `Runs Zeron ${m.status.engine?.running}: update zeron-tools`,
-        ready: versions(m) }[macState(m)],
+      sub: withBattery(m, { offline: "Offline", closed: "Zeron is closed", outdated: `Runs Zeron ${m.status.engine?.running}: update zeron-tools`,
+        ready: versions(m) }[macState(m)]),
       value: glyph("dot", { ready: "var(--tone-done)", offline: "var(--tertiary)" }[macState(m)] || "var(--tone-input)"),
       extra: icon("chevRight", "chev"),
       onclick: () => fill(macPage(m, close)),
@@ -1639,7 +1648,7 @@ function macPage(m, close) {
     ready: versions(m) }[state];
   return [
     h("h2", {}, m.name),
-    h("div", { class: "note", style: { marginTop: "-8px" } }, sub),
+    h("div", { class: "note", style: { marginTop: "-8px" } }, withBattery(m, sub)),
     state !== "offline" && h("div", { class: "group" }, state === "closed"
       ? itemRow({ iconName: "laptop", label: "Open Zeron", onclick: () => { close(); openZeron(m.id); } })
       : itemRow({ iconName: "restart", label: "Restart Zeron", sub: "Quits it, or force-quits it if it hangs, then opens it", onclick: () => { close(); restartZeron(m.id); } })),
