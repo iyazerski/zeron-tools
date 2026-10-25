@@ -107,11 +107,12 @@ struct ListChatsArgs {
     limit: Option<usize>,
 }
 
-/// Unarchived chats, most recently active first.
+/// The chats the sidebar lists (unarchived and top-level, so not side chats),
+/// most recently active first.
 async fn list_chats(zeron: &Zeron, args: ListChatsArgs) -> Result<Value> {
     let (mut chats, spaces, sessions) =
         tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sessions())?;
-    chats.retain(|c| !c.archived);
+    chats.retain(|c| !c.archived && c.is_top_level());
     chats.sort_by_key(|c| std::cmp::Reverse(c.last_activity()));
     let limit = args.limit.unwrap_or(DEFAULT_CHATS).clamp(1, MAX_CHATS);
     Ok(json!({
