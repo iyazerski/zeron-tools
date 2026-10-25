@@ -29,6 +29,7 @@ const ICONS = {
   "restart": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"", "<path d=\"M4.27 11a8 8 0 1 1 2.07 4.66\"/><path stroke-linejoin=\"round\" d=\"M6.84 20.66l-.63-2.86l2.86-.63\"/>"],
   "logout": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\"><path d=\"M9.002 7c.012-2.175.109-3.353.877-4.121C10.758 2 12.172 2 15 2h1c2.829 0 4.243 0 5.122.879C22 3.757 22 5.172 22 8v8c0 2.828 0 4.243-.878 5.121C20.242 22 18.829 22 16 22h-1c-2.828 0-4.242 0-5.121-.879c-.768-.768-.865-1.946-.877-4.121\"/><path stroke-linejoin=\"round\" d=\"M15 12H2m0 0l3.5-3M2 12l3.5 3\"/></g>"],
   "trash": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M9.17 4a3.001 3.001 0 0 1 5.66 0m5.67 2h-17m15.333 2.5l-.46 6.9c-.177 2.654-.265 3.981-1.13 4.79s-2.196.81-4.856.81h-.774c-2.66 0-3.991 0-4.856-.81c-.865-.809-.954-2.136-1.13-4.79l-.46-6.9M9.5 11l.5 5m4.5-5l-.5 5\"/>"],
+  "skill": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\"", "<path stroke-width=\"1.5\" d=\"M3.84453 7.92226C2.71849 6.79623 2.71849 4.97056 3.84453 3.84453C4.97056 2.71849 6.79623 2.71849 7.92226 3.84453L20.1555 16.0777C21.2815 17.2038 21.2815 19.0294 20.1555 20.1555C19.0294 21.2815 17.2038 21.2815 16.0777 20.1555L3.84453 7.92226Z\"/><path stroke-width=\"1.5\" d=\"M6 10L10 6\"/><path d=\"M16.1 2.30719C16.261 1.8976 16.8385 1.8976 16.9994 2.30719L17.4298 3.40247C17.479 3.52752 17.5776 3.62651 17.7022 3.67583L18.7934 4.1078C19.2015 4.26934 19.2015 4.849 18.7934 5.01054L17.7022 5.44252C17.5776 5.49184 17.479 5.59082 17.4298 5.71587L16.9995 6.81115C16.8385 7.22074 16.261 7.22074 16.1 6.81116L15.6697 5.71587C15.6205 5.59082 15.5219 5.49184 15.3973 5.44252L14.3061 5.01054C13.898 4.849 13.898 4.26934 14.3061 4.1078L15.3973 3.67583C15.5219 3.62651 15.6205 3.52752 15.6697 3.40247L16.1 2.30719Z\"/><path d=\"M19.9672 9.12945C20.1281 8.71987 20.7057 8.71987 20.8666 9.12945L21.0235 9.5288C21.0727 9.65385 21.1713 9.75284 21.2959 9.80215L21.6937 9.95965C22.1018 10.1212 22.1018 10.7009 21.6937 10.8624L21.2959 11.0199C21.1713 11.0692 21.0727 11.1682 21.0235 11.2932L20.8666 11.6926C20.7057 12.1022 20.1281 12.1022 19.9672 11.6926L19.8103 11.2932C19.7611 11.1682 19.6625 11.0692 19.5379 11.0199L19.14 10.8624C18.732 10.7009 18.732 10.1212 19.14 9.95965L19.5379 9.80215C19.6625 9.75284 19.7611 9.65385 19.8103 9.5288L19.9672 9.12945Z\"/><path d=\"M5.1332 15.3072C5.29414 14.8976 5.87167 14.8976 6.03261 15.3072L6.18953 15.7065C6.23867 15.8316 6.33729 15.9306 6.46188 15.9799L6.85975 16.1374C7.26783 16.2989 7.26783 16.8786 6.85975 17.0401L6.46188 17.1976C6.33729 17.2469 6.23867 17.3459 6.18953 17.471L6.03261 17.8703C5.87167 18.2799 5.29414 18.2799 5.1332 17.8703L4.97628 17.471C4.92714 17.3459 4.82852 17.2469 4.70393 17.1976L4.30606 17.0401C3.89798 16.8786 3.89798 16.2989 4.30606 16.1374L4.70393 15.9799C4.82852 15.9306 4.92714 15.8316 4.97628 15.7065L5.1332 15.3072Z\"/>"],
   "close": ["0 0 16 16", "fill=\"none\"", "<path d=\"m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5\" stroke=\"currentColor\" stroke-width=\"1.25\" stroke-linecap=\"round\"/>"],
   "alert": ["0 0 24 24", "", "<g fill=\"none\"><path stroke=\"currentColor\" stroke-width=\"1.5\" d=\"M5.312 10.762C8.23 5.587 9.689 3 12 3s3.77 2.587 6.688 7.762l.364.644c2.425 4.3 3.638 6.45 2.542 8.022S17.786 21 12.364 21h-.728c-5.422 0-8.134 0-9.23-1.572s.117-3.722 2.542-8.022z\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M12 8v5\"/><circle cx=\"12\" cy=\"16\" r=\"1\" fill=\"currentColor\"/></g>"],
   "info": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><path stroke-linecap=\"round\" d=\"M12 17v-6\"/><path stroke-linecap=\"round\" d=\"M12 7.5h.01\"/></g>"],
@@ -937,7 +938,9 @@ function chatView(machine, id, fromList) {
   const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
   const meta = h("div", { class: "composer-meta hide" });
   const ctxSlot = h("div", { class: "ctx-slot" });
-  const dock = h("div", { class: "dock" }, jump,
+  // The desktop's `$` menu: the agent's skills, filtered by what follows the `$`.
+  const skillMenu = h("div", { class: "skill-menu glass hide", role: "listbox" });
+  const dock = h("div", { class: "dock" }, jump, skillMenu,
     h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" },
       h("div", { class: "composer-left" }, modelChip, meta), ctxSlot, sendBtn)), hint);
   const offline = offlineBanner();
@@ -981,23 +984,99 @@ function chatView(machine, id, fromList) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, window.innerHeight * 0.4)}px`;
     updateComposer();
     drafts[draftKey] = textarea.value;
+    drawSkills();
   });
   textarea.addEventListener("keydown", e => {
+    // With the skill menu open, Enter or Tab picks its first skill; Escape closes it.
+    const first = !skillMenu.classList.contains("hide") && skillMenu.querySelector(".skill");
+    if (first && (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey))) { e.preventDefault(); first.click(); return; }
+    if (e.key === "Escape" && !skillMenu.classList.contains("hide")) { e.preventDefault(); skillMenu.classList.add("hide"); return; }
     // Enter sends on a hardware keyboard; phones keep Enter for new lines.
     if (e.key === "Enter" && !e.shiftKey && !matchMedia("(pointer: coarse)").matches) { e.preventDefault(); sendBtn.click(); }
   });
+  // The caret may move into or out of a `$` word without typing.
+  for (const type of ["click", "keyup"]) textarea.addEventListener(type, e => e.key !== "Escape" && drawSkills());
+  // Late, so a tap that blurs the text still lands on its skill.
+  textarea.addEventListener("blur", () => setTimeout(() => document.activeElement !== textarea && skillMenu.classList.add("hide"), 200));
+
+  // The skills of the chat's agent (a new chat's: its agent's in its project),
+  // loaded on the first `$` and again when the new chat's picks change.
+  let skills = null, skillsError = "", skillsFor = "";
+  function loadSkills() {
+    const key = isDraft ? `${machine}/${draft.harness}/${draft.project}` : id;
+    if (key === skillsFor) return;
+    skillsFor = key;
+    skills = null;
+    skillsError = "";
+    if (isDraft && (!machine || !draft.harness)) { skills = []; return; }
+    const args = isDraft ? { harness: draft.harness, ...(draft.project ? { project: draft.project } : {}) } : { chat: id };
+    call(machine, "list_skills", args).then(r => { skills = r.skills || []; }, e => { skills = []; skillsError = e.message; })
+      .then(() => key === skillsFor && drawSkills());
+  }
+
+  /** The `$` word the caret ends: where its `$` is and the text after it. */
+  function skillQuery() {
+    const pos = textarea.selectionStart;
+    if (pos !== textarea.selectionEnd) return null;
+    const m = /(?:^|\s)\$([\w:-]*)$/.exec(textarea.value.slice(0, pos));
+    return m && { start: pos - m[1].length - 1, end: pos, text: m[1].toLowerCase() };
+  }
+
+  function drawSkills() {
+    const query = document.activeElement === textarea && skillQuery();
+    if (!query) { skillMenu.classList.add("hide"); return; }
+    loadSkills();
+    // Names that start with the text first, then the ones that contain it.
+    const found = (skills || []).filter(s => s.name.toLowerCase().includes(query.text))
+      .sort((a, b) => b.name.toLowerCase().startsWith(query.text) - a.name.toLowerCase().startsWith(query.text));
+    // A `$` word no skill matches (like a price) is just text.
+    if (skills?.length && query.text && !found.length) { skillMenu.classList.add("hide"); return; }
+    const note = text => h("div", { class: "skill-note" }, text);
+    skillMenu.replaceChildren(...(!skills ? [note("Loading skills…")]
+      : skillsError ? [note(`Couldn't load the skills: ${skillsError}`)]
+      : !found.length ? [note(skills.length ? "No matching skills" : "No skills available")]
+      : found.map(s => h("button", { class: "skill", role: "option",
+        // Keep the keyboard up: the tap mustn't take focus from the text.
+        onpointerdown: e => e.preventDefault(), onmousedown: e => e.preventDefault(),
+        onclick: () => pickSkill(s) }, icon("skill"), h("span", { class: "name" }, s.name), h("span", { class: "desc" }, s.description || "")))));
+    skillMenu.classList.remove("hide");
+    skillMenu.scrollTop = 0;
+  }
+
+  /** Replace the `$` word at the caret with the skill's name. */
+  function pickSkill(skill) {
+    const query = skillQuery();
+    if (!query) return;
+    haptic(5);
+    const value = textarea.value;
+    const after = value.slice(query.end);
+    const insert = `$${skill.name}${/^\s/.test(after) ? "" : " "}`;
+    textarea.value = value.slice(0, query.start) + insert + after;
+    const caret = query.start + insert.length + (/^\s/.test(after) ? 1 : 0);
+    textarea.setSelectionRange(caret, caret);
+    textarea.focus();
+    textarea.dispatchEvent(new Event("input"));
+  }
+
+  /** `text` with each `$name` of a known skill as the reference that invokes it. */
+  function withSkillRefs(text) {
+    const refs = new Map((skills || []).map(s => [s.name, s.ref]));
+    return refs.size ? text.replace(/(^|\s)\$([\w-]+(?::[\w-]+)*)/g, (all, lead, name) => (refs.has(name) ? lead + refs.get(name) : all)) : text;
+  }
   textarea.value = drafts[draftKey] || "";
   sendBtn.addEventListener("click", () => (sendBtn.classList.contains("stop") ? stop() : send()));
 
   async function send() {
     if (isDraft) return create();
-    const text = textarea.value.trim();
-    if (!text) return;
+    const typed = textarea.value.trim();
+    if (!typed) return;
+    const text = withSkillRefs(typed);
     haptic(10);
     textarea.value = "";
     delete drafts[id];
     textarea.style.height = "auto";
     updateComposer();
+    drawSkills();
     const bubble = userBubble({ parts: [{ kind: "text", text }] }, true);
     pending.push({ text, el: bubble });
     msgs.insertBefore(bubble, working);
@@ -1009,7 +1088,7 @@ function chatView(machine, id, fromList) {
     } catch (e) {
       bubble.remove();
       pending = pending.filter(p => p.el !== bubble);
-      textarea.value = text;
+      textarea.value = typed;
       updateComposer();
       toast({ title: "Not sent", body: e.message, kind: "error" });
     }
@@ -1198,7 +1277,8 @@ function chatView(machine, id, fromList) {
     const label = entry?.ready?.[0].find(m => m.id === model)?.label || shortModel(model) || "Default";
     modelChip.disabled = !harness;
     modelChip.replaceChildren(harness ? mark(harness) : "", h("span", { class: "name" }, label),
-      reasoning && h("span", { class: "lvl" }, reasoningName(reasoning)));
+      // replaceChildren, unlike h(), prints null as "null": no level, no node.
+      reasoning ? h("span", { class: "lvl" }, reasoningName(reasoning)) : "");
     // A new chat picks its project (and Mac) here, in front of the checkout;
     // the header names the Mac.
     const project = isDraft && draft.projects.find(p => p.id === draft.project);
@@ -1352,8 +1432,9 @@ function chatView(machine, id, fromList) {
 
   /** Create the chat with the first message, then show it in place of this screen. */
   async function create() {
-    const text = textarea.value.trim();
-    if (!text || !machine || !draft.harness) return;
+    const typed = textarea.value.trim();
+    if (!typed || !machine || !draft.harness) return;
+    const text = withSkillRefs(typed);
     haptic(12);
     sendBtn.disabled = true;
     const args = { prompt: text, harness: draft.harness };

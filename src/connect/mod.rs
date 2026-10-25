@@ -393,6 +393,8 @@ enum Request {
     ComposerInfo,
     /// The composer's model picker ([`composer::set_model`]).
     SetChatModel,
+    /// The composer's `$` menu ([`composer::skills`]).
+    ListSkills,
     /// One of Zeron's own tools ([`tools`]).
     Tool(Tool),
 }
@@ -414,6 +416,7 @@ impl FromStr for Request {
             "chat_view" => Self::ChatView,
             "composer_info" => Self::ComposerInfo,
             "set_chat_model" => Self::SetChatModel,
+            "list_skills" => Self::ListSkills,
             other => Self::Tool(other.parse()?),
         })
     }
@@ -434,6 +437,7 @@ async fn run_tool(mac: &Mac, engine: &Engine, tool: &str, args: Value) -> Result
         Request::ChatView => chat::view(zeron, &args).await,
         Request::ComposerInfo => composer::info(zeron, &args).await,
         Request::SetChatModel => composer::set_model(zeron, &args).await,
+        Request::ListSkills => composer::skills(zeron, &args).await,
         Request::Tool(tool) => tools::call(zeron, tool, args).await,
     };
     result.map_err(|e| format!("{e:#}"))

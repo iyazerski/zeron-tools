@@ -422,7 +422,7 @@ fn pick_harness(requested: Option<String>, harnesses: &[Harness]) -> Result<Stri
 }
 
 /// Claude Code when it's offered, else the first available harness.
-fn default_harness(harnesses: &[Harness]) -> Result<String> {
+pub(super) fn default_harness(harnesses: &[Harness]) -> Result<String> {
     harnesses
         .iter()
         .find(|h| h.id == "claude-code" && h.available())

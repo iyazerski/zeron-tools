@@ -458,6 +458,20 @@ a { color: inherit; text-decoration: none; }
 .send .i { width: 19px; height: 19px; }
 .send.stop .i { width: 12px; height: 12px; }
 .steer { text-align: center; font-size: 12.5px; color: var(--tertiary); }
+/* The `$` menu: a glass card over the composer, one line per skill. */
+.skill-menu {
+  max-width: 760px; width: 100%; margin: 0 auto; padding: 5px;
+  border-radius: 18px; max-height: min(300px, 38vh); overflow-y: auto; overscroll-behavior: contain;
+}
+.skill {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px;
+  padding: 0 10px; border-radius: 13px; text-align: left; font-size: 15px;
+}
+.skill:first-child, .skill:active { background: var(--control); }
+.skill .i { width: 17px; height: 17px; flex: none; color: var(--secondary); }
+.skill .name { flex: none; font-weight: 500; white-space: nowrap; }
+.skill .desc { flex: 1; min-width: 0; color: var(--tertiary); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-note { padding: 10px 12px; font-size: 14px; color: var(--tertiary); }
 .jump {
   align-self: center; width: 38px; height: 38px; border-radius: 50%;
   display: grid; place-items: center; color: var(--text);

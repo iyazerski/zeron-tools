@@ -207,6 +207,30 @@ pub struct Model {
     pub options: Vec<ModelOption>,
 }
 
+/// A `ListSkills` row: a skill the composer's `$` menu offers.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Skill {
+    pub name: String,
+    /// Its `SKILL.md`, or `harness-skill:<harness>:<name>` for one the agent
+    /// reports itself.
+    pub path: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Off when it's switched off in the agent's own settings.
+    pub enabled: bool,
+    /// How the agent runs it as a command, if it does.
+    #[serde(default)]
+    pub command: Option<SkillCommand>,
+}
+
+/// A skill's command; serialized in Zeron's field order, as prompt
+/// references carry it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillCommand {
+    pub name: String,
+    pub harness: String,
+}
+
 /// A model setting with fixed choices, like its context window.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelOption {

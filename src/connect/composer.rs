@@ -2,15 +2,17 @@
 //! phone: the checkout and branch, how full the context window is, and the
 //! model and reasoning, which the phone can change like the desktop picker
 //! (`crates/ui/src/pickers.rs` `update_chat_config`). A new chat's composer
-//! shows the footer of the project it will run in.
+//! shows the footer of the project it will run in. Typing `$` lists the
+//! agent's skills, as the desktop composer does.
 
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-use crate::zeron::types::{ChatConfig, Model};
-use crate::zeron::{Zeron, methods};
+use crate::zeron::types::{ChatConfig, Model, Skill, SkillCommand};
+use crate::zeron::{SkillScope, Zeron, methods};
 
 /// How long to wait for the transcript's first frame, which carries the
 /// context usage.
@@ -84,6 +86,64 @@ async fn context_usage(zeron: &Zeron, chat_id: &str) -> Result<Value> {
         .context("Zeron didn't send the transcript in time")??
         .context("the transcript stream ended early")?;
     Ok(first.get("contextUsage").cloned().unwrap_or(Value::Null))
+}
+
+/// Return the enabled skills of the chat's agent in its checkout, or without
+/// `chat`, of the `harness` a new chat will use in `project` (the global ones
+/// without a project). Each has the `ref` that invokes it from the prompt.
+pub async fn skills(zeron: &Zeron, args: &Value) -> Result<Value> {
+    let skills = if args.get("chat").is_some() {
+        let chat = zeron.chat(chat_arg(args)?).await?;
+        // A chat that never ran gets the default agent on its first turn.
+        let harness = match chat.harness() {
+            Some(harness) => harness.to_owned(),
+            None => super::tools::default_harness(&zeron.harnesses().await?)?,
+        };
+        zeron.skills(&harness, SkillScope::Chat(&chat.id)).await?
+    } else {
+        let harness = args
+            .get("harness")
+            .and_then(Value::as_str)
+            .filter(|h| !h.is_empty())
+            .context("harness is required")?;
+        let scope = match args.get("project").and_then(Value::as_str) {
+            Some(id) => SkillScope::Project(id),
+            None => SkillScope::Global,
+        };
+        zeron.skills(harness, scope).await?
+    };
+    let skills: Vec<Value> = skills
+        .iter()
+        .filter(|s| s.enabled)
+        .map(|s| json!({ "name": s.name, "description": s.description, "ref": invoke_ref(s) }))
+        .collect();
+    Ok(json!({ "skills": skills }))
+}
+
+/// What a prompt reference invokes (`Invocation::Skill` in Zeron, tagged
+/// `"kind": "skill"`), in the desktop composer's field order.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename = "skill")]
+struct SkillInvocation<'a> {
+    name: &'a str,
+    path: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<&'a SkillCommand>,
+}
+
+/// The prompt reference the desktop composer writes for a picked skill:
+/// `[$name](zeron-invoke:<hex of the invocation JSON>)`. The engine reads it
+/// when the turn starts and runs the skill the agent's way.
+fn invoke_ref(skill: &Skill) -> String {
+    let invocation = SkillInvocation {
+        name: &skill.name,
+        path: &skill.path,
+        command: skill.command.as_ref(),
+    };
+    // Straight from the structs: a `Value` would sort the keys.
+    let json = serde_json::to_vec(&invocation).expect("a struct of strings always serializes");
+    let hex: String = json.iter().map(|b| format!("{b:02x}")).collect();
+    format!("[${}](zeron-invoke:{hex})", skill.name)
 }
 
 /// Change a chat's `model` and/or `reasoning` for its next turns, like the
@@ -186,6 +246,21 @@ mod tests {
             "modelOptions": options, "sandbox": "workspace-write",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_skill_ref_is_the_desktops() {
+        let skill: Skill = serde_json::from_value(json!({
+            "name": "second-opinion", "path": "harness-skill:pi:second-opinion",
+            "description": "Consult", "enabled": true,
+            "command": { "name": "skill:second-opinion", "harness": "pi" },
+        }))
+        .unwrap();
+        // Copied from a prompt the desktop composer sent.
+        assert_eq!(
+            invoke_ref(&skill),
+            "[$second-opinion](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a227365636f6e642d6f70696e696f6e222c2270617468223a226861726e6573732d736b696c6c3a70693a7365636f6e642d6f70696e696f6e222c22636f6d6d616e64223a7b226e616d65223a22736b696c6c3a7365636f6e642d6f70696e696f6e222c226861726e657373223a227069227d7d)"
+        );
     }
 
     #[test]

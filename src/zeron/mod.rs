@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use self::ipc::{Ipc, Subscription};
 use self::transcript::Entry;
-use self::types::{Chat, Device, Harness, Model, Session, SidebarPreferences, Space};
+use self::types::{Chat, Device, Harness, Model, Session, SidebarPreferences, Skill, Space};
 
 /// The engine methods used here (`crates/rpc/src/lib.rs` `methods`).
 pub mod methods {
@@ -33,6 +33,7 @@ pub mod methods {
     pub const LIST_HARNESSES: &str = "ListHarnesses";
     pub const LIST_MODELS: &str = "ListModels";
     pub const LIST_REFS: &str = "ListRefs";
+    pub const LIST_SKILLS: &str = "ListSkills";
     pub const MUTATE: &str = "Mutate";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
 }
@@ -143,6 +144,18 @@ impl Zeron {
         parse(methods::LIST_MODELS, value)
     }
 
+    /// The skills `harness` offers in `scope`.
+    pub async fn skills(&self, harness: &str, scope: SkillScope<'_>) -> Result<Vec<Skill>> {
+        let mut params = json!({ "harness": harness });
+        match scope {
+            SkillScope::Chat(id) => params["chatId"] = json!(id),
+            SkillScope::Project(id) => params["spaceId"] = json!(id),
+            SkillScope::Global => {}
+        }
+        let value = self.call(methods::LIST_SKILLS, params).await?;
+        parse(methods::LIST_SKILLS, value)
+    }
+
     /// The chat's whole transcript, from its host device.
     pub async fn transcript(&self, chat: &Chat) -> Result<Vec<Entry>> {
         let params = json!({ "chatId": chat.id, "targetDeviceId": chat.device_id });
@@ -188,6 +201,17 @@ impl Zeron {
         let chats = self.chats().await?;
         find_chat(&chats, key).cloned()
     }
+}
+
+/// Where to look for skills: besides the global ones, a checkout's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillScope<'a> {
+    /// The checkout of the chat with this id.
+    Chat(&'a str),
+    /// The folder of the project (space) with this id.
+    Project(&'a str),
+    /// Only the global ones.
+    Global,
 }
 
 /// Parse a reply of `method` into `T`.
