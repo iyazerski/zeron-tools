@@ -1,6 +1,6 @@
 [package]
 name = "zeron-tools"
-version = "0.11.4"
+version = "0.11.5"
 edition = "2024"
 publish = false
 description = "A background service for Zeron: archive old chats, title untitled ones, and link the running app to a relay for phone access"
