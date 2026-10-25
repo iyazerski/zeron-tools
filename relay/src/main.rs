@@ -33,11 +33,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use url::Url;
 use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
-use zeron_relay_proto::{CONNECT_PATH, Notice, NoticeKind};
+use zeron_relay_proto::{CONNECT_PATH, Notice};
 
 use auth::Auth;
 use hub::Hub;
-use push::{Payload, Push, Subscription};
+use push::{Kind, Payload, Push, Subscription};
 use store::{Machine, Store};
 
 /// The app's files: plain HTML, CSS, and JS, no build step.
@@ -94,6 +94,9 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
+/// The most characters in a Mac's name.
+const MAX_MACHINE_NAME: usize = 60;
+
 #[derive(Parser)]
 #[command(version, about)]
 struct Opts {
@@ -112,6 +115,7 @@ struct Opts {
     setup_token: Option<String>,
 }
 
+/// The state every handler shares.
 #[derive(Clone)]
 struct App {
     store: Arc<Store>,
@@ -221,13 +225,16 @@ async fn check_origin(State(app): State<App>, request: Request, next: Next) -> R
     next.run(request).await
 }
 
+/// Refuse calls without a valid session cookie.
 async fn require_session(State(app): State<App>, request: Request, next: Next) -> Response {
-    match auth::session_cookie(request.headers()) {
-        Some(token) if app.store.session_valid(token) => next.run(request).await,
-        _ => failure(StatusCode::UNAUTHORIZED, "sign in first"),
+    if signed_in(&app, request.headers()) {
+        next.run(request).await
+    } else {
+        failure(StatusCode::UNAUTHORIZED, "sign in first")
     }
 }
 
+/// Whether the request carries a valid session cookie.
 fn signed_in(app: &App, headers: &HeaderMap) -> bool {
     auth::session_cookie(headers).is_some_and(|t| app.store.session_valid(t))
 }
@@ -337,7 +344,7 @@ struct AddMachine {
 /// Add a Mac and return the command that connects it (its token is shown once).
 async fn add_machine(State(app): State<App>, Json(body): Json<AddMachine>) -> Response {
     let name = body.name.trim();
-    if name.is_empty() || name.chars().count() > 60 {
+    if name.is_empty() || name.chars().count() > MAX_MACHINE_NAME {
         return failure(StatusCode::BAD_REQUEST, "give the Mac a short name");
     }
     match app.store.add_machine(name) {
@@ -399,15 +406,10 @@ fn payload(machine: &Machine, notice: Notice, several: bool) -> Payload {
     } else {
         notice.body
     };
-    let kind = match notice.kind {
-        NoticeKind::Finished => "finished",
-        NoticeKind::Input => "input",
-        NoticeKind::Failed => "failed",
-    };
     Payload {
         title: notice.title,
         body,
-        kind: kind.into(),
+        kind: notice.kind.into(),
         machine: Some(machine.id.clone()),
         chat: Some(notice.chat),
     }
@@ -436,7 +438,7 @@ async fn push_test(State(app): State<App>, Json(e): Json<Endpoint>) -> Response 
     let payload = Payload {
         title: "Notifications work".into(),
         body: "You'll hear from your Macs when a chat finishes or needs you.".into(),
-        kind: "test".into(),
+        kind: Kind::Test,
         machine: None,
         chat: None,
     };
@@ -461,6 +463,7 @@ fn failure(status: StatusCode, error: impl Into<String>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeron_relay_proto::NoticeKind;
 
     #[test]
     fn notifications_name_the_mac_only_when_there_are_several() {
@@ -477,13 +480,10 @@ mod tests {
         let one = payload(&mac, notice.clone(), false);
         assert_eq!(one.body, "Needs your answer: where?");
         assert_eq!(
-            (
-                one.kind.as_str(),
-                one.machine.as_deref(),
-                one.chat.as_deref()
-            ),
-            ("input", Some("m"), Some("c"))
+            (one.kind, one.machine.as_deref(), one.chat.as_deref()),
+            (Kind::Input, Some("m"), Some("c"))
         );
+        assert_eq!(serde_json::to_value(&one).unwrap()["kind"], "input");
         let several = payload(&mac, notice, true);
         assert_eq!(several.body, "Work Mac · Needs your answer: where?");
     }

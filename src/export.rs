@@ -15,15 +15,18 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use clap::ValueEnum;
 use serde::Serialize;
 
+use crate::paths::{expand_tilde, short_path};
+use crate::text::short_id;
 use crate::zeron::transcript::{self, Entry, Part, RenderOptions, Rendered, Role};
 use crate::zeron::types::{Chat, Space};
 use crate::zeron::{Zeron, find_chat};
 
-#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// How exported chats are written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
     /// One document per chat: metadata list, then a heading per message
     Markdown,
@@ -32,6 +35,7 @@ pub enum Format {
 }
 
 impl Format {
+    /// The file extension for one chat in this format.
     pub fn extension(self) -> &'static str {
         match self {
             Self::Markdown => "md",
@@ -41,6 +45,7 @@ impl Format {
 }
 
 /// Which chats to export, and how.
+#[derive(Debug)]
 pub struct Opts {
     /// Chat ids or id prefixes.
     pub chats: Vec<String>,
@@ -78,7 +83,9 @@ pub async fn run(zeron: &Zeron, opts: Opts) -> Result<()> {
         .filter(|c| !(opts.skip_archived && c.archived))
         .collect();
     selected.sort_by_key(|c| std::cmp::Reverse(c.last_activity()));
-    selected.truncate(opts.limit.unwrap_or(usize::MAX));
+    if let Some(limit) = opts.limit {
+        selected.truncate(limit);
+    }
     selected.sort_by_key(|c| c.created_at);
     if let Some(dir) = &opts.output {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -122,7 +129,7 @@ pub async fn run(zeron: &Zeron, opts: Opts) -> Result<()> {
 
 /// The project named `arg` (case-insensitive) or at folder `arg`.
 fn find_space<'a>(spaces: &'a [Space], arg: &str) -> Result<&'a Space> {
-    let folder = crate::expand_tilde(arg);
+    let folder = expand_tilde(arg);
     let folder = folder.canonicalize().unwrap_or(folder);
     spaces
         .iter()
@@ -244,10 +251,15 @@ impl ExportedChat {
         }
     }
 
+    /// The chat as one document in `format`, ending in a newline.
     pub fn render(&self, format: Format) -> Result<String> {
         Ok(match format {
             Format::Markdown => self.markdown(),
-            Format::Jsonl => serde_json::to_string(self)? + "\n",
+            Format::Jsonl => {
+                let mut line = serde_json::to_string(self)?;
+                line.push('\n');
+                line
+            }
         })
     }
 
@@ -275,13 +287,33 @@ impl ExportedChat {
             "{}-{}-{}.{}",
             self.created_at.with_timezone(&Local).format("%Y-%m-%d"),
             slug.get(..60).unwrap_or(&slug).trim_end_matches('-'),
-            crate::short_id(&self.id),
+            short_id(&self.id),
             format.extension()
         )
     }
 
     fn markdown(&self) -> String {
         let mut out = format!("# {}\n\n", self.title.as_deref().unwrap_or("Untitled"));
+        out.push_str(&self.metadata().join("\n"));
+        out.push('\n');
+        let mut copied_before = false;
+        for message in &self.messages {
+            // One blank line between blocks, however the previous one ended.
+            out.truncate(out.trim_end().len());
+            out.push_str("\n\n");
+            if copied_before && !message.copied {
+                out.push_str("---\n\n*Forked here. Messages below are this chat's own.*\n\n");
+            }
+            copied_before = message.copied;
+            message.write_markdown(&mut out);
+        }
+        out.truncate(out.trim_end().len());
+        out.push('\n');
+        out
+    }
+
+    /// The markdown list under the title: ids, place, agent, time, fork.
+    fn metadata(&self) -> Vec<String> {
         let mut meta = vec![format!("- Chat: {}", self.id)];
         match (&self.project, &self.cwd) {
             (Some(p), Some(cwd)) => meta.push(format!("- Project: {p} ({})", tilde(cwd))),
@@ -316,57 +348,7 @@ impl ExportedChat {
                 )
             });
         }
-        out.push_str(&meta.join("\n"));
-        out.push('\n');
-        let mut copied_before = false;
-        for em in &self.messages {
-            let m = &em.message;
-            // One blank line between blocks, however the previous one ended.
-            out.truncate(out.trim_end().len());
-            out.push_str("\n\n");
-            if copied_before && !em.copied {
-                out.push_str("---\n\n*Forked here. Messages below are this chat's own.*\n\n");
-            }
-            copied_before = em.copied;
-            let role = match (&em.from_chat, m.role) {
-                (Some(from), _) => format!(
-                    "Message from chat {} ({})",
-                    from.title,
-                    crate::short_id(&from.id)
-                ),
-                (None, Role::User) => "User".into(),
-                (None, Role::Assistant) => "Assistant".into(),
-                (None, Role::System | Role::Other) => "System".into(),
-            };
-            let at = DateTime::from_timestamp_millis(m.created_at)
-                .map(local)
-                .unwrap_or_default();
-            let copied = if em.copied { ", copied" } else { "" };
-            let _ = write!(out, "## {role} ({at}{copied})\n\n");
-            if let Some(reasoning) = &m.reasoning {
-                out.push_str("Reasoning:\n\n");
-                for line in reasoning.lines() {
-                    out.push_str(if line.is_empty() { ">" } else { "> " });
-                    out.push_str(line);
-                    out.push('\n');
-                }
-                out.push('\n');
-            }
-            if !m.text.is_empty() {
-                out.push_str(demote_headings(&m.text).trim_end());
-                out.push_str("\n\n");
-            }
-            for (label, lines) in [("Tools", &m.tools), ("Errors", &m.errors)] {
-                if !lines.is_empty() {
-                    let _ = writeln!(out, "{label}:");
-                    for line in lines {
-                        let _ = writeln!(out, "- {}", line.replace('\n', " "));
-                    }
-                    out.push('\n');
-                }
-            }
-        }
-        out.trim_end().to_owned() + "\n"
+        meta
     }
 }
 
@@ -383,6 +365,49 @@ impl ExportedMessage {
             message,
             from_chat,
             copied,
+        }
+    }
+
+    /// Append the message as a markdown section: heading, reasoning, text,
+    /// then its tool and error lists.
+    fn write_markdown(&self, out: &mut String) {
+        let m = &self.message;
+        let at = DateTime::from_timestamp_millis(m.created_at)
+            .map(local)
+            .unwrap_or_default();
+        let copied = if self.copied { ", copied" } else { "" };
+        let _ = write!(out, "## {} ({at}{copied})\n\n", self.sender());
+        if let Some(reasoning) = &m.reasoning {
+            out.push_str("Reasoning:\n\n");
+            for line in reasoning.lines() {
+                out.push_str(if line.is_empty() { ">" } else { "> " });
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push('\n');
+        }
+        if !m.text.is_empty() {
+            out.push_str(demote_headings(&m.text).trim_end());
+            out.push_str("\n\n");
+        }
+        for (label, lines) in [("Tools", &m.tools), ("Errors", &m.errors)] {
+            if !lines.is_empty() {
+                let _ = writeln!(out, "{label}:");
+                for line in lines {
+                    let _ = writeln!(out, "- {}", line.replace('\n', " "));
+                }
+                out.push('\n');
+            }
+        }
+    }
+
+    /// Who the message is from, as its heading names them.
+    fn sender(&self) -> String {
+        match (&self.from_chat, self.message.role) {
+            (Some(from), _) => format!("Message from chat {} ({})", from.title, short_id(&from.id)),
+            (None, Role::User) => "User".into(),
+            (None, Role::Assistant) => "Assistant".into(),
+            (None, Role::System | Role::Other) => "System".into(),
         }
     }
 }
@@ -467,7 +492,7 @@ fn local_midnight(arg: &str, plus_days: i64) -> Result<DateTime<Utc>> {
         .with_context(|| format!("expected YYYY-MM-DD, or an age like 30d or 4w: {arg:?}"))?
         + Duration::days(plus_days);
     let Some(t) = Local
-        .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap_or_default())
+        .from_local_datetime(&date.and_time(NaiveTime::MIN))
         .earliest()
     else {
         bail!("{arg} has no local midnight");
@@ -509,7 +534,7 @@ fn local(t: DateTime<Utc>) -> String {
 }
 
 fn tilde(path: &str) -> String {
-    crate::short_path(Path::new(path))
+    short_path(Path::new(path))
 }
 
 #[cfg(test)]

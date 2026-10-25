@@ -14,6 +14,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, watch};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
 
+use crate::text::one_line;
 use crate::zeron::transcript::{self, RenderOptions};
 use crate::zeron::types::{Session, SessionStatus};
 use crate::zeron::{Zeron, methods};
@@ -26,20 +27,41 @@ const RETRY: Duration = Duration::from_secs(5);
 const NOTICE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long reading the Mac's idle time may take.
 const IOREG_TIMEOUT: Duration = Duration::from_secs(5);
+/// The most characters in a notice's body.
+const BODY_CHARS: usize = 240;
+
+/// When to report chats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyWhen {
+    /// Only while nobody uses the Mac: at it, you see the chat yourself.
+    Away,
+    /// Whether or not someone uses the Mac.
+    Always,
+}
+
+impl NotifyWhen {
+    /// Whether a notice may go out now.
+    async fn allows_now(self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::Away => away().await,
+        }
+    }
+}
 
 /// Follow chat statuses whenever Zeron runs, and send notices for changes.
 pub async fn run(
     zeron: Arc<Zeron>,
     mut engine: watch::Receiver<Engine>,
     notices: mpsc::Sender<Notice>,
-    always: bool,
+    notify: NotifyWhen,
 ) {
     loop {
         // An outdated Zeron may speak another IPC, so it isn't watched either.
         if engine.wait_for(Engine::is_running).await.is_err() {
             return;
         }
-        if let Err(e) = watch_once(&zeron, &notices, always).await {
+        if let Err(e) = watch_once(&zeron, &notices, notify).await {
             // Zeron quitting ends the stream too; the engine log covers that.
             if engine.borrow().is_running() {
                 eprintln!("notifications paused: {e:#}");
@@ -49,10 +71,11 @@ pub async fn run(
     }
 }
 
+/// Follow one `WatchSessions` stream until it ends.
 async fn watch_once(
     zeron: &Arc<Zeron>,
     notices: &mpsc::Sender<Notice>,
-    always: bool,
+    notify: NotifyWhen,
 ) -> Result<()> {
     let mut stream = zeron.subscribe(methods::WATCH_SESSIONS, json!({})).await?;
     // The first snapshot is the baseline: nothing has changed yet.
@@ -64,35 +87,47 @@ async fn watch_once(
             .into_iter()
             .map(|s| (format!("{}/{}", s.chat_id, s.device_id), s))
             .collect();
-        let changes: Vec<(String, NoticeKind)> = known
-            .as_ref()
-            .into_iter()
-            .flat_map(|previous| {
-                current.iter().filter_map(|(key, now)| {
-                    let kind = change(previous.get(key)?, now)?;
-                    Some((now.chat_id.clone(), kind))
-                })
-            })
-            .collect();
-        if !changes.is_empty() && (always || away().await) {
-            for (chat, kind) in changes {
-                // Read the chat off the stream's path: the engine's status
-                // watch keeps only its latest value, so a slow read here
-                // would make it skip transitions.
-                let (zeron, notices) = (zeron.clone(), notices.clone());
-                tokio::spawn(async move {
-                    match tokio::time::timeout(NOTICE_TIMEOUT, notice(&zeron, &chat, kind)).await {
-                        // A full queue means the relay has been away for long; drop it.
-                        Ok(Ok(notice)) => _ = notices.try_send(notice),
-                        Ok(Err(e)) => eprintln!("notification for {chat}: {e:#}"),
-                        Err(_) => eprintln!("notification for {chat}: Zeron didn't answer in time"),
-                    }
-                });
+        if let Some(previous) = &known {
+            let changes = changes(previous, &current);
+            if !changes.is_empty() && notify.allows_now().await {
+                for (chat, kind) in changes {
+                    spawn_notice(zeron.clone(), notices.clone(), chat, kind);
+                }
             }
         }
         known = Some(current);
     }
     bail!("the engine closed the session stream")
+}
+
+/// The notices the move from `previous` to `current` sessions (by
+/// `chat/device`) deserves, as chat ids and kinds.
+fn changes(
+    previous: &HashMap<String, Session>,
+    current: &HashMap<String, Session>,
+) -> Vec<(String, NoticeKind)> {
+    current
+        .iter()
+        .filter_map(|(key, now)| {
+            let kind = change(previous.get(key)?, now)?;
+            Some((now.chat_id.clone(), kind))
+        })
+        .collect()
+}
+
+/// Build and queue the notice for `chat` in its own task.
+fn spawn_notice(zeron: Arc<Zeron>, notices: mpsc::Sender<Notice>, chat: String, kind: NoticeKind) {
+    // Read the chat off the stream's path: the engine's status watch keeps
+    // only its latest value, so a slow read there would make it skip
+    // transitions.
+    tokio::spawn(async move {
+        match tokio::time::timeout(NOTICE_TIMEOUT, notice(&zeron, &chat, kind)).await {
+            // A full queue means the relay has been away for long; drop it.
+            Ok(Ok(notice)) => _ = notices.try_send(notice),
+            Ok(Err(e)) => eprintln!("notification for {chat}: {e:#}"),
+            Err(_) => eprintln!("notification for {chat}: Zeron didn't answer in time"),
+        }
+    });
 }
 
 /// Which notice, if any, a session's move from `before` to `now` deserves.
@@ -126,28 +161,29 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
     let chat = zeron.chat(chat_id).await?;
     let body = match kind {
         NoticeKind::Failed => "The turn failed.".to_owned(),
-        NoticeKind::Input | NoticeKind::Finished => {
+        NoticeKind::Input => {
             let entries = zeron.transcript(&chat).await?;
             let rendered = transcript::render(&entries, RenderOptions::default());
-            if kind == NoticeKind::Input {
-                let pending = transcript::pending_input(&rendered).unwrap_or_default();
-                let question = pending["questions"][0]["question"]
-                    .as_str()
-                    .unwrap_or_default();
-                format!("Needs your answer: {}", question.trim())
-            } else {
-                rendered
-                    .last()
-                    .map(|m| m.text.trim().to_owned())
-                    .unwrap_or_default()
-            }
+            let pending = transcript::pending_input(&rendered).unwrap_or_default();
+            let question = pending["questions"][0]["question"]
+                .as_str()
+                .unwrap_or_default();
+            format!("Needs your answer: {}", question.trim())
+        }
+        NoticeKind::Finished => {
+            let entries = zeron.transcript(&chat).await?;
+            let rendered = transcript::render(&entries, RenderOptions::default());
+            rendered
+                .last()
+                .map(|m| m.text.trim().to_owned())
+                .unwrap_or_default()
         }
     };
     Ok(Notice {
         kind,
         chat: chat.id.clone(),
         title: chat.title().unwrap_or("Untitled chat").trim().to_owned(),
-        body: clip(&body, 240),
+        body: one_line(&body, BODY_CHARS),
     })
 }
 
@@ -170,15 +206,6 @@ fn hid_idle(ioreg: &str) -> Option<Duration> {
     let line = ioreg.lines().find(|l| l.contains("\"HIDIdleTime\""))?;
     let nanos = line.rsplit('=').next()?.trim().parse().ok()?;
     Some(Duration::from_nanos(nanos))
-}
-
-/// `text` on one line, at most `max` characters.
-fn clip(text: &str, max: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    match flat.char_indices().nth(max) {
-        Some((i, _)) => format!("{}…", &flat[..i]),
-        None => flat,
-    }
 }
 
 #[cfg(test)]

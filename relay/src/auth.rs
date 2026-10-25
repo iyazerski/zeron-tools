@@ -6,7 +6,7 @@
 //! a sign-in that's under way.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -29,15 +29,23 @@ const FLOW_TTL: Duration = Duration::from_secs(300);
 /// Unfinished flows kept at most; older ones are dropped first.
 const MAX_FLOWS: usize = 64;
 
+/// A ceremony's server-side state, between its start and finish.
 enum Flow {
     Register(PasskeyRegistration),
     Login(PasskeyAuthentication),
 }
 
+/// A started [`Flow`], and when it started.
+struct Pending {
+    at: Instant,
+    flow: Flow,
+}
+
+/// Passkey sign-in and creation for the relay's one user.
 pub struct Auth {
     webauthn: Webauthn,
     setup_token: Option<String>,
-    flows: Mutex<HashMap<String, (Instant, Flow)>>,
+    flows: Mutex<HashMap<String, Pending>>,
 }
 
 /// A started ceremony: the browser passes `options` to WebAuthn and sends
@@ -49,6 +57,7 @@ pub struct Started<T> {
 }
 
 impl Auth {
+    /// Set up WebAuthn for passkeys bound to `public_url`'s host.
     pub fn new(public_url: &Url, setup_token: Option<String>) -> Result<Self> {
         let rp_id = public_url
             .host_str()
@@ -70,10 +79,12 @@ impl Auth {
         matches!((&self.setup_token, token), (Some(want), Some(got)) if hash(want) == hash(got))
     }
 
+    /// Whether a setup token is configured.
     pub fn has_setup_token(&self) -> bool {
         self.setup_token.is_some()
     }
 
+    /// Start creating a passkey.
     pub fn start_register(&self, store: &Store) -> Result<Started<CreationChallengeResponse>> {
         let existing = store
             .passkeys()
@@ -87,11 +98,12 @@ impl Auth {
             Some(existing),
         )?;
         Ok(Started {
-            flow: self.keep(Flow::Register(state))?,
+            flow: self.keep(Flow::Register(state)),
             options,
         })
     }
 
+    /// Finish creating a passkey and save it.
     pub fn finish_register(
         &self,
         store: &Store,
@@ -108,6 +120,7 @@ impl Auth {
         store.add_passkey(passkey)
     }
 
+    /// Start signing in with a saved passkey.
     pub fn start_login(&self, store: &Store) -> Result<Started<RequestChallengeResponse>> {
         let passkeys = store.passkeys();
         if passkeys.is_empty() {
@@ -115,11 +128,12 @@ impl Auth {
         }
         let (options, state) = self.webauthn.start_passkey_authentication(&passkeys)?;
         Ok(Started {
-            flow: self.keep(Flow::Login(state))?,
+            flow: self.keep(Flow::Login(state)),
             options,
         })
     }
 
+    /// Finish signing in, and record the passkey's new state.
     pub fn finish_login(
         &self,
         store: &Store,
@@ -137,30 +151,38 @@ impl Auth {
     }
 
     /// Remember `flow` under a fresh id, dropping expired and excess flows.
-    fn keep(&self, flow: Flow) -> Result<String> {
+    fn keep(&self, flow: Flow) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         let mut flows = self.lock();
-        flows.retain(|_, (at, _)| at.elapsed() < FLOW_TTL);
+        flows.retain(|_, pending| pending.at.elapsed() < FLOW_TTL);
         while flows.len() >= MAX_FLOWS {
-            let oldest = flows
+            let Some(oldest) = flows
                 .iter()
-                .min_by_key(|(_, (at, _))| *at)
+                .min_by_key(|(_, pending)| pending.at)
                 .map(|(id, _)| id.clone())
-                .context("no flows")?;
+            else {
+                break;
+            };
             flows.remove(&oldest);
         }
-        flows.insert(id.clone(), (Instant::now(), flow));
-        Ok(id)
+        let pending = Pending {
+            at: Instant::now(),
+            flow,
+        };
+        flows.insert(id.clone(), pending);
+        id
     }
 
     /// Take the flow `id`, once, if it hasn't expired.
     fn take(&self, id: &str) -> Option<Flow> {
-        let (at, flow) = self.lock().remove(id)?;
-        (at.elapsed() < FLOW_TTL).then_some(flow)
+        let pending = self.lock().remove(id)?;
+        (pending.at.elapsed() < FLOW_TTL).then_some(pending.flow)
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, (Instant, Flow)>> {
-        self.flows.lock().unwrap_or_else(|e| e.into_inner())
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Pending>> {
+        self.flows
+            .lock()
+            .expect("the sign-in flows lock is poisoned")
     }
 }
 

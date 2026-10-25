@@ -22,9 +22,12 @@ mod tools;
 mod watch;
 
 pub use agent::{install, uninstall};
-pub use maintain::Opts as Upkeep;
+pub use maintain::Upkeep;
+pub use watch::NotifyWhen;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,6 +41,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use zeron_relay_proto::{CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
 
+use self::tools::{Tool, Unavailable};
 use crate::zeron::Zeron;
 
 /// How often to ping the relay. Proxies drop idle sockets, and a reply
@@ -45,6 +49,8 @@ use crate::zeron::Zeron;
 const PING_EVERY: Duration = Duration::from_secs(25);
 /// Reconnect if nothing came from the relay for this long.
 const SILENCE_LIMIT: Duration = Duration::from_secs(70);
+/// The first wait before reconnecting; it doubles after each quick failure.
+const MIN_BACKOFF: Duration = Duration::from_secs(1);
 /// The longest wait between reconnect attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// A connection that lasted this long worked, so the next reconnect starts
@@ -57,12 +63,24 @@ const TOOL_TIMEOUT: Duration = Duration::from_secs(25);
 /// Tool calls running at once; more wait. Bounds the work a hung Zeron
 /// piles up.
 const MAX_CALLS: usize = 16;
+/// Notices and replies buffered for the relay connection.
+const QUEUE: usize = 64;
 
 /// Where `connect` keeps the relay address and this Mac's token.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Link {
     pub relay: String,
     pub token: String,
+}
+
+// By hand, so logs never show the token.
+impl fmt::Debug for Link {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Link")
+            .field("relay", &self.relay)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Link {
@@ -103,11 +121,30 @@ impl Link {
     }
 }
 
+/// The relay link to use, and where to save it if it is new.
+#[derive(Debug, Clone)]
+pub struct RelayLink {
+    pub link: Link,
+    /// Where to save `link` once the relay accepts it; `None` when it was
+    /// loaded from there.
+    pub save_to: Option<PathBuf>,
+}
+
+/// How this `connect` was started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunMode {
+    /// From a terminal: a running `connect` or a rejected token is an error.
+    Manual,
+    /// By the launch agent: it waits for a running `connect` to stop, and a
+    /// rejected token ends the relay link for good, with a clean exit.
+    Agent,
+}
+
 /// Make sure this is the only `connect` for `data_dir`: two would keep
 /// replacing each other on the relay. The launch agent waits its turn (a
 /// manual run may be holding it); a manual run fails at once. Hold the
 /// returned file while connected.
-pub async fn single_instance(data_dir: &Path, agent: bool) -> Result<std::fs::File> {
+pub async fn single_instance(data_dir: &Path, mode: RunMode) -> Result<std::fs::File> {
     let path = data_dir.join("zeron-tools-connect.lock");
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -116,15 +153,15 @@ pub async fn single_instance(data_dir: &Path, agent: bool) -> Result<std::fs::Fi
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => return Ok(file),
-        Err(std::fs::TryLockError::Error(e)) => {
+    match (file.try_lock(), mode) {
+        (Ok(()), _) => return Ok(file),
+        (Err(std::fs::TryLockError::Error(e)), _) => {
             return Err(e).with_context(|| format!("locking {}", path.display()));
         }
-        Err(std::fs::TryLockError::WouldBlock) if !agent => bail!(
+        (Err(std::fs::TryLockError::WouldBlock), RunMode::Manual) => bail!(
             "connect already runs on this Mac (maybe in the background; stop it with zeron-tools connect --uninstall)"
         ),
-        Err(std::fs::TryLockError::WouldBlock) => {}
+        (Err(std::fs::TryLockError::WouldBlock), RunMode::Agent) => {}
     }
     eprintln!("another connect runs on this Mac; waiting for it to stop");
     tokio::task::spawn_blocking(move || file.lock().map(|()| file))
@@ -132,17 +169,14 @@ pub async fn single_instance(data_dir: &Path, agent: bool) -> Result<std::fs::Fi
         .with_context(|| format!("locking {}", path.display()))
 }
 
+/// What `connect` runs with.
 pub struct Opts {
     /// The relay link; without one, only the upkeep runs.
-    pub link: Option<Link>,
-    /// Where to save `link` once the relay accepts it, if it is new.
-    pub save_to: Option<PathBuf>,
+    pub relay: Option<RelayLink>,
     pub zeron: Zeron,
-    /// Notify even while the Mac is in use.
-    pub notify_always: bool,
+    pub notify: NotifyWhen,
     pub upkeep: Upkeep,
-    /// Running as the launch agent: a rejected token ends the relay link for good.
-    pub agent: bool,
+    pub mode: RunMode,
 }
 
 /// Run until the process is stopped, or the relay rejects the token of a
@@ -151,12 +185,12 @@ pub async fn run(opts: Opts) -> Result<()> {
     let zeron = Arc::new(opts.zeron);
     let engine = engine::spawn(zeron.clone());
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.clone(), opts.upkeep));
-    if let Some(link) = opts.link {
+    if let Some(RelayLink { link, save_to }) = opts.relay {
         let relay = Relay {
             link,
-            save_to: opts.save_to,
-            notify_always: opts.notify_always,
-            agent: opts.agent,
+            save_to,
+            notify: opts.notify,
+            mode: opts.mode,
         };
         relay.run(zeron, engine).await?;
     }
@@ -166,59 +200,52 @@ pub async fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
+/// The link to the relay, kept up by [`Relay::run`].
 struct Relay {
     link: Link,
+    /// Where to save `link` once the relay first accepts it.
     save_to: Option<PathBuf>,
-    notify_always: bool,
-    agent: bool,
+    notify: NotifyWhen,
+    mode: RunMode,
 }
 
 impl Relay {
     /// Stay connected to the relay until it rejects the token. Returns `Ok`
     /// then if running as the launch agent.
-    async fn run(self, zeron: Arc<Zeron>, mut engine: state::Receiver<Engine>) -> Result<()> {
-        let Self {
-            link,
-            mut save_to,
-            notify_always,
-            agent,
-        } = self;
-        let url = socket_url(&link.relay)?;
+    async fn run(mut self, zeron: Arc<Zeron>, mut engine: state::Receiver<Engine>) -> Result<()> {
+        let url = socket_url(&self.link.relay)?;
         let mac = Arc::new(Mac {
             zeron: zeron.clone(),
             slots: Semaphore::new(MAX_CALLS),
         });
         // Notices wait here while the relay is unreachable.
-        let (notices_tx, mut notices) = mpsc::channel(64);
-        tokio::spawn(watch::run(zeron, engine.clone(), notices_tx, notify_always));
-        let mut backoff = Duration::from_secs(1);
+        let (notices_tx, mut notices) = mpsc::channel(QUEUE);
+        tokio::spawn(watch::run(zeron, engine.clone(), notices_tx, self.notify));
+        let mut backoff = MIN_BACKOFF;
         loop {
             let mut connected = None;
-            let accepted = || -> Result<()> {
+            let result: Result<()> = async {
+                let socket = dial(&url, &self.link.token).await?;
+                eprintln!("connected to {url}");
                 connected = Some(Instant::now());
-                if let Some(path) = save_to.take() {
-                    link.save(&path)?;
-                    eprintln!(
-                        "saved the link to {}; next time run just zeron-tools connect",
-                        path.display()
-                    );
-                }
-                Ok(())
-            };
-            let result =
-                session(&url, &link.token, &mac, &mut engine, &mut notices, accepted).await;
+                self.save_accepted_link()?;
+                serve(socket, &mac, &mut engine, &mut notices).await
+            }
+            .await;
             if connected.is_some_and(|at| at.elapsed() >= STABLE_AFTER) {
-                backoff = Duration::from_secs(1);
+                backoff = MIN_BACKOFF;
             }
             match result {
                 Ok(()) => eprintln!("the relay closed the connection; reconnecting"),
                 Err(e) if rejected(&e) => {
                     let why = "the relay rejected this Mac's token; add the Mac again in the app";
-                    if agent {
-                        eprintln!("{why}");
-                        return Ok(());
+                    match self.mode {
+                        RunMode::Agent => {
+                            eprintln!("{why}");
+                            return Ok(());
+                        }
+                        RunMode::Manual => bail!(why),
                     }
-                    bail!(why)
                 }
                 Err(e) => eprintln!("relay: {e:#}"),
             }
@@ -226,27 +253,34 @@ impl Relay {
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     }
+
+    /// Save a new link, once: the relay just accepted it.
+    fn save_accepted_link(&mut self) -> Result<()> {
+        if let Some(path) = self.save_to.take() {
+            self.link.save(&path)?;
+            eprintln!(
+                "saved the link to {}; next time run just zeron-tools connect",
+                path.display()
+            );
+        }
+        Ok(())
+    }
 }
 
-/// Serve one connection to the relay until it ends. `Ok` means it was
-/// connected and then closed; an error may come from connecting.
-async fn session(
-    url: &str,
-    token: &str,
+/// Serve one connection to the relay until it ends. `Ok` means the relay
+/// closed it.
+async fn serve(
+    socket: Socket,
     mac: &Arc<Mac>,
     engine: &mut state::Receiver<Engine>,
     notices: &mut mpsc::Receiver<Notice>,
-    accepted: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let socket = dial(url, token).await?;
-    eprintln!("connected to {url}");
-    accepted()?;
     let (mut sink, mut stream) = socket.split();
     sink.send(text(&hello())?).await?;
     let now = engine.borrow_and_update().clone();
     sink.send(text(&Up::Engine(now))?).await?;
     // Replies from tool calls running in their own tasks.
-    let (replies_tx, mut replies) = mpsc::channel::<Up>(64);
+    let (replies_tx, mut replies) = mpsc::channel::<Up>(QUEUE);
     let mut ping = tokio::time::interval(PING_EVERY);
     let mut heard = Instant::now();
     loop {
@@ -256,19 +290,8 @@ async fn session(
                 match frame {
                     Some(Ok(Message::Text(body))) => {
                         let call: Call = serde_json::from_str(&body).context("bad call from the relay")?;
-                        let (mac, replies) = (mac.clone(), replies_tx.clone());
                         let now = engine.borrow().clone();
-                        tokio::spawn(async move {
-                            let result = match mac.slots.acquire().await {
-                                Ok(_slot) => tokio::time::timeout(TOOL_TIMEOUT, run_tool(&mac, &now, call.tool, call.args))
-                                    .await
-                                    .unwrap_or_else(|_| Err("Zeron didn't answer in time".into())),
-                                Err(_) => Err("connect is stopping".into()),
-                            };
-                            let reply = Up::Reply { id: call.id, result };
-                            // The connection may be gone by now; the relay times the call out.
-                            let _ = replies.send(reply).await;
-                        });
+                        spawn_call(mac.clone(), now, call, replies_tx.clone());
                     }
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Ok(_)) => {}
@@ -289,6 +312,29 @@ async fn session(
             }
         }
     }
+}
+
+/// Run `call` in its own task, within [`MAX_CALLS`] and [`TOOL_TIMEOUT`],
+/// and send its reply to `replies`.
+fn spawn_call(mac: Arc<Mac>, engine: Engine, call: Call, replies: mpsc::Sender<Up>) {
+    tokio::spawn(async move {
+        let result = match mac.slots.acquire().await {
+            Ok(_slot) => {
+                let run = run_tool(&mac, &engine, &call.tool, call.args);
+                tokio::time::timeout(TOOL_TIMEOUT, run)
+                    .await
+                    .unwrap_or_else(|_| Err("Zeron didn't answer in time".into()))
+            }
+            Err(_) => Err("connect is stopping".into()),
+        };
+        // The connection may be gone by now; the relay times the call out.
+        let _ = replies
+            .send(Up::Reply {
+                id: call.id,
+                result,
+            })
+            .await;
+    });
 }
 
 /// Check that the relay accepts `link`'s token, then disconnect.
@@ -334,39 +380,68 @@ struct Mac {
     slots: Semaphore,
 }
 
+/// A call the phone may make, by its tool name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Request {
+    /// Start Zeron; works while it's closed.
+    OpenZeron,
+    /// Quit and start Zeron; works while it's closed or hangs.
+    RestartZeron,
+    /// The chat screen ([`chat::view`]).
+    ChatView,
+    /// The composer footer ([`composer::info`]).
+    ComposerInfo,
+    /// The composer's model picker ([`composer::set_model`]).
+    SetChatModel,
+    /// One of Zeron's own tools ([`tools`]).
+    Tool(Tool),
+}
+
+impl Request {
+    /// Whether it needs a Zeron that is open and readable.
+    fn needs_zeron(self) -> bool {
+        !matches!(self, Self::OpenZeron | Self::RestartZeron)
+    }
+}
+
+impl FromStr for Request {
+    type Err = Unavailable;
+
+    fn from_str(name: &str) -> Result<Self, Unavailable> {
+        Ok(match name {
+            "open_zeron" => Self::OpenZeron,
+            "restart_zeron" => Self::RestartZeron,
+            "chat_view" => Self::ChatView,
+            "composer_info" => Self::ComposerInfo,
+            "set_chat_model" => Self::SetChatModel,
+            other => Self::Tool(other.parse()?),
+        })
+    }
+}
+
 /// Run one allowed tool and return its result, or why it can't run.
-/// `open_zeron` and `restart_zeron` work while Zeron is closed or hangs.
-/// `chat_view` ([`chat`]), `composer_info`, and `set_chat_model`
-/// ([`composer`]) serve the chat screen; the rest are [`tools`].
-async fn run_tool(mac: &Mac, engine: &Engine, tool: String, args: Value) -> Result<Value, String> {
-    let started = match tool.as_str() {
-        "open_zeron" => Some(engine::open().await),
-        "restart_zeron" => Some(engine::restart().await),
-        _ => None,
-    };
-    if let Some(started) = started {
-        return started
-            .map(|()| json!({ "opening": true }))
-            .map_err(|e| format!("{e:#}"));
-    }
-    let screen = matches!(
-        tool.as_str(),
-        "chat_view" | "composer_info" | "set_chat_model"
-    );
-    if !screen && !tools::has(&tool) {
-        return Err(format!("tool {tool} is not available from the phone"));
-    }
-    if let Some(why) = engine::refusal(engine) {
+async fn run_tool(mac: &Mac, engine: &Engine, tool: &str, args: Value) -> Result<Value, String> {
+    let request: Request = tool.parse().map_err(|e: Unavailable| e.to_string())?;
+    if request.needs_zeron()
+        && let Some(why) = engine::refusal(engine)
+    {
         return Err(why);
     }
     let zeron = &mac.zeron;
-    let result = match tool.as_str() {
-        "chat_view" => chat::view(zeron, &args).await,
-        "composer_info" => composer::info(zeron, &args).await,
-        "set_chat_model" => composer::set_model(zeron, &args).await,
-        _ => tools::call(zeron, &tool, args).await,
+    let result = match request {
+        Request::OpenZeron => engine::open().await.map(|()| opening()),
+        Request::RestartZeron => engine::restart().await.map(|()| opening()),
+        Request::ChatView => chat::view(zeron, &args).await,
+        Request::ComposerInfo => composer::info(zeron, &args).await,
+        Request::SetChatModel => composer::set_model(zeron, &args).await,
+        Request::Tool(tool) => tools::call(zeron, tool, args).await,
     };
     result.map_err(|e| format!("{e:#}"))
+}
+
+/// The answer to a call that starts Zeron.
+fn opening() -> Value {
+    json!({ "opening": true })
 }
 
 /// The relay's WebSocket URL for an `https://` (or local `http://`) address.
@@ -411,8 +486,8 @@ mod tests {
             zeron: Arc::new(Zeron::new(9, Path::new("/nonexistent"))),
             slots: Semaphore::new(MAX_CALLS),
         };
-        let call = |engine: Engine, tool: &str| {
-            let (mac, tool) = (&mac, tool.to_owned());
+        let call = |engine: Engine, tool: &'static str| {
+            let mac = &mac;
             async move { run_tool(mac, &engine, tool, json!({})).await }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
@@ -453,7 +528,8 @@ mod tests {
             token: "t".into(),
         };
         link.save(&path).unwrap();
-        assert_eq!(Link::load(&path).unwrap(), Some(link));
+        assert_eq!(Link::load(&path).unwrap(), Some(link.clone()));
+        assert!(!format!("{link:?}").contains("\"t\""), "{link:?}");
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);

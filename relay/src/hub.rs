@@ -5,15 +5,16 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use tokio::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, bail};
-use axum::extract::ws::{Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{Duration, Instant};
 use zeron_relay_proto::{Call, Engine, Notice, PROTOCOL, Up};
 
 use crate::store::Machine;
@@ -25,9 +26,15 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 const SILENCE_LIMIT: Duration = Duration::from_secs(70);
 /// The Mac must say hello this soon after connecting.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+/// Calls queued for one Mac before callers wait.
+const CALL_QUEUE: usize = 64;
+/// The WebSocket close code for a connection this relay won't serve.
+const POLICY_VIOLATION: u16 = 1008;
 
+/// Calls waiting for a Mac's reply, by call id.
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
+/// One Mac's live connection.
 struct Link {
     /// Tells this connection apart from a newer one for the same Mac.
     conn: u64,
@@ -47,6 +54,7 @@ pub struct Status {
     pub engine: Option<Engine>,
 }
 
+/// The connected Macs, by machine id.
 #[derive(Default)]
 pub struct Hub {
     links: Mutex<HashMap<String, Link>>,
@@ -54,6 +62,7 @@ pub struct Hub {
 }
 
 impl Hub {
+    /// Whether `machine` is connected, and what it reported.
     pub fn status(&self, machine: &str) -> Status {
         match self.lock().get(machine) {
             Some(link) => Status {
@@ -126,22 +135,9 @@ impl Hub {
         notify: impl Fn(&Machine, Notice) + Send,
     ) -> Result<()> {
         let (mut sink, mut stream) = socket.split();
-        let version = match tokio::time::timeout(HELLO_TIMEOUT, stream.next()).await {
-            Ok(Some(Ok(Message::Text(body)))) => match serde_json::from_str(&body)? {
-                Up::Hello { protocol, version } if protocol == PROTOCOL => version,
-                Up::Hello { version, .. } => {
-                    let reason = format!(
-                        "zeron-tools {version} speaks another relay protocol; update zeron-tools or the relay"
-                    );
-                    let _ = sink.send(close(&reason)).await;
-                    bail!(reason);
-                }
-                _ => bail!("expected a hello"),
-            },
-            _ => bail!("no hello"),
-        };
+        let version = hello(&mut sink, &mut stream).await?;
         let conn = self.next.fetch_add(1, Ordering::Relaxed);
-        let (calls_tx, mut calls) = mpsc::channel::<Call>(64);
+        let (calls_tx, mut calls) = mpsc::channel::<Call>(CALL_QUEUE);
         let pending = Pending::default();
         self.lock().insert(
             machine.id.clone(),
@@ -165,21 +161,10 @@ impl Hub {
                         heard = Instant::now();
                         match frame {
                             Some(Ok(Message::Text(body))) => match serde_json::from_str(&body) {
+                                Ok(up) => self.receive(machine, conn, &pending, up, &notify),
                                 // A frame this relay can't read: skip it, and
                                 // let a reply it held time out.
                                 Err(e) => eprintln!("{}: skipped a bad message: {e}", machine.name),
-                                Ok(Up::Reply { id, result }) => {
-                                    if let Some(waiter) = lock(&pending).remove(&id) {
-                                        let _ = waiter.send(result);
-                                    }
-                                }
-                                Ok(Up::Notify(notice)) => notify(machine, notice),
-                                Ok(Up::Engine(engine)) => {
-                                    if let Some(link) = self.lock().get_mut(&machine.id).filter(|l| l.conn == conn) {
-                                        link.engine = Some(engine);
-                                    }
-                                }
-                                Ok(Up::Hello { .. }) => {}
                             },
                             Some(Ok(Message::Close(_))) | None => return Ok(()),
                             Some(Ok(_)) => {}
@@ -212,8 +197,58 @@ impl Hub {
         result
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Link>> {
+    /// Handle one message from connection `conn` of `machine`.
+    fn receive(
+        &self,
+        machine: &Machine,
+        conn: u64,
+        pending: &Pending,
+        up: Up,
+        notify: &impl Fn(&Machine, Notice),
+    ) {
+        match up {
+            Up::Reply { id, result } => {
+                if let Some(waiter) = lock(pending).remove(&id) {
+                    let _ = waiter.send(result);
+                }
+            }
+            Up::Notify(notice) => notify(machine, notice),
+            Up::Engine(engine) => {
+                let mut links = self.lock();
+                if let Some(link) = links.get_mut(&machine.id).filter(|l| l.conn == conn) {
+                    link.engine = Some(engine);
+                }
+            }
+            Up::Hello { .. } => {}
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Link>> {
         lock(&self.links)
+    }
+}
+
+/// Read the Mac's hello and return its zeron-tools version. A Mac on
+/// another protocol is told why before it's turned away.
+async fn hello(
+    sink: &mut SplitSink<WebSocket, Message>,
+    stream: &mut SplitStream<WebSocket>,
+) -> Result<String> {
+    let Ok(Some(Ok(Message::Text(body)))) =
+        tokio::time::timeout(HELLO_TIMEOUT, stream.next()).await
+    else {
+        bail!("no hello");
+    };
+    match serde_json::from_str(&body)? {
+        Up::Hello { protocol, version } if protocol == PROTOCOL => Ok(version),
+        Up::Hello { version, .. } => {
+            let reason = format!(
+                "zeron-tools {version} speaks another relay protocol; update zeron-tools or the relay"
+            );
+            let _ = sink.send(close(&reason)).await;
+            bail!(reason);
+        }
+        _ => bail!("expected a hello"),
     }
 }
 
@@ -229,14 +264,15 @@ impl Drop for Waiting<'_> {
     }
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().expect("the hub lock is poisoned")
 }
 
+/// A close frame that tells the Mac why it's turned away.
 fn close(reason: &str) -> Message {
-    Message::Close(Some(axum::extract::ws::CloseFrame {
-        code: 1008,
-        reason: reason.to_owned().into(),
+    Message::Close(Some(CloseFrame {
+        code: POLICY_VIOLATION,
+        reason: reason.into(),
     }))
 }
 

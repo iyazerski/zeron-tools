@@ -48,9 +48,10 @@ pub const DEFAULT_IPC_PORT: u16 = 27654;
 pub fn data_dir() -> PathBuf {
     std::env::var_os("ZERON_DATA_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| crate::home().join(".zeron"))
+        .unwrap_or_else(|| crate::paths::home().join(".zeron"))
 }
 
+/// A client for the running Zeron's engine.
 pub struct Zeron {
     ipc: Ipc,
 }

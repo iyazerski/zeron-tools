@@ -16,9 +16,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 
+use crate::text::{one_line, short_id};
 use crate::zeron::Zeron;
 use crate::zeron::types::{Chat, Space};
-use crate::{one_line, short_id};
 
 /// The chats this tool archived, each with its last activity then.
 #[derive(Debug)]
@@ -55,6 +55,11 @@ impl Memory {
         self.archived.get(&chat.id) == Some(&chat.last_activity())
     }
 
+    /// Remember that this tool archived `chat` as it is now.
+    fn remember(&mut self, chat: &Chat) {
+        self.archived.insert(chat.id.clone(), chat.last_activity());
+    }
+
     fn save(&self) -> Result<()> {
         let tmp = self.path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec_pretty(&self.archived)?)
@@ -81,9 +86,7 @@ pub async fn run(zeron: &Zeron, keep: usize, memory: &mut Memory) -> Result<usiz
         match zeron.mutate(op).await {
             Ok(_) => {
                 archived += 1;
-                memory
-                    .archived
-                    .insert(chat.id.clone(), chat.last_activity());
+                memory.remember(chat);
                 eprintln!(
                     "archived {}  {}  {}",
                     short_id(&chat.id),
@@ -211,7 +214,7 @@ mod tests {
         let path = dir.path().join("archived.json");
         let mut memory = Memory::load(&path).unwrap();
         let old = chat("old", None, 1);
-        memory.archived.insert(old.id.clone(), old.last_activity());
+        memory.remember(&old);
         memory.save().unwrap();
         let memory = Memory::load(&path).unwrap();
         assert!(memory.restored(&old));

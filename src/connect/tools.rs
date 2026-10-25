@@ -4,11 +4,15 @@
 //! (`crates/mcp/src/tools.rs`) and answer in the same shapes, cut to what
 //! the app uses: no waiting on turns (the app polls), no other devices, and
 //! new chats are always standalone. The raw IPC also opens terminals and
-//! writes files; only what's listed in [`call`] is reachable from the phone.
+//! writes files; only the [`Tool`]s are reachable from the phone.
+
+use std::fmt;
+use std::str::FromStr;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
 use crate::zeron::transcript::{self, RenderOptions};
@@ -25,40 +29,71 @@ const DEFAULT_SANDBOX: &str = "workspace-write";
 const PROJECTLESS_SCRATCH: &str = "projectless-scratch-v1";
 /// Where those folders go (`zeron_proto::projectless::SCRATCH_ROOT`).
 const SCRATCH_ROOT: &str = "~/.zeron/scratch";
+/// Chats `list_chats` returns without a `limit`, and at most.
+const DEFAULT_CHATS: usize = 50;
+const MAX_CHATS: usize = 500;
 
-/// Whether the phone may call `tool` through [`call`].
-pub fn has(tool: &str) -> bool {
-    matches!(
-        tool,
-        "list_chats"
-            | "list_projects"
-            | "list_harnesses"
-            | "list_models"
-            | "send_message"
-            | "create_chat"
-            | "interrupt_chat"
-            | "respond_to_input"
-            | "archive_chat"
-    )
+/// A Zeron tool the phone may call through [`call`], by its MCP name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    ListChats,
+    ListProjects,
+    ListHarnesses,
+    ListModels,
+    SendMessage,
+    CreateChat,
+    InterruptChat,
+    RespondToInput,
+    ArchiveChat,
 }
 
-/// Run one of the tools [`has`] lists.
-pub async fn call(zeron: &Zeron, tool: &str, args: Value) -> Result<Value> {
-    match tool {
-        "list_chats" => list_chats(zeron, parse(args)?).await,
-        "list_projects" => list_projects(zeron).await,
-        "list_harnesses" => list_harnesses(zeron).await,
-        "list_models" => list_models(zeron, parse(args)?).await,
-        "send_message" => send_message(zeron, parse(args)?).await,
-        "create_chat" => create_chat(zeron, parse(args)?).await,
-        "interrupt_chat" => interrupt_chat(zeron, parse(args)?).await,
-        "respond_to_input" => respond_to_input(zeron, parse(args)?).await,
-        "archive_chat" => archive_chat(zeron, parse(args)?).await,
-        _ => bail!("tool {tool} is not available from the phone"),
+impl FromStr for Tool {
+    type Err = Unavailable;
+
+    fn from_str(name: &str) -> Result<Self, Unavailable> {
+        Ok(match name {
+            "list_chats" => Self::ListChats,
+            "list_projects" => Self::ListProjects,
+            "list_harnesses" => Self::ListHarnesses,
+            "list_models" => Self::ListModels,
+            "send_message" => Self::SendMessage,
+            "create_chat" => Self::CreateChat,
+            "interrupt_chat" => Self::InterruptChat,
+            "respond_to_input" => Self::RespondToInput,
+            "archive_chat" => Self::ArchiveChat,
+            _ => return Err(Unavailable(name.to_owned())),
+        })
     }
 }
 
-fn parse<T: serde::de::DeserializeOwned>(args: Value) -> Result<T> {
+/// A tool name the phone may not call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unavailable(pub String);
+
+impl fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tool {} is not available from the phone", self.0)
+    }
+}
+
+impl std::error::Error for Unavailable {}
+
+/// Run `tool` with its JSON `args`.
+pub async fn call(zeron: &Zeron, tool: Tool, args: Value) -> Result<Value> {
+    match tool {
+        Tool::ListChats => list_chats(zeron, parse(args)?).await,
+        Tool::ListProjects => list_projects(zeron).await,
+        Tool::ListHarnesses => list_harnesses(zeron).await,
+        Tool::ListModels => list_models(zeron, parse(args)?).await,
+        Tool::SendMessage => send_message(zeron, parse(args)?).await,
+        Tool::CreateChat => create_chat(zeron, parse(args)?).await,
+        Tool::InterruptChat => interrupt_chat(zeron, parse(args)?).await,
+        Tool::RespondToInput => respond_to_input(zeron, parse(args)?).await,
+        Tool::ArchiveChat => archive_chat(zeron, parse(args)?).await,
+    }
+}
+
+fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
     serde_json::from_value(args).context("invalid arguments")
 }
 
@@ -78,7 +113,7 @@ async fn list_chats(zeron: &Zeron, args: ListChatsArgs) -> Result<Value> {
         tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sessions())?;
     chats.retain(|c| !c.archived);
     chats.sort_by_key(|c| std::cmp::Reverse(c.last_activity()));
-    let limit = args.limit.unwrap_or(50).clamp(1, 500);
+    let limit = args.limit.unwrap_or(DEFAULT_CHATS).clamp(1, MAX_CHATS);
     Ok(json!({
         "total": chats.len(),
         "chats": chats.iter().take(limit).map(|c| summary(c, &spaces, &sessions)).collect::<Vec<_>>(),
@@ -169,60 +204,49 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         None => None,
     };
     let (device, harnesses) = tokio::try_join!(zeron.local_device(), zeron.harnesses())?;
-    let device_id = space
-        .as_ref()
-        .map_or(device.id.clone(), |s| s.device_id.clone());
-    let harness = match args.harness {
-        Some(id) => {
-            if !harnesses.iter().any(|h| h.id == id && h.available()) {
-                bail!("harness {id} is not available on this Mac");
-            }
-            id
-        }
-        None => default_harness(&harnesses)?,
-    };
+    let harness = pick_harness(args.harness, &harnesses)?;
     if let Some(model) = args.model.as_deref() {
         let models = zeron.models(&harness).await?;
         if !models.iter().any(|m| m.id == model) {
             bail!("{model} isn't one of {harness}'s models");
         }
     }
-    let mut rest = Map::new();
-    rest.insert("sandbox".into(), json!(DEFAULT_SANDBOX));
-    let config = ChatConfig {
-        harness: harness.clone(),
-        model: args.model.clone(),
-        reasoning: args.reasoning.clone(),
-        model_options: Map::new(),
-        rest,
-    };
-    let chat_id = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now();
-    let branch = args.branch.filter(|b| !b.trim().is_empty());
     // A project-less chat runs in its own scratch folder where the host makes
     // them; naming it here keeps creating and the first run in agreement.
-    let cwd = (space.is_none() && device.capabilities.iter().any(|c| c == PROJECTLESS_SCRATCH))
-        .then(|| scratch_cwd(&chat_id, created_at));
-    let mut op =
-        json!({ "op": "createChat", "chatId": chat_id, "deviceId": device_id, "config": config });
-    if let Some(space) = &space {
-        op["spaceId"] = json!(space.id);
-    }
-    if let Some(branch) = &branch {
-        op["branch"] = json!(branch);
-    }
-    if let Some(cwd) = &cwd {
-        op["cwd"] = json!(cwd);
-    }
-    zeron.mutate(op).await?;
+    let scratch = space.is_none() && device.capabilities.iter().any(|c| c == PROJECTLESS_SCRATCH);
+    let cwd = scratch.then(|| scratch_cwd(&id, created_at));
+    let chat = Chat {
+        id,
+        device_id: space.as_ref().map_or(device.id, |s| s.device_id.clone()),
+        title: None,
+        archived: false,
+        cwd,
+        branch: args.branch.filter(|b| !b.trim().is_empty()),
+        config: Some(ChatConfig {
+            harness,
+            model: args.model,
+            reasoning: args.reasoning,
+            model_options: Map::new(),
+            rest: Map::from_iter([("sandbox".to_owned(), json!(DEFAULT_SANDBOX))]),
+        }),
+        last_message_preview: None,
+        last_message_at: None,
+        created_at,
+        harness_session_cwd: None,
+        space_id: space.as_ref().map(|s| s.id.clone()),
+        parent_chat_id: None,
+    };
+    zeron.mutate(create_op(&chat)).await?;
     let mut result = json!({
-        "chatId": chat_id,
+        "chatId": chat.id,
         "kind": "chat",
-        "deviceId": device_id,
+        "deviceId": chat.device_id,
         "project": space.as_ref().map(project),
-        "harness": harness,
-        "model": args.model,
-        "reasoning": args.reasoning,
+        "harness": chat.harness(),
+        "model": chat.model(),
+        "reasoning": chat.reasoning(),
     });
     if let Some(prompt) = args
         .prompt
@@ -231,24 +255,30 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         .filter(|p| !p.is_empty())
     {
         // The new row may not be in WatchChats yet: use what was just written.
-        let chat = Chat {
-            id: chat_id,
-            device_id,
-            title: None,
-            archived: false,
-            cwd,
-            branch,
-            config: Some(config),
-            last_message_preview: None,
-            last_message_at: None,
-            created_at,
-            harness_session_cwd: None,
-            space_id: space.as_ref().map(|s| s.id.clone()),
-            parent_chat_id: None,
-        };
         result["sent"] = deliver(zeron, &chat, space.as_ref(), &harnesses, None, prompt).await?;
     }
     Ok(result)
+}
+
+/// The `createChat` mutation that writes `chat`.
+fn create_op(chat: &Chat) -> Value {
+    let mut op = json!({
+        "op": "createChat",
+        "chatId": chat.id,
+        "deviceId": chat.device_id,
+        "config": chat.config,
+    });
+    let optional = [
+        ("spaceId", &chat.space_id),
+        ("branch", &chat.branch),
+        ("cwd", &chat.cwd),
+    ];
+    for (key, value) in optional {
+        if let Some(value) = value {
+            op[key] = json!(value);
+        }
+    }
+    op
 }
 
 async fn interrupt_chat(zeron: &Zeron, args: ChatArgs) -> Result<Value> {
@@ -325,47 +355,69 @@ async fn deliver(
     text: &str,
 ) -> Result<Value> {
     let status = status(session, Utc::now());
-    let (delivery, id) = match session.map(|s| s.status) {
+    let (delivery, command) = match session.map(|s| s.status) {
         // A quiet tool call can outlive the stale window: let the host decide.
         Some(SessionStatus::Working) => {
             let id = uuid::Uuid::new_v4().to_string();
             let command = json!({ "kind": "steer", "prompt": text, "messageId": id });
-            ("steer", zeron.queue_command(&chat.id, command).await?)
+            ("steer", command)
         }
         Some(SessionStatus::AwaitingInput) => {
             bail!("this chat is waiting for an answer; answer its question first")
         }
         _ => {
-            let harness = match chat.harness() {
-                Some(h) => h.to_owned(),
-                None => default_harness(harnesses)?,
-            };
-            let config = chat.config.as_ref();
-            let cwd = chat
-                .cwd
-                .clone()
-                .or_else(|| space.map(|s| s.path.clone()))
-                .unwrap_or_else(|| "~".into());
-            let sandbox = config
-                .and_then(|c| c.rest.get("sandbox").cloned())
-                .unwrap_or_else(|| json!(DEFAULT_SANDBOX));
-            let request = json!({
-                "prompt": text,
-                "harness": harness,
-                "model": chat.model(),
-                "reasoning": chat.reasoning(),
-                "modelOptions": config.map(|c| c.model_options.clone()).unwrap_or_default(),
-                "cwd": cwd,
-                "sandbox": sandbox,
-                "autoApprove": false,
-                "resume": null,
-            });
-            let message_id = uuid::Uuid::new_v4().to_string();
-            let command = json!({ "kind": "run", "request": request, "messageId": message_id });
-            ("run", zeron.queue_command(&chat.id, command).await?)
+            let request = run_request(chat, space, harnesses, text)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let command = json!({ "kind": "run", "request": request, "messageId": id });
+            ("run", command)
         }
     };
+    let id = zeron.queue_command(&chat.id, command).await?;
     Ok(json!({ "delivery": delivery, "id": id, "chatStatusAtSend": status }))
+}
+
+/// The request of a new turn that sends `text` with the chat's settings.
+fn run_request(
+    chat: &Chat,
+    space: Option<&Space>,
+    harnesses: &[Harness],
+    text: &str,
+) -> Result<Value> {
+    let harness = match chat.harness() {
+        Some(h) => h.to_owned(),
+        None => default_harness(harnesses)?,
+    };
+    let config = chat.config.as_ref();
+    let cwd = chat
+        .cwd
+        .clone()
+        .or_else(|| space.map(|s| s.path.clone()))
+        .unwrap_or_else(|| "~".into());
+    let sandbox = config
+        .and_then(|c| c.rest.get("sandbox").cloned())
+        .unwrap_or_else(|| json!(DEFAULT_SANDBOX));
+    Ok(json!({
+        "prompt": text,
+        "harness": harness,
+        "model": chat.model(),
+        "reasoning": chat.reasoning(),
+        "modelOptions": config.map(|c| c.model_options.clone()).unwrap_or_default(),
+        "cwd": cwd,
+        "sandbox": sandbox,
+        "autoApprove": false,
+        "resume": null,
+    }))
+}
+
+/// The harness a new chat asked for, if it's available, else the default one.
+fn pick_harness(requested: Option<String>, harnesses: &[Harness]) -> Result<String> {
+    let Some(id) = requested else {
+        return default_harness(harnesses);
+    };
+    if !harnesses.iter().any(|h| h.id == id && h.available()) {
+        bail!("harness {id} is not available on this Mac");
+    }
+    Ok(id)
 }
 
 /// Claude Code when it's offered, else the first available harness.
@@ -499,7 +551,7 @@ mod tests {
     #[test]
     fn only_the_apps_tools_are_offered() {
         for tool in ["list_chats", "send_message", "create_chat", "archive_chat"] {
-            assert!(has(tool), "{tool}");
+            assert!(tool.parse::<Tool>().is_ok(), "{tool}");
         }
         for tool in [
             "open_terminal",
@@ -508,7 +560,11 @@ mod tests {
             "wait_for_turn",
             "nope",
         ] {
-            assert!(!has(tool), "{tool}");
+            assert_eq!(
+                tool.parse::<Tool>(),
+                Err(Unavailable(tool.into())),
+                "{tool}"
+            );
         }
     }
 

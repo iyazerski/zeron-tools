@@ -43,38 +43,17 @@ static WAKE: Notify = Notify::const_new();
 pub fn spawn(zeron: Arc<Zeron>) -> watch::Receiver<Engine> {
     let (tx, rx) = watch::channel(Engine::Closed);
     tokio::spawn(async move {
-        let mut checks = 0;
+        let mut prober = Prober {
+            zeron,
+            since_check: 0,
+        };
         let mut first = true;
         loop {
-            let probe = zeron.call(methods::ENGINE_READY, json!({}));
-            let Ok(answer) = tokio::time::timeout(PROBE_TIMEOUT, probe).await else {
+            let current = tx.borrow().clone();
+            let Some(state) = prober.next_state(current).await else {
                 eprintln!("Zeron isn't answering");
                 sleep(PROBE_RUNNING).await;
                 continue;
-            };
-            let now = tx.borrow().clone();
-            // Check when Zeron comes up, on every probe while it's outdated
-            // (an update restarts it), and every CHECK_EVERY probes otherwise.
-            let state = match answer {
-                Err(_) => Engine::Closed,
-                Ok(_) if now.is_running() && checks < CHECK_EVERY => {
-                    checks += 1;
-                    now
-                }
-                Ok(_) => {
-                    checks = 0;
-                    let why = match tokio::time::timeout(CHECK_TIMEOUT, check(&zeron)).await {
-                        Ok(Ok(state)) => Ok(state),
-                        Ok(Err(e)) => Err(format!("{e:#}")),
-                        Err(_) => Err("it didn't answer in time".into()),
-                    };
-                    // One that couldn't finish keeps the state and runs next probe.
-                    why.unwrap_or_else(|e| {
-                        eprintln!("can't check Zeron yet: {e}");
-                        checks = CHECK_EVERY;
-                        now
-                    })
-                }
             };
             tx.send_if_modified(|now| {
                 let changed = *now != state;
@@ -94,6 +73,46 @@ pub fn spawn(zeron: Arc<Zeron>) -> watch::Receiver<Engine> {
         }
     });
     rx
+}
+
+/// Probes Zeron, and checks that it's still readable now and then.
+struct Prober {
+    zeron: Arc<Zeron>,
+    /// Probes of a running Zeron since its last compatibility check.
+    since_check: u32,
+}
+
+impl Prober {
+    /// Probe once and return Zeron's state, given the `current` one; `None`
+    /// if Zeron hangs, so the state stays.
+    ///
+    /// The compatibility check runs when Zeron comes up, on every probe while
+    /// it's outdated (an update restarts it), and every [`CHECK_EVERY`]
+    /// probes otherwise.
+    async fn next_state(&mut self, current: Engine) -> Option<Engine> {
+        let ready = self.zeron.call(methods::ENGINE_READY, json!({}));
+        if tokio::time::timeout(PROBE_TIMEOUT, ready)
+            .await
+            .ok()?
+            .is_err()
+        {
+            return Some(Engine::Closed);
+        }
+        if current.is_running() && self.since_check < CHECK_EVERY {
+            self.since_check += 1;
+            return Some(current);
+        }
+        self.since_check = 0;
+        let why = match tokio::time::timeout(CHECK_TIMEOUT, check(&self.zeron)).await {
+            Ok(Ok(state)) => return Some(state),
+            Ok(Err(e)) => format!("{e:#}"),
+            Err(_) => "it didn't answer in time".into(),
+        };
+        // A check that couldn't finish keeps the state and runs next probe.
+        eprintln!("can't check Zeron yet: {why}");
+        self.since_check = CHECK_EVERY;
+        Some(current)
+    }
 }
 
 /// Sleep for `wait`, or until something wakes the prober.
@@ -188,25 +207,17 @@ pub async fn restart() -> Result<()> {
         .output()
         .await
         .context("running osascript")?;
-    let result = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if !out.status.success() || result == "stuck" {
-        bail!(
+    // The script answers `closed`, `quit`, `killed` (force-quit), or `stuck`.
+    let outcome = String::from_utf8_lossy(&out.stdout);
+    match (out.status.success(), outcome.trim()) {
+        (_, "stuck") => bail!("couldn't quit Zeron: it's still running"),
+        (false, _) => bail!(
             "couldn't quit Zeron: {}",
-            if result == "stuck" {
-                "it's still running".into()
-            } else {
-                String::from_utf8_lossy(&out.stderr).trim().to_string()
-            }
-        );
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        (true, "killed") => eprintln!("force-quit Zeron for a restart"),
+        (true, _) => eprintln!("quit Zeron for a restart"),
     }
-    eprintln!(
-        "{} Zeron for a restart",
-        if result == "killed" {
-            "force-quit"
-        } else {
-            "quit"
-        }
-    );
     WAKE.notify_one();
     open().await
 }

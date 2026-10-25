@@ -12,6 +12,13 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
+use crate::text::clip;
+
+/// The most characters of an `exec` command in its tool line.
+const COMMAND_CHARS: usize = 160;
+/// The most characters of a tool's first output line in its tool line.
+const OUTPUT_CHARS: usize = 200;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -261,7 +268,10 @@ pub fn tool_line(part: &Part) -> Option<String> {
     let field = |name: &str| call.get(name).and_then(Value::as_str);
     let kind = field("kind").unwrap_or("tool");
     let mut line = match (kind, field("path")) {
-        ("exec", _) => format!("exec: {}", clip(field("command").unwrap_or_default(), 160)),
+        ("exec", _) => format!(
+            "exec: {}",
+            clip(field("command").unwrap_or_default(), COMMAND_CHARS)
+        ),
         ("readFile", Some(path)) => format!("read: {path}"),
         ("writeFile", Some(path)) => format!("write: {path}"),
         ("editFile", Some(path)) => format!("edit: {path}"),
@@ -293,7 +303,7 @@ pub fn tool_line(part: &Part) -> Option<String> {
     };
     if let Some(first) = output.and_then(|o| o.trim().lines().next()) {
         line.push_str(" → ");
-        line.push_str(&clip(first, 200));
+        line.push_str(&clip(first, OUTPUT_CHARS));
     }
     if is_error {
         line.push_str(" (error)");
@@ -301,13 +311,6 @@ pub fn tool_line(part: &Part) -> Option<String> {
         line.push_str(" (running)");
     }
     Some(line)
-}
-
-fn clip(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((i, _)) => format!("{}…", &text[..i]),
-        None => text.to_owned(),
-    }
 }
 
 fn iso(millis: i64) -> String {

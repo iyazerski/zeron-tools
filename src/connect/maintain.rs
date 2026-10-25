@@ -20,7 +20,8 @@ const START_DELAY: Duration = Duration::from_secs(60);
 const EVERY: Duration = Duration::from_secs(15 * 60);
 
 /// What to keep up.
-pub struct Opts {
+#[derive(Debug)]
+pub struct Upkeep {
     /// Keep this many most recently active chats per project; `None`
     /// doesn't archive.
     pub keep: Option<usize>,
@@ -30,21 +31,21 @@ pub struct Opts {
     pub memory: PathBuf,
 }
 
-impl Opts {
+impl Upkeep {
     /// Whether there is anything to do.
-    pub fn any(&self) -> bool {
+    pub fn has_work(&self) -> bool {
         self.keep.is_some() || self.pi.is_some()
     }
 }
 
 /// Run the upkeep whenever Zeron runs, until the engine watch ends.
-pub async fn run(zeron: Arc<Zeron>, mut engine: watch::Receiver<Engine>, opts: Opts) {
-    if !opts.any() {
+pub async fn run(zeron: Arc<Zeron>, mut engine: watch::Receiver<Engine>, upkeep: Upkeep) {
+    if !upkeep.has_work() {
         return;
     }
-    let mut memory = Memory::load(&opts.memory).unwrap_or_else(|e| {
+    let mut memory = Memory::load(&upkeep.memory).unwrap_or_else(|e| {
         eprintln!("starting with an empty archive memory: {e:#}");
-        Memory::empty(&opts.memory)
+        Memory::empty(&upkeep.memory)
     });
     let mut tried = Tried::new();
     loop {
@@ -56,12 +57,12 @@ pub async fn run(zeron: Arc<Zeron>, mut engine: watch::Receiver<Engine>, opts: O
         if !engine.borrow().is_running() {
             continue;
         }
-        if let Some(keep) = opts.keep
+        if let Some(keep) = upkeep.keep
             && let Err(e) = archive::run(&zeron, keep, &mut memory).await
         {
             eprintln!("archiving old chats failed: {e:#}");
         }
-        if let Some(pi) = &opts.pi
+        if let Some(pi) = &upkeep.pi
             && let Err(e) = rename::run(&zeron, pi, &mut tried).await
         {
             eprintln!("titling chats failed: {e:#}");

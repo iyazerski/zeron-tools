@@ -13,7 +13,8 @@
 //! `{data_dir}/ipc-token` when it started (`crates/rpc/src/ipc_auth.rs`).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fmt;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
@@ -26,6 +27,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// How long dialing may take. It's localhost, but another process holding
 /// the port could accept TCP and never finish the handshake.
@@ -44,7 +46,7 @@ pub struct Ipc {
     conn: Mutex<Option<Arc<Conn>>>,
 }
 
-/// Why a call failed.
+/// Why a call or stream failed.
 #[derive(Debug)]
 enum CallError {
     /// The connection dropped; a new one may work.
@@ -52,6 +54,42 @@ enum CallError {
     /// The engine answered with an error.
     Failed(String),
 }
+
+impl CallError {
+    /// The error to report for a failed `method`.
+    fn into_error(self, method: &str) -> anyhow::Error {
+        match self {
+            Self::Closed => anyhow!("{method}: the connection to Zeron closed"),
+            Self::Failed(message) => EngineError {
+                method: method.to_owned(),
+                message,
+            }
+            .into(),
+        }
+    }
+}
+
+/// An error the engine answered a call or stream with.
+#[derive(Debug)]
+pub struct EngineError {
+    method: String,
+    message: String,
+}
+
+impl EngineError {
+    /// Whether the engine doesn't have the method called.
+    fn is_unknown_method(&self) -> bool {
+        self.message.contains(UNKNOWN_METHOD)
+    }
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.method, self.message)
+    }
+}
+
+impl std::error::Error for EngineError {}
 
 impl Ipc {
     /// Return a client for `url` that authenticates with the token in
@@ -72,10 +110,7 @@ impl Ipc {
             Err(CallError::Closed) => self.conn().await?.call(method, &params).await,
             other => other,
         };
-        result.map_err(|e| match e {
-            CallError::Closed => anyhow!("{method}: the connection to Zeron closed"),
-            CallError::Failed(e) => anyhow!("{method}: {e}"),
-        })
+        result.map_err(|e| e.into_error(method))
     }
 
     /// Open a stream of `method`'s items. Dropping it cancels it in the engine.
@@ -105,7 +140,10 @@ impl Ipc {
 
 /// Whether `error` says the engine doesn't have the method called.
 pub fn is_unknown_method(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains(UNKNOWN_METHOD)
+    error
+        .chain()
+        .filter_map(|e| e.downcast_ref::<EngineError>())
+        .any(EngineError::is_unknown_method)
 }
 
 /// One WebSocket to the engine. A task owns the socket; it ends when every
@@ -119,12 +157,14 @@ struct Conn {
 /// Calls and streams waiting for frames, by id.
 #[derive(Default)]
 struct Pending {
-    calls: HashMap<u64, oneshot::Sender<Result<Value, String>>>,
-    streams: HashMap<u64, mpsc::Sender<Result<Value, String>>>,
+    calls: HashMap<u64, oneshot::Sender<Result<Value, CallError>>>,
+    streams: HashMap<u64, mpsc::Sender<Result<Value, CallError>>>,
 }
 
+type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
 impl Conn {
-    async fn dial(url: &str, token: &std::path::Path) -> Result<Arc<Self>> {
+    async fn dial(url: &str, token: &Path) -> Result<Arc<Self>> {
         // The engine writes the file when it starts, so a missing one means
         // Zeron isn't running (or never ran with this data dir).
         let token = match std::fs::read_to_string(token) {
@@ -145,45 +185,9 @@ impl Conn {
             Ok(Err(e)) => bail!("no Zeron engine at {url} ({e}); is Zeron running?"),
             Err(_) => bail!("timed out dialing Zeron at {url}"),
         };
-        let (mut sink, mut stream) = socket.split();
-        let (out, mut out_rx) = mpsc::unbounded_channel::<String>();
+        let (out, out_rx) = mpsc::unbounded_channel::<String>();
         let pending = Arc::new(StdMutex::new(Pending::default()));
-        let routes = pending.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    text = out_rx.recv() => match text {
-                        Some(text) => {
-                            if sink.send(Message::Text(text)).await.is_err() {
-                                break;
-                            }
-                        }
-                        None => {
-                            let _ = sink.send(Message::Close(None)).await;
-                            break;
-                        }
-                    },
-                    message = stream.next() => match message {
-                        Some(Ok(Message::Text(text))) => {
-                            if let Some(cancel) = route(&routes, &text).await
-                                && sink.send(Message::Text(cancel)).await.is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Some(Ok(Message::Close(_)) | Err(_)) | None => break,
-                        Some(Ok(_)) => {}
-                    },
-                }
-            }
-            // Dropping the receiver marks `out` closed, so the next call redials.
-            drop(out_rx);
-            let mut pending = lock(&routes);
-            pending.calls.clear();
-            for (_, stream) in pending.streams.drain() {
-                let _ = stream.try_send(Err("the connection to Zeron closed".into()));
-            }
-        });
+        tokio::spawn(pump(socket, out_rx, pending.clone()));
         Ok(Arc::new(Self {
             out,
             pending,
@@ -200,10 +204,7 @@ impl Conn {
             lock(&self.pending).calls.remove(&id);
             return Err(CallError::Closed);
         }
-        match rx.await {
-            Ok(result) => result.map_err(CallError::Failed),
-            Err(_) => Err(CallError::Closed),
-        }
+        rx.await.unwrap_or(Err(CallError::Closed))
     }
 
     /// Start a stream; `None` if the connection is closed.
@@ -229,18 +230,61 @@ impl Conn {
 pub struct Subscription {
     id: u64,
     method: String,
-    rx: mpsc::Receiver<Result<Value, String>>,
+    rx: mpsc::Receiver<Result<Value, CallError>>,
     conn: Arc<Conn>,
 }
 
 impl Subscription {
     /// Return the next item, or `None` once the stream ended.
     pub async fn next(&mut self) -> Result<Option<Value>> {
-        match self.rx.recv().await {
-            Some(Ok(item)) => Ok(Some(item)),
-            Some(Err(e)) => Err(anyhow!("{}: {e}", self.method)),
-            None => Ok(None),
+        self.rx
+            .recv()
+            .await
+            .transpose()
+            .map_err(|e| e.into_error(&self.method))
+    }
+}
+
+/// Pass `out`'s frames to the engine and the engine's frames to `pending`
+/// until either side closes, then fail every call and stream still waiting.
+async fn pump(
+    socket: Socket,
+    mut out: mpsc::UnboundedReceiver<String>,
+    pending: Arc<StdMutex<Pending>>,
+) {
+    let (mut sink, mut stream) = socket.split();
+    loop {
+        tokio::select! {
+            text = out.recv() => match text {
+                Some(text) => {
+                    if sink.send(Message::Text(text)).await.is_err() {
+                        break;
+                    }
+                }
+                None => {
+                    let _ = sink.send(Message::Close(None)).await;
+                    break;
+                }
+            },
+            message = stream.next() => match message {
+                Some(Ok(Message::Text(text))) => {
+                    if let Some(cancel) = route(&pending, &text).await
+                        && sink.send(Message::Text(cancel)).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_)) | Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            },
         }
+    }
+    // Dropping the receiver marks `out` closed, so the next call redials.
+    drop(out);
+    let mut pending = lock(&pending);
+    pending.calls.clear();
+    for (_, stream) in pending.streams.drain() {
+        let _ = stream.try_send(Err(CallError::Closed));
     }
 }
 
@@ -286,9 +330,9 @@ async fn route(pending: &StdMutex<Pending>, text: &str) -> Option<String> {
     if let Some(err) = frame.err {
         let mut pending = lock(pending);
         if let Some(call) = pending.calls.remove(&id) {
-            let _ = call.send(Err(err));
+            let _ = call.send(Err(CallError::Failed(err)));
         } else if let Some(stream) = pending.streams.remove(&id) {
-            let _ = stream.try_send(Err(err));
+            let _ = stream.try_send(Err(CallError::Failed(err)));
         }
         return None;
     }
@@ -313,11 +357,8 @@ async fn route(pending: &StdMutex<Pending>, text: &str) -> Option<String> {
     None
 }
 
-/// Lock `pending`, even if a panicking holder poisoned it: its maps stay valid.
 fn lock(pending: &StdMutex<Pending>) -> MutexGuard<'_, Pending> {
-    pending
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    pending.lock().expect("the IPC routing lock is poisoned")
 }
 
 #[cfg(test)]
@@ -342,8 +383,10 @@ mod tests {
     /// `null`, `Count` streams 1, 2 and ends, `Forever` streams until
     /// cancelled (then reports it with a `Cancelled` call), and anything else
     /// is an unknown method.
-    // tungstenite's handshake callback fixes the error type.
-    #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::result_large_err,
+        reason = "tungstenite's handshake callback fixes the error type"
+    )]
     fn auth(request: &Request, response: Response) -> Result<Response, ErrorResponse> {
         let bearer = request.headers().get("authorization");
         if bearer.is_some_and(|b| b == format!("Bearer {TOKEN}").as_str()) {

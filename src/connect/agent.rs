@@ -9,13 +9,13 @@ use anyhow::{Context, Result, bail};
 const LABEL: &str = "dev.iyazerski.zeron-tools.connect";
 
 fn plist_path() -> PathBuf {
-    crate::home()
+    crate::paths::home()
         .join("Library/LaunchAgents")
         .join(format!("{LABEL}.plist"))
 }
 
 fn log_path() -> PathBuf {
-    crate::home().join("Library/Logs/zeron-tools-connect.log")
+    crate::paths::home().join("Library/Logs/zeron-tools-connect.log")
 }
 
 /// The launchd domain of the logged-in user's GUI session.

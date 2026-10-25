@@ -19,6 +19,7 @@ use ring::{aead, agreement, hkdf};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
+use zeron_relay_proto::NoticeKind;
 
 use crate::store::write_private;
 
@@ -26,6 +27,21 @@ use crate::store::write_private;
 const TTL_SECS: u64 = 24 * 3600;
 /// The VAPID `sub` claim: a contact for the push service.
 const CONTACT: &str = "https://github.com/iyazerski/zeron-tools";
+/// How long a VAPID token stays valid; push services accept up to 24 h.
+const VAPID_LIFETIME_SECS: u64 = 12 * 3600;
+/// How long one request to a push service may take.
+const PUSH_TIMEOUT: Duration = Duration::from_secs(15);
+/// The `aes128gcm` record size in the body header; one record holds any
+/// notification this sends.
+const RECORD_SIZE: u32 = 4096;
+/// Ends the plaintext of the last (here, the only) record (RFC 8188).
+const LAST_RECORD: u8 = 2;
+/// An uncompressed P-256 public key's length.
+const PUBLIC_KEY_LEN: usize = 65;
+/// The subscription's authentication secret's length.
+const AUTH_SECRET_LEN: usize = 16;
+/// The salt's length in the body header.
+const SALT_LEN: usize = 16;
 
 /// A browser's push subscription, as `PushSubscription.toJSON()` gives it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,12 +64,33 @@ pub struct SubscriptionKeys {
 pub struct Payload {
     pub title: String,
     pub body: String,
-    /// `finished`, `input`, `failed`, or `test`.
-    pub kind: String,
+    pub kind: Kind,
     pub machine: Option<String>,
     pub chat: Option<String>,
 }
 
+/// What a notification is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    Finished,
+    Input,
+    Failed,
+    /// Sent from the app's settings to try notifications.
+    Test,
+}
+
+impl From<NoticeKind> for Kind {
+    fn from(kind: NoticeKind) -> Self {
+        match kind {
+            NoticeKind::Finished => Self::Finished,
+            NoticeKind::Input => Self::Input,
+            NoticeKind::Failed => Self::Failed,
+        }
+    }
+}
+
+/// The VAPID key, the browsers' subscriptions, and delivery to them.
 pub struct Push {
     vapid: EcdsaKeyPair,
     rng: SystemRandom,
@@ -87,9 +124,7 @@ impl Push {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
             Err(e) => return Err(e).with_context(|| format!("reading {}", store.display())),
         };
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()?;
+        let http = reqwest::Client::builder().timeout(PUSH_TIMEOUT).build()?;
         Ok(Self {
             vapid,
             rng,
@@ -174,7 +209,7 @@ impl Push {
 
     /// The `Authorization` header: a VAPID JWT for `audience`, plus the public key.
     fn vapid_header(&self, audience: &str) -> Result<String> {
-        let exp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + 12 * 3600;
+        let exp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() + VAPID_LIFETIME_SECS;
         let header = B64.encode(br#"{"typ":"JWT","alg":"ES256"}"#);
         let claims = B64.encode(serde_json::to_vec(
             &json!({ "aud": audience, "exp": exp, "sub": CONTACT }),
@@ -210,7 +245,7 @@ fn encrypt(rng: &SystemRandom, keys: &SubscriptionKeys, payload: &[u8]) -> Resul
         |secret| secret.to_vec(),
     )
     .map_err(|_| anyhow!("the browser's push key is invalid"))?;
-    let mut salt = [0u8; 16];
+    let mut salt = [0u8; SALT_LEN];
     rng.fill(&mut salt)
         .map_err(|_| anyhow!("generating a salt"))?;
     let (cek, nonce) = content_keys(&ecdh, &auth, &ua_public, as_public.as_ref(), &salt)?;
@@ -225,9 +260,8 @@ fn seal(
     nonce: [u8; 12],
     payload: &[u8],
 ) -> Result<Vec<u8>> {
-    // One record, so the last-record delimiter (0x02) ends the plaintext.
     let mut record = payload.to_vec();
-    record.push(2);
+    record.push(LAST_RECORD);
     let key = aead::LessSafeKey::new(
         aead::UnboundKey::new(&aead::AES_128_GCM, &cek).map_err(|_| anyhow!("AES key"))?,
     );
@@ -238,10 +272,11 @@ fn seal(
     )
     .map_err(|_| anyhow!("encrypting the notification"))?;
     // Header: salt, record size, key id length, key id (our public key).
-    let mut body = Vec::with_capacity(86 + record.len());
+    let key_id_len = u8::try_from(as_public.len()).context("the push key is too long")?;
+    let mut body = Vec::with_capacity(salt.len() + 5 + as_public.len() + record.len());
     body.extend_from_slice(salt);
-    body.extend_from_slice(&4096u32.to_be_bytes());
-    body.push(as_public.len() as u8);
+    body.extend_from_slice(&RECORD_SIZE.to_be_bytes());
+    body.push(key_id_len);
     body.extend_from_slice(as_public);
     body.extend_from_slice(&record);
     Ok(body)
@@ -289,7 +324,7 @@ fn decode_keys(keys: &SubscriptionKeys) -> Result<(Vec<u8>, Vec<u8>)> {
     let decode = |s: &str| B64.decode(s.trim_end_matches('='));
     let public = decode(&keys.p256dh).context("bad p256dh key")?;
     let auth = decode(&keys.auth).context("bad auth secret")?;
-    if public.len() != 65 || auth.len() != 16 {
+    if public.len() != PUBLIC_KEY_LEN || auth.len() != AUTH_SECRET_LEN {
         bail!("unexpected push key sizes");
     }
     Ok((public, auth))
@@ -350,8 +385,8 @@ mod tests {
         let body = encrypt(&rng, &keys, b"{\"title\":\"hi\"}").unwrap();
 
         let (salt, rest) = body.split_at(16);
-        assert_eq!(&rest[..4], &4096u32.to_be_bytes());
-        let id_len = rest[4] as usize;
+        assert_eq!(&rest[..4], &RECORD_SIZE.to_be_bytes());
+        let id_len = usize::from(rest[4]);
         let (server_public, ciphertext) = rest[5..].split_at(id_len);
         let ecdh = agreement::agree_ephemeral(
             browser,
