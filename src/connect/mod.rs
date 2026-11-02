@@ -23,7 +23,7 @@ mod power;
 mod tools;
 mod watch;
 
-pub use agent::{install, uninstall};
+pub use agent::{install, restart, uninstall};
 pub use maintain::Upkeep;
 pub use watch::NotifyWhen;
 

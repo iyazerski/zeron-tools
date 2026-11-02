@@ -73,6 +73,17 @@ pub fn install(args: &[String]) -> Result<PathBuf> {
     Ok(log_path())
 }
 
+/// Restart the agent on the current binary, if it's installed. Returns
+/// whether it restarted.
+pub fn restart() -> Result<bool> {
+    if !plist_path().exists() {
+        return Ok(false);
+    }
+    // A job that isn't loaded (stopped by a rejected token) stays stopped:
+    // `connect --install` starts it again.
+    Ok(launchctl(&["kickstart", "-k", &format!("{}/{LABEL}", domain())]).is_ok())
+}
+
 /// Stop and remove the agent. Returns whether one was installed.
 pub fn uninstall() -> Result<bool> {
     let plist = plist_path();

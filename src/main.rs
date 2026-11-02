@@ -1,6 +1,7 @@
 //! zeron-tools: a background service for the running Zeron (`connect`),
 //! plus `export`. Both talk to Zeron through its engine's loopback IPC, so
-//! they work while Zeron runs and don't depend on Zeron's code.
+//! they work while Zeron runs and don't depend on Zeron's code. `update`
+//! installs the latest release.
 
 mod archive;
 mod connect;
@@ -8,6 +9,7 @@ mod export;
 mod paths;
 mod rename;
 mod text;
+mod update;
 mod zeron;
 
 use std::path::PathBuf;
@@ -70,6 +72,9 @@ enum Cmd {
     /// Without --chat or --project, every chat is exported. Filters combine.
     /// Chats come out oldest first, with whole transcripts.
     Export(ExportArgs),
+    /// Install the latest release if it's newer, and restart connect's
+    /// background service on it
+    Update,
 }
 
 #[derive(Args)]
@@ -188,6 +193,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Cmd::Connect(args) => run_connect(&cli.global, args).await,
         Cmd::Export(args) => run_export(&cli.global, args).await,
+        Cmd::Update => update::run(),
     }
 }
 

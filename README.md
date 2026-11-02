@@ -15,7 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.
 zeron-tools connect --install
 ```
 
-It installs to `~/.local/bin`. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
+It installs to `~/.local/bin`. `zeron-tools update` installs the latest release and restarts the background service. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
 
 `connect --install` runs the service in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log`. `connect --uninstall` stops it. Run `--install` again to change its options.
 
