@@ -23,7 +23,7 @@ use crate::paths::{expand_tilde, short_path};
 use crate::text::short_id;
 use crate::zeron::transcript::{self, Entry, Part, RenderOptions, Rendered, Role};
 use crate::zeron::types::{Chat, Space};
-use crate::zeron::{Zeron, find_chat};
+use crate::zeron::{Zeron, find_chat, space_of};
 
 /// How exported chats are written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -95,9 +95,7 @@ pub async fn run(zeron: &Zeron, opts: Opts) -> Result<()> {
     let (mut written, mut messages) = (0, 0);
     let mut stdout = std::io::stdout().lock();
     for chat in selected {
-        let space = spaces
-            .iter()
-            .find(|s| Some(&s.id) == chat.space_id.as_ref());
+        let space = space_of(chat, &spaces);
         let entries = zeron.transcript(chat).await?;
         let exported = ExportedChat::new(chat, space, &entries, opts.render, &ids);
         if exported.messages.is_empty() {

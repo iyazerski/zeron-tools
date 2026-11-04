@@ -164,9 +164,8 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
         NoticeKind::Input => {
             let entries = zeron.transcript(&chat).await?;
             let rendered = transcript::render(&entries, RenderOptions::default());
-            let pending = transcript::pending_input(&rendered).unwrap_or_default();
-            let question = pending["questions"][0]["question"]
-                .as_str()
+            let question = transcript::pending_input(&rendered)
+                .and_then(|p| p.first_question())
                 .unwrap_or_default();
             format!("Needs your answer: {}", question.trim())
         }

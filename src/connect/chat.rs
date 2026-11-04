@@ -10,11 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::composer::chat_arg;
-use super::tools::{status, summary};
+use super::tools::{ChatStatus, summary};
 use crate::zeron::transcript::{self, Entry, Part, RenderOptions, Rendered, Role};
 use crate::zeron::{Zeron, session_for};
 
@@ -22,34 +21,41 @@ use crate::zeron::{Zeron, session_for};
 const DEFAULT_LIMIT: usize = 40;
 const MAX_LIMIT: usize = 500;
 
-/// Return `{chat, version, read}` for the `chat` argument.
+/// The `chat_view` arguments.
+#[derive(Debug, Deserialize)]
+pub struct ViewArgs {
+    /// The chat's id or id prefix.
+    chat: String,
+    /// How many of the latest messages to return.
+    limit: Option<usize>,
+    /// The `version` the caller already shows.
+    known: Option<String>,
+}
+
+/// Return `{chat, version, read}` for the chat.
 ///
 /// `version` changes when the transcript moves (its length, last activity,
 /// or status) or `limit` changes. `read` holds the last `limit` messages,
 /// `total`, `olderRemaining`, and `pendingInput`; it is `null` when the
 /// caller passes the `known` version and the chat isn't working, since then
 /// nothing it shows can have changed.
-pub async fn view(zeron: &Zeron, args: &Value) -> Result<Value> {
-    let chat = zeron.chat(chat_arg(args)?).await?;
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map_or(DEFAULT_LIMIT, |n| usize::try_from(n).unwrap_or(MAX_LIMIT))
-        .clamp(1, MAX_LIMIT);
+pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
+    let chat = zeron.chat(&args.chat).await?;
+    let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let (spaces, sessions, entries) =
         tokio::try_join!(zeron.spaces(), zeron.sessions(), zeron.transcript(&chat))?;
     let rendered = transcript::render(&entries, RenderOptions::default());
-    let status = status(session_for(&sessions, &chat), Utc::now());
+    let status = ChatStatus::of(session_for(&sessions, &chat), Utc::now());
     let version = format!(
-        "{}|{}|{status}|{limit}",
+        "{}|{}|{}|{limit}",
         rendered.len(),
         chat.last_message_at
             .map(|t| t.to_rfc3339())
-            .unwrap_or_default()
+            .unwrap_or_default(),
+        status.label(),
     );
     // While a turn streams, its last message changes without moving the version.
-    let unchanged = args.get("known").and_then(Value::as_str) == Some(version.as_str())
-        && !status.starts_with("working");
+    let unchanged = args.known.as_deref() == Some(version.as_str()) && !status.is_working();
     let read = (!unchanged).then(|| window(&entries, &rendered, limit));
     Ok(json!({
         "chat": summary(&chat, &spaces, &sessions),

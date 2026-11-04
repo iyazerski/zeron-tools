@@ -13,6 +13,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::prelude::{AuthenticationResult, Passkey};
@@ -68,6 +69,8 @@ impl From<&MachineRecord> for Machine {
 /// The relay's state, in memory and in `<data dir>/state.json`.
 pub struct Store {
     path: PathBuf,
+    /// The WebAuthn user handle; fixed once the store opens.
+    user: Uuid,
     data: Mutex<Data>,
     rng: SystemRandom,
 }
@@ -77,16 +80,12 @@ impl Store {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join("state.json");
-        let mut data: Data = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Data::default(),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
+        let mut data: Data = read_json(&path)?.unwrap_or_default();
         let fresh = data.user.is_none();
-        data.user.get_or_insert_with(Uuid::new_v4);
+        let user = *data.user.get_or_insert_with(Uuid::new_v4);
         let store = Self {
             path,
+            user,
             data: Mutex::new(data),
             rng: SystemRandom::new(),
         };
@@ -98,9 +97,7 @@ impl Store {
 
     /// The WebAuthn user handle.
     pub fn user(&self) -> Uuid {
-        self.lock()
-            .user
-            .expect("the user is created when the store opens")
+        self.user
     }
 
     /// The saved passkeys.
@@ -226,6 +223,17 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Read and parse the JSON file at `path`; `None` if there is none.
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .with_context(|| format!("parsing {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+    }
 }
 
 /// Write `bytes` to `path` atomically, readable only by this user.

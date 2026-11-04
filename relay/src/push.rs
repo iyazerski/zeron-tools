@@ -21,7 +21,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use zeron_relay_proto::NoticeKind;
 
-use crate::store::write_private;
+use crate::store::{read_json, write_private};
 
 /// Push services keep an undelivered notification this long.
 const TTL_SECS: u64 = 24 * 3600;
@@ -118,12 +118,7 @@ impl Push {
         let vapid = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &pkcs8, &rng)
             .map_err(|e| anyhow!("bad VAPID key in {}: {e}", key_file.display()))?;
         let store = dir.join("subscriptions.json");
-        let subscriptions = match std::fs::read(&store) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", store.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-            Err(e) => return Err(e).with_context(|| format!("reading {}", store.display())),
-        };
+        let subscriptions = read_json(&store)?.unwrap_or_default();
         let http = reqwest::Client::builder().timeout(PUSH_TIMEOUT).build()?;
         Ok(Self {
             vapid,

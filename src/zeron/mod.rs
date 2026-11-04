@@ -184,6 +184,18 @@ impl Zeron {
         self.call(methods::MUTATE, params).await
     }
 
+    /// Move a chat to the Archived shelf, or back to the sidebar.
+    pub async fn set_chat_archived(&self, chat_id: &str, archived: bool) -> Result<()> {
+        let op = json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived });
+        self.mutate(op).await.map(drop)
+    }
+
+    /// Give a chat a new title.
+    pub async fn rename_chat(&self, chat_id: &str, title: &str) -> Result<()> {
+        let op = json!({ "op": "renameChat", "chatId": chat_id, "title": title });
+        self.mutate(op).await.map(drop)
+    }
+
     /// Queue a command (`{kind: "run", …}`) on the chat; its host runs it.
     /// Returns the command's id.
     pub async fn queue_command(&self, chat_id: &str, command: Value) -> Result<String> {
@@ -242,6 +254,12 @@ pub fn find_chat<'a>(chats: &'a [Chat], key: &str) -> Result<&'a Chat> {
         [] => bail!("no chat matches {key}"),
         _ => bail!("{key} matches {} chats; use a longer prefix", hits.len()),
     }
+}
+
+/// The project (space) `chat` belongs to, if any.
+pub fn space_of<'a>(chat: &Chat, spaces: &'a [Space]) -> Option<&'a Space> {
+    let id = chat.space_id.as_deref()?;
+    spaces.iter().find(|s| s.id == id)
 }
 
 /// The session that speaks for `chat`: its host's, else the freshest one (a

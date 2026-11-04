@@ -16,12 +16,11 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use crate::text::{clip, one_line, short_id};
 use crate::zeron::transcript::{Entry, Part, Role};
 use crate::zeron::types::{Chat, Session, SessionStatus};
-use crate::zeron::{Zeron, session_for};
+use crate::zeron::{Zeron, session_for, space_of};
 
 /// How long a chat stays idle before this titles it: Zeron's own titler
 /// gets the first go.
@@ -62,20 +61,13 @@ pub struct Excerpt {
 impl Excerpt {
     /// Build an excerpt from a chat's transcript; `None` if it has no user text.
     pub fn from_transcript(id: &str, project: Option<String>, entries: &[Entry]) -> Option<Self> {
-        let texts = |role| {
-            entries
-                .iter()
-                .filter(move |e| e.role == role)
-                .map(|e| text(&e.parts))
-                .filter(|t| !t.trim().is_empty())
-        };
-        let mut users = texts(Role::User);
+        let mut users = texts(entries, Role::User);
         let first_user = users.next()?;
         Some(Self {
             id: id.into(),
             project,
             first_user: clip_excerpt(&first_user),
-            first_reply: texts(Role::Assistant)
+            first_reply: texts(entries, Role::Assistant)
                 .next()
                 .map(|t| clip_excerpt(&t))
                 .unwrap_or_default(),
@@ -236,10 +228,7 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     let candidates = candidates(&chats, &sessions, tried, Utc::now());
     let mut excerpts = vec![];
     for chat in &candidates {
-        let project = spaces
-            .iter()
-            .find(|s| Some(&s.id) == chat.space_id.as_ref())
-            .map(|s| s.display_name().to_owned());
+        let project = space_of(chat, &spaces).map(|s| s.display_name().to_owned());
         let entries = match zeron.transcript(chat).await {
             Ok(entries) => entries,
             Err(e) => {
@@ -279,8 +268,7 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
         {
             continue;
         }
-        let op = json!({ "op": "renameChat", "chatId": chat.id, "title": title.title });
-        match zeron.mutate(op).await {
+        match zeron.rename_chat(&chat.id, &title.title).await {
             Ok(_) => {
                 titled += 1;
                 eprintln!(
@@ -327,11 +315,16 @@ fn candidates<'a>(
 
 /// The text of the first user message that has any.
 fn first_prompt(entries: &[Entry]) -> Option<String> {
+    texts(entries, Role::User).next()
+}
+
+/// The prose of each message from `role` that has any, in order.
+fn texts(entries: &[Entry], role: Role) -> impl Iterator<Item = String> + '_ {
     entries
         .iter()
-        .filter(|e| e.role == Role::User)
+        .filter(move |e| e.role == role)
         .map(|e| text(&e.parts))
-        .find(|t| !t.trim().is_empty())
+        .filter(|t| !t.trim().is_empty())
 }
 
 /// A message's prose parts, joined by newlines.
@@ -353,6 +346,8 @@ fn clip_excerpt(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn excerpt(id: &str) -> Excerpt {

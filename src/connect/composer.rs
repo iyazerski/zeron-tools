@@ -8,28 +8,38 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use super::tools::default_harness;
 use crate::zeron::types::{ChatConfig, Model, Skill, SkillCommand};
-use crate::zeron::{SkillScope, Zeron, methods};
+use crate::zeron::{SkillScope, Zeron, methods, space_of};
 
 /// How long to wait for the transcript's first frame, which carries the
 /// context usage.
 const USAGE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The `composer_info` arguments: a chat, or the project of a chat not
+/// created yet.
+#[derive(Debug, Deserialize)]
+pub struct InfoArgs {
+    chat: Option<String>,
+    /// A project (space) id.
+    project: Option<String>,
+}
+
 /// Return the chat's composer footer: `checkout` (`local` or `worktree`,
 /// only in a git project), `branch`, `contextUsage` (`{tokens, window}`),
 /// and its saved `harness`, `model`, and `reasoning`. Without `chat`, return
 /// the footer of a chat not created yet ([`draft_info`]).
-pub async fn info(zeron: &Zeron, args: &Value) -> Result<Value> {
-    if args.get("chat").is_none() {
-        return draft_info(zeron, args).await;
-    }
-    let chat = zeron.chat(chat_arg(args)?).await?;
+pub async fn info(zeron: &Zeron, args: InfoArgs) -> Result<Value> {
+    let Some(chat) = args.chat else {
+        return draft_info(zeron, args.project.as_deref()).await;
+    };
+    let chat = zeron.chat(&chat).await?;
     let spaces = zeron.spaces().await?;
     // Like the desktop footer: checkout and branch only show in a git project.
-    let space = super::tools::space_of(&chat, &spaces).filter(|s| s.git_detected);
+    let space = space_of(&chat, &spaces).filter(|s| s.git_detected);
     let checkout = space.map(|space| {
         let worktree = chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
         if worktree { "worktree" } else { "local" }
@@ -44,15 +54,13 @@ pub async fn info(zeron: &Zeron, args: &Value) -> Result<Value> {
     }))
 }
 
-/// The footer for a new chat in the `project` argument: like the desktop's,
-/// the project folder's checkout on its checked-out branch, and nothing
-/// without a project or outside git. The phone records `branch` on the chat
-/// it creates, as the desktop does.
-async fn draft_info(zeron: &Zeron, args: &Value) -> Result<Value> {
+/// The footer for a new chat in `project`: like the desktop's, the project
+/// folder's checkout on its checked-out branch, and nothing without a
+/// project or outside git. The phone records `branch` on the chat it
+/// creates, as the desktop does.
+async fn draft_info(zeron: &Zeron, project: Option<&str>) -> Result<Value> {
     let spaces = zeron.spaces().await?;
-    let space = args
-        .get("project")
-        .and_then(Value::as_str)
+    let space = project
         .and_then(|id| spaces.iter().find(|s| s.id == id))
         .filter(|s| s.git_detected);
     let Some(space) = space else {
@@ -88,29 +96,38 @@ async fn context_usage(zeron: &Zeron, chat_id: &str) -> Result<Value> {
     Ok(first.get("contextUsage").cloned().unwrap_or(Value::Null))
 }
 
+/// The `list_skills` arguments: a chat, or the `harness` and `project` of
+/// a chat not created yet.
+#[derive(Debug, Deserialize)]
+pub struct SkillsArgs {
+    chat: Option<String>,
+    harness: Option<String>,
+    /// A project (space) id.
+    project: Option<String>,
+}
+
 /// Return the enabled skills of the chat's agent in its checkout, or without
 /// `chat`, of the `harness` a new chat will use in `project` (the global ones
 /// without a project). Each has the `ref` that invokes it from the prompt.
-pub async fn skills(zeron: &Zeron, args: &Value) -> Result<Value> {
-    let skills = if args.get("chat").is_some() {
-        let chat = zeron.chat(chat_arg(args)?).await?;
+pub async fn skills(zeron: &Zeron, args: SkillsArgs) -> Result<Value> {
+    let skills = if let Some(chat) = args.chat {
+        let chat = zeron.chat(&chat).await?;
         // A chat that never ran gets the default agent on its first turn.
         let harness = match chat.harness() {
             Some(harness) => harness.to_owned(),
-            None => super::tools::default_harness(&zeron.harnesses().await?)?,
+            None => default_harness(&zeron.harnesses().await?)?,
         };
         zeron.skills(&harness, SkillScope::Chat(&chat.id)).await?
     } else {
         let harness = args
-            .get("harness")
-            .and_then(Value::as_str)
+            .harness
             .filter(|h| !h.is_empty())
             .context("harness is required")?;
-        let scope = match args.get("project").and_then(Value::as_str) {
+        let scope = match args.project.as_deref() {
             Some(id) => SkillScope::Project(id),
             None => SkillScope::Global,
         };
-        zeron.skills(harness, scope).await?
+        zeron.skills(&harness, scope).await?
     };
     let skills: Vec<Value> = skills
         .iter()
@@ -146,24 +163,32 @@ fn invoke_ref(skill: &Skill) -> String {
     format!("[${}](zeron-invoke:{hex})", skill.name)
 }
 
+/// The `set_chat_model` arguments; a missing `model` or `reasoning` keeps
+/// the chat's.
+#[derive(Debug, Deserialize)]
+pub struct SetModelArgs {
+    chat: String,
+    model: Option<String>,
+    reasoning: Option<String>,
+}
+
 /// Change a chat's `model` and/or `reasoning` for its next turns, like the
 /// desktop picker: the model must be in the harness's catalog, reasoning is
 /// healed to a level the model offers, and options it doesn't offer drop.
-pub async fn set_model(zeron: &Zeron, args: &Value) -> Result<Value> {
-    let chat = zeron.chat(chat_arg(args)?).await?;
+pub async fn set_model(zeron: &Zeron, args: SetModelArgs) -> Result<Value> {
+    let chat = zeron.chat(&args.chat).await?;
     let Some(mut config) = chat.config.clone() else {
         bail!("this chat has no model yet; send it a message first");
     };
     let (models, harnesses) = tokio::try_join!(zeron.models(&config.harness), zeron.harnesses())?;
-    if let Some(id) = args.get("model").and_then(Value::as_str) {
+    if let Some(id) = args.model {
         if !models.iter().any(|m| m.id == id) {
             bail!("{id} isn't one of this agent's models");
         }
-        config.model = Some(id.to_owned());
+        config.model = Some(id);
     }
-    if let Some(level) = args.get("reasoning").filter(|v| !v.is_null()) {
-        let level = level.as_str().context("reasoning must be a level name")?;
-        config.reasoning = Some(level.to_owned());
+    if let Some(level) = args.reasoning {
+        config.reasoning = Some(level);
     }
     let harness_levels = harnesses
         .into_iter()
@@ -219,14 +244,6 @@ fn default_reasoning(ladder: &[String]) -> Option<String> {
         .find(|level| ladder.iter().any(|l| l == level))
         .map(str::to_owned)
         .or_else(|| ladder.first().cloned())
-}
-
-/// The `chat` argument: the chat's id.
-pub(super) fn chat_arg(args: &Value) -> Result<&str> {
-    args.get("chat")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-        .context("chat is required")
 }
 
 #[cfg(test)]

@@ -43,7 +43,8 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
 use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
 
-use self::tools::{Tool, Unavailable};
+use self::tools::{Tool, Unavailable, parse_args};
+use crate::json_file;
 use crate::zeron::Zeron;
 
 /// How often to ping the relay. Proxies drop idle sockets, and a reply
@@ -88,38 +89,13 @@ impl fmt::Debug for Link {
 impl Link {
     /// Read the saved link from `path`, if `connect` was set up before.
     pub fn load(path: &Path) -> Result<Option<Self>> {
-        match std::fs::read(path) {
-            Ok(bytes) => Ok(Some(
-                serde_json::from_slice(&bytes)
-                    .with_context(|| format!("parsing {}", path.display()))?,
-            )),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
+        json_file::load(path)
     }
 
-    /// Save the link to `path` atomically, readable only by the user (the
-    /// token is a secret).
+    /// Save the link to `path`, readable only by the user (the token is a
+    /// secret).
     pub fn save(&self, path: &Path) -> Result<()> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-        // A fresh file, so the mode applies: a leftover one keeps its own.
-        match std::fs::remove_file(&tmp) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                return Err(e).with_context(|| format!("removing {}", tmp.display()));
-            }
-            _ => {}
-        }
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        file.write_all(&serde_json::to_vec_pretty(self)?)?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+        json_file::save(path, self)
     }
 }
 
@@ -280,11 +256,11 @@ async fn serve(
     notices: &mut mpsc::Receiver<Notice>,
 ) -> Result<()> {
     let (mut sink, mut stream) = socket.split();
-    sink.send(text(&hello())?).await?;
+    sink.send(encode(&hello())?).await?;
     let now = engine.borrow_and_update().clone();
-    sink.send(text(&Up::Engine(now))?).await?;
+    sink.send(encode(&Up::Engine(now))?).await?;
     let now = *battery.borrow_and_update();
-    sink.send(text(&Up::Power { battery: now })?).await?;
+    sink.send(encode(&Up::Power { battery: now })?).await?;
     // Replies from tool calls running in their own tasks.
     let (replies_tx, mut replies) = mpsc::channel::<Up>(QUEUE);
     let mut ping = tokio::time::interval(PING_EVERY);
@@ -304,15 +280,15 @@ async fn serve(
                     Some(Err(e)) => return Err(e.into()),
                 }
             }
-            Some(reply) = replies.recv() => sink.send(text(&reply)?).await?,
-            Some(notice) = notices.recv() => sink.send(text(&Up::Notify(notice))?).await?,
+            Some(reply) = replies.recv() => sink.send(encode(&reply)?).await?,
+            Some(notice) = notices.recv() => sink.send(encode(&Up::Notify(notice))?).await?,
             Ok(()) = engine.changed() => {
                 let now = engine.borrow_and_update().clone();
-                sink.send(text(&Up::Engine(now))?).await?;
+                sink.send(encode(&Up::Engine(now))?).await?;
             }
             Ok(()) = battery.changed() => {
                 let now = *battery.borrow_and_update();
-                sink.send(text(&Up::Power { battery: now })?).await?;
+                sink.send(encode(&Up::Power { battery: now })?).await?;
             }
             _ = ping.tick() => {
                 if heard.elapsed() > SILENCE_LIMIT {
@@ -357,7 +333,7 @@ pub async fn verify(link: &Link) -> Result<()> {
     };
     // Say hello, so the relay logs a short visit rather than a bad client.
     let (mut sink, _) = socket.split();
-    sink.send(text(&hello())?).await?;
+    sink.send(encode(&hello())?).await?;
     sink.close().await?;
     Ok(())
 }
@@ -440,17 +416,22 @@ async fn run_tool(mac: &Mac, engine: &Engine, tool: &str, args: Value) -> Result
     {
         return Err(why);
     }
-    let zeron = &mac.zeron;
-    let result = match request {
+    dispatch(&mac.zeron, request, args)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Run `request` with its JSON `args`.
+async fn dispatch(zeron: &Zeron, request: Request, args: Value) -> Result<Value> {
+    match request {
         Request::OpenZeron => engine::open().await.map(|()| opening()),
         Request::RestartZeron => engine::restart().await.map(|()| opening()),
-        Request::ChatView => chat::view(zeron, &args).await,
-        Request::ComposerInfo => composer::info(zeron, &args).await,
-        Request::SetChatModel => composer::set_model(zeron, &args).await,
-        Request::ListSkills => composer::skills(zeron, &args).await,
+        Request::ChatView => chat::view(zeron, parse_args(args)?).await,
+        Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
+        Request::SetChatModel => composer::set_model(zeron, parse_args(args)?).await,
+        Request::ListSkills => composer::skills(zeron, parse_args(args)?).await,
         Request::Tool(tool) => tools::call(zeron, tool, args).await,
-    };
-    result.map_err(|e| format!("{e:#}"))
+    }
 }
 
 /// The answer to a call that starts Zeron.
@@ -480,7 +461,8 @@ fn rejected(error: &anyhow::Error) -> bool {
     )
 }
 
-fn text(up: &Up) -> Result<Message> {
+/// One message for the relay, as a JSON text frame.
+fn encode(up: &Up) -> Result<Message> {
     Ok(Message::Text(serde_json::to_string(up)?))
 }
 
@@ -533,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn links_round_trip_privately() {
+    fn links_round_trip_without_logging_the_token() {
         let dir = tempfile::tempdir().unwrap();
         let path = link_path(dir.path());
         assert_eq!(Link::load(&path).unwrap(), None);
@@ -544,8 +526,5 @@ mod tests {
         link.save(&path).unwrap();
         assert_eq!(Link::load(&path).unwrap(), Some(link.clone()));
         assert!(!format!("{link:?}").contains("\"t\""), "{link:?}");
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
     }
 }

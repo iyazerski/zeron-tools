@@ -6,6 +6,7 @@
 mod archive;
 mod connect;
 mod export;
+mod json_file;
 mod paths;
 mod rename;
 mod text;

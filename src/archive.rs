@@ -12,10 +12,10 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde_json::json;
 
+use crate::json_file;
 use crate::text::{one_line, short_id};
 use crate::zeron::Zeron;
 use crate::zeron::types::{Chat, Space};
@@ -38,15 +38,9 @@ impl Memory {
 
     /// Read the memory saved at `path`; a missing file is an empty memory.
     pub fn load(path: &Path) -> Result<Self> {
-        let archived = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
         Ok(Self {
             path: path.to_owned(),
-            archived,
+            archived: json_file::load(path)?.unwrap_or_default(),
         })
     }
 
@@ -61,11 +55,7 @@ impl Memory {
     }
 
     fn save(&self) -> Result<()> {
-        let tmp = self.path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.archived)?)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("writing {}", self.path.display()))
+        json_file::save(&self.path, &self.archived)
     }
 }
 
@@ -82,8 +72,7 @@ pub async fn run(zeron: &Zeron, keep: usize, memory: &mut Memory) -> Result<usiz
         .collect();
     let mut archived = 0;
     for chat in chosen {
-        let op = json!({ "op": "setChatArchived", "chatId": chat.id, "archived": true });
-        match zeron.mutate(op).await {
+        match zeron.set_chat_archived(&chat.id, true).await {
             Ok(_) => {
                 archived += 1;
                 memory.remember(chat);
@@ -153,6 +142,8 @@ pub fn stale<'a>(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn chat(id: &str, space: Option<&str>, day: u32) -> Chat {

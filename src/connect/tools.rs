@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use crate::zeron::transcript::{self, RenderOptions};
 use crate::zeron::types::{Chat, ChatConfig, Harness, Session, SessionStatus, Space};
-use crate::zeron::{Zeron, session_for};
+use crate::zeron::{Zeron, session_for, space_of};
 
 /// A working session not updated for this long may have lost its host
 /// (`SESSION_STALE` in Zeron's MCP).
@@ -81,19 +81,20 @@ impl std::error::Error for Unavailable {}
 /// Run `tool` with its JSON `args`.
 pub async fn call(zeron: &Zeron, tool: Tool, args: Value) -> Result<Value> {
     match tool {
-        Tool::ListChats => list_chats(zeron, parse(args)?).await,
+        Tool::ListChats => list_chats(zeron, parse_args(args)?).await,
         Tool::ListProjects => list_projects(zeron).await,
         Tool::ListHarnesses => list_harnesses(zeron).await,
-        Tool::ListModels => list_models(zeron, parse(args)?).await,
-        Tool::SendMessage => send_message(zeron, parse(args)?).await,
-        Tool::CreateChat => create_chat(zeron, parse(args)?).await,
-        Tool::InterruptChat => interrupt_chat(zeron, parse(args)?).await,
-        Tool::RespondToInput => respond_to_input(zeron, parse(args)?).await,
-        Tool::ArchiveChat => archive_chat(zeron, parse(args)?).await,
+        Tool::ListModels => list_models(zeron, parse_args(args)?).await,
+        Tool::SendMessage => send_message(zeron, parse_args(args)?).await,
+        Tool::CreateChat => create_chat(zeron, parse_args(args)?).await,
+        Tool::InterruptChat => interrupt_chat(zeron, parse_args(args)?).await,
+        Tool::RespondToInput => respond_to_input(zeron, parse_args(args)?).await,
+        Tool::ArchiveChat => archive_chat(zeron, parse_args(args)?).await,
     }
 }
 
-fn parse<T: DeserializeOwned>(args: Value) -> Result<T> {
+/// Parse a call's JSON arguments into the tool's argument struct.
+pub(super) fn parse_args<T: DeserializeOwned>(args: Value) -> Result<T> {
     serde_json::from_value(args).context("invalid arguments")
 }
 
@@ -316,7 +317,7 @@ async fn respond_to_input(zeron: &Zeron, args: RespondArgs) -> Result<Value> {
             let entries = zeron.transcript(&chat).await?;
             let rendered = transcript::render(&entries, RenderOptions::default());
             transcript::pending_input(&rendered)
-                .and_then(|p| p["requestId"].as_str().map(str::to_owned))
+                .map(|p| p.request_id.clone())
                 .context("this chat has no pending question")?
         }
     };
@@ -339,9 +340,7 @@ struct ArchiveArgs {
 async fn archive_chat(zeron: &Zeron, args: ArchiveArgs) -> Result<Value> {
     let chat = zeron.chat(&args.chat).await?;
     let archived = args.archived.unwrap_or(true);
-    zeron
-        .mutate(json!({ "op": "setChatArchived", "chatId": chat.id, "archived": archived }))
-        .await?;
+    zeron.set_chat_archived(&chat.id, archived).await?;
     Ok(json!({ "chatId": chat.id, "title": chat.title, "archived": archived }))
 }
 
@@ -355,7 +354,7 @@ async fn deliver(
     session: Option<&Session>,
     text: &str,
 ) -> Result<Value> {
-    let status = status(session, Utc::now());
+    let status = ChatStatus::of(session, Utc::now());
     let (delivery, command) = match session.map(|s| s.status) {
         // A quiet tool call can outlive the stale window: let the host decide.
         Some(SessionStatus::Working) => {
@@ -374,7 +373,7 @@ async fn deliver(
         }
     };
     let id = zeron.queue_command(&chat.id, command).await?;
-    Ok(json!({ "delivery": delivery, "id": id, "chatStatusAtSend": status }))
+    Ok(json!({ "delivery": delivery, "id": id, "chatStatusAtSend": status.label() }))
 }
 
 /// The request of a new turn that sends `text` with the chat's settings.
@@ -463,11 +462,6 @@ fn find_space<'a>(spaces: &'a [Space], key: &str) -> Result<&'a Space> {
         .with_context(|| format!("no project matches {key}"))
 }
 
-pub(super) fn space_of<'a>(chat: &Chat, spaces: &'a [Space]) -> Option<&'a Space> {
-    let id = chat.space_id.as_deref()?;
-    spaces.iter().find(|s| s.id == id)
-}
-
 fn project(space: &Space) -> Value {
     json!({ "id": space.id, "name": space.display_name(), "path": space.path })
 }
@@ -488,7 +482,7 @@ pub(super) fn summary(chat: &Chat, spaces: &[Space], sessions: &[Session]) -> Va
         "reasoning": chat.reasoning(),
         "archived": chat.archived,
         "parentChatId": chat.parent_chat_id,
-        "status": status(session, Utc::now()),
+        "status": ChatStatus::of(session, Utc::now()).label(),
         "statusAgeSecs": session.map(|s| (Utc::now() - s.updated_at).num_seconds().max(0)),
         "lastMessageAt": chat.last_message_at,
         "lastMessagePreview": chat.last_message_preview,
@@ -496,22 +490,50 @@ pub(super) fn summary(chat: &Chat, spaces: &[Space], sessions: &[Session]) -> Va
     })
 }
 
-/// The chat's status label, worded as Zeron's MCP `status_of`.
-pub(super) fn status(session: Option<&Session>, now: DateTime<Utc>) -> String {
-    let Some(session) = session else {
-        return "idle".into();
-    };
-    match session.status {
-        SessionStatus::Working if now - session.updated_at > STALE_AFTER => {
-            "working (stale — host may be offline)"
+/// A chat's status as the app shows it, from its session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChatStatus {
+    Idle,
+    Working,
+    /// Working, but not updated for [`STALE_AFTER`]: its host may be gone.
+    StaleWorking,
+    AwaitingInput,
+    Errored,
+    Unknown,
+}
+
+impl ChatStatus {
+    /// The status of the chat `session` speaks for, at `now`.
+    pub(super) fn of(session: Option<&Session>, now: DateTime<Utc>) -> Self {
+        let Some(session) = session else {
+            return Self::Idle;
+        };
+        match session.status {
+            SessionStatus::Working if now - session.updated_at > STALE_AFTER => Self::StaleWorking,
+            SessionStatus::Working => Self::Working,
+            SessionStatus::AwaitingInput => Self::AwaitingInput,
+            SessionStatus::Errored => Self::Errored,
+            SessionStatus::Idle => Self::Idle,
+            SessionStatus::Other => Self::Unknown,
         }
-        SessionStatus::Working => "working",
-        SessionStatus::AwaitingInput => "awaitingInput",
-        SessionStatus::Errored => "errored",
-        SessionStatus::Idle => "idle",
-        SessionStatus::Other => "unknown",
     }
-    .into()
+
+    /// Whether a turn runs (or may still run, on a host that went quiet).
+    pub(super) fn is_working(self) -> bool {
+        matches!(self, Self::Working | Self::StaleWorking)
+    }
+
+    /// The label, worded as Zeron's MCP `status_of`.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::StaleWorking => "working (stale — host may be offline)",
+            Self::AwaitingInput => "awaitingInput",
+            Self::Errored => "errored",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -540,12 +562,15 @@ mod tests {
             session("c", "host", "working", "2026-10-19T10:00:50Z"),
             session("d", "host", "awaitingInput", "2026-10-19T10:00:59Z"),
         ];
-        let of = |sessions: &[Session]| status(session_for(sessions, &chat("c", "host")), now);
+        let of = |sessions: &[Session]| {
+            ChatStatus::of(session_for(sessions, &chat("c", "host")), now).label()
+        };
         assert_eq!(of(&sessions), "working");
         // Without the host's row, the freshest one speaks.
         assert_eq!(of(&sessions[..1]), "errored");
         let stale = [session("c", "host", "working", "2026-10-19T09:59:00Z")];
         assert_eq!(of(&stale), "working (stale — host may be offline)");
+        assert!(ChatStatus::StaleWorking.is_working() && !ChatStatus::AwaitingInput.is_working());
         assert_eq!(of(&[]), "idle");
     }
 

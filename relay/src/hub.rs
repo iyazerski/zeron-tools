@@ -47,8 +47,8 @@ struct Link {
     battery: Option<Battery>,
 }
 
-/// A Mac's live state, for the app.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// A Mac's live state, for the app; the default is an offline Mac.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub online: bool,
@@ -74,12 +74,7 @@ impl Hub {
                 engine: link.engine.clone(),
                 battery: link.battery,
             },
-            None => Status {
-                online: false,
-                version: None,
-                engine: None,
-                battery: None,
-            },
+            None => Status::default(),
         }
     }
 
@@ -220,18 +215,18 @@ impl Hub {
             }
             Up::Notify(notice) => notify(machine, notice),
             Up::Engine(engine) => {
-                let mut links = self.lock();
-                if let Some(link) = links.get_mut(&machine.id).filter(|l| l.conn == conn) {
-                    link.engine = Some(engine);
-                }
+                self.update_link(machine, conn, |link| link.engine = Some(engine))
             }
-            Up::Power { battery } => {
-                let mut links = self.lock();
-                if let Some(link) = links.get_mut(&machine.id).filter(|l| l.conn == conn) {
-                    link.battery = battery;
-                }
-            }
+            Up::Power { battery } => self.update_link(machine, conn, |link| link.battery = battery),
             Up::Hello { .. } => {}
+        }
+    }
+
+    /// Apply `update` to `machine`'s link if it's still connection `conn`,
+    /// so a replaced connection can't overwrite its successor's state.
+    fn update_link(&self, machine: &Machine, conn: u64, update: impl FnOnce(&mut Link)) {
+        if let Some(link) = self.lock().get_mut(&machine.id).filter(|l| l.conn == conn) {
+            update(link);
         }
     }
 

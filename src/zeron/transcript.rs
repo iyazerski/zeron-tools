@@ -10,7 +10,7 @@
 //! changed one) is skipped rather than failing the transcript.
 
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::text::clip;
 
@@ -152,11 +152,28 @@ pub struct Rendered {
     /// One line per tool call, image, and visual, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
-    /// An unanswered question the agent waits on: `{requestId, questions}`.
+    /// An unanswered question the agent waits on.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pending_input: Option<Value>,
+    pub pending_input: Option<PendingInput>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+}
+
+/// A question the agent waits on, with the id that answers it.
+// Fields in the order `json!` used to sort them, so exports stay byte-identical.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInput {
+    /// Zeron's question list, passed through as it came.
+    pub questions: Value,
+    pub request_id: String,
+}
+
+impl PendingInput {
+    /// The first question's text, if it has one.
+    pub fn first_question(&self) -> Option<&str> {
+        self.questions.get(0)?.get("question")?.as_str()
+    }
 }
 
 /// Render `entries` in order, folding each continuation into the message it
@@ -179,8 +196,8 @@ pub fn render(entries: &[Entry], options: RenderOptions) -> Vec<Rendered> {
 }
 
 /// The unanswered question of the whole transcript, if any.
-pub fn pending_input(rendered: &[Rendered]) -> Option<Value> {
-    rendered.iter().rev().find_map(|m| m.pending_input.clone())
+pub fn pending_input(rendered: &[Rendered]) -> Option<&PendingInput> {
+    rendered.iter().rev().find_map(|m| m.pending_input.as_ref())
 }
 
 fn fold_into(parent: &mut Rendered, child: Rendered) {
@@ -230,7 +247,10 @@ fn render_one(entry: &Entry, options: RenderOptions) -> Rendered {
                 questions,
                 resolved: false,
             } => {
-                pending_input = Some(json!({ "requestId": request_id, "questions": questions }));
+                pending_input = Some(PendingInput {
+                    questions: questions.clone(),
+                    request_id: request_id.clone(),
+                });
             }
             Part::Error { message } => errors.push(message.clone()),
             _ => {}
@@ -321,6 +341,8 @@ fn iso(millis: i64) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use serde_json::json;
+
     use super::*;
 
     /// An entry from JSON parts, as the engine sends it.
@@ -374,7 +396,11 @@ pub(crate) mod tests {
         assert_eq!(a.text, "done");
         assert_eq!(a.tools, ["exec: cargo test → ok", "Agent (running)"]);
         assert!(a.reasoning.is_none(), "reasoning is opt-in");
-        assert_eq!(pending_input(&rendered).unwrap()["requestId"], "req-1");
+        // The app reads this shape.
+        assert_eq!(
+            serde_json::to_string(pending_input(&rendered).unwrap()).unwrap(),
+            r#"{"questions":[],"requestId":"req-1"}"#
+        );
         assert_eq!(a.created_at_iso, "2023-11-14T22:13:20Z");
         let with_reasoning = render(
             &entries,
