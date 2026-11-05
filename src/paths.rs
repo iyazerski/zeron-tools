@@ -1,4 +1,4 @@
-//! The user's home folder, and paths as people type and read them.
+//! The user's home folder, and programs on `PATH`.
 
 use std::path::{Path, PathBuf};
 
@@ -7,22 +7,6 @@ pub fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| "/".into())
-}
-
-/// Expand a leading `~/` to the home folder.
-pub fn expand_tilde(path: &str) -> PathBuf {
-    match path.strip_prefix("~/") {
-        Some(rest) => home().join(rest),
-        None => PathBuf::from(path),
-    }
-}
-
-/// `path` with the home folder shown as `~`.
-pub fn short_path(path: &Path) -> String {
-    match path.strip_prefix(home()) {
-        Ok(rest) => format!("~/{}", rest.display()),
-        Err(_) => path.display().to_string(),
-    }
 }
 
 /// `program` as an absolute path: itself if it names a path, else its

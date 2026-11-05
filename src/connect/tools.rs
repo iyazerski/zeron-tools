@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 
-use crate::zeron::transcript::{self, RenderOptions};
+use crate::zeron::transcript;
 use crate::zeron::types::{Chat, ChatConfig, Harness, Session, SessionStatus, Space};
 use crate::zeron::{Zeron, session_for, space_of};
 
@@ -236,7 +236,6 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         last_message_preview: None,
         last_message_at: None,
         created_at,
-        harness_session_cwd: None,
         space_id: space.as_ref().map(|s| s.id.clone()),
         parent_chat_id: None,
     };
@@ -315,7 +314,7 @@ async fn respond_to_input(zeron: &Zeron, args: RespondArgs) -> Result<Value> {
         Some(id) => id,
         None => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries, RenderOptions::default());
+            let rendered = transcript::render(&entries);
             transcript::pending_input(&rendered)
                 .map(|p| p.request_id.clone())
                 .context("this chat has no pending question")?

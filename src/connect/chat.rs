@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::tools::{ChatStatus, summary};
-use crate::zeron::transcript::{self, Entry, Part, RenderOptions, Rendered, Role};
+use crate::zeron::transcript::{self, Entry, Part, Rendered, Role};
 use crate::zeron::{Zeron, session_for};
 
 /// Messages per page, as `read_chat`.
@@ -44,7 +44,7 @@ pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let (spaces, sessions, entries) =
         tokio::try_join!(zeron.spaces(), zeron.sessions(), zeron.transcript(&chat))?;
-    let rendered = transcript::render(&entries, RenderOptions::default());
+    let rendered = transcript::render(&entries);
     let status = ChatStatus::of(session_for(&sessions, &chat), Utc::now());
     let version = format!(
         "{}|{}|{}|{limit}",
@@ -198,7 +198,7 @@ mod tests {
                 ]),
             ),
         ];
-        let rendered = transcript::render(&entries, RenderOptions::default());
+        let rendered = transcript::render(&entries);
         let read = window(&entries, &rendered, 2);
         assert_eq!(read["olderRemaining"], 1);
         assert_eq!(

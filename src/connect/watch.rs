@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
 
 use crate::text::one_line;
-use crate::zeron::transcript::{self, RenderOptions};
+use crate::zeron::transcript;
 use crate::zeron::types::{Session, SessionStatus};
 use crate::zeron::{Zeron, methods};
 
@@ -163,7 +163,7 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
         NoticeKind::Failed => "The turn failed.".to_owned(),
         NoticeKind::Input => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries, RenderOptions::default());
+            let rendered = transcript::render(&entries);
             let question = transcript::pending_input(&rendered)
                 .and_then(|p| p.first_question())
                 .unwrap_or_default();
@@ -171,7 +171,7 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
         }
         NoticeKind::Finished => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries, RenderOptions::default());
+            let rendered = transcript::render(&entries);
             rendered
                 .last()
                 .map(|m| m.text.trim().to_owned())

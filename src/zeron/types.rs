@@ -35,8 +35,6 @@ pub struct Chat {
     pub last_message_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
-    pub harness_session_cwd: Option<String>,
-    #[serde(default)]
     pub space_id: Option<String>,
     #[serde(default)]
     pub parent_chat_id: Option<String>,

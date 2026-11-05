@@ -2388,7 +2388,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-tools"
-version = "0.11.8"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",

@@ -28,8 +28,6 @@ pub struct Entry {
     pub parts: Vec<Part>,
     /// Epoch milliseconds.
     pub created_at: i64,
-    #[serde(default)]
-    pub device_id: String,
     /// `streaming`, `complete`, or `aborted`.
     #[serde(default)]
     pub status: Option<String>,
@@ -88,14 +86,6 @@ pub enum Part {
     Error {
         message: String,
     },
-    /// Where a forked chat's own history starts: entries above it were
-    /// copied from the source chat.
-    #[serde(rename_all = "camelCase")]
-    Fork {
-        source_chat_id: String,
-        #[serde(default)]
-        source_title: String,
-    },
     #[serde(other)]
     Other,
 }
@@ -116,51 +106,20 @@ pub fn from_frame(frame: &Value) -> Option<Result<Vec<Entry>, serde_json::Error>
     Some(Vec::<Entry>::deserialize(reset))
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct RenderOptions {
-    /// Include the model's thinking.
-    pub include_reasoning: bool,
-    /// Include the one-line-per-call tool log.
-    pub include_tools: bool,
-}
-
-impl Default for RenderOptions {
-    fn default() -> Self {
-        Self {
-            include_reasoning: false,
-            include_tools: true,
-        }
-    }
-}
-
-/// One message as people and agents read it; its fields match Zeron's
-/// `read_chat`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// One message, with its continuations folded in.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Rendered {
     pub id: String,
     pub role: Role,
     pub created_at: i64,
-    pub created_at_iso: String,
-    pub device_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     /// Prose parts joined with blank lines.
     pub text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
-    /// One line per tool call, image, and visual, in order.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
     /// An unanswered question the agent waits on.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_input: Option<PendingInput>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub errors: Vec<String>,
 }
 
 /// A question the agent waits on, with the id that answers it.
-// Fields in the order `json!` used to sort them, so exports stay byte-identical.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingInput {
@@ -178,10 +137,10 @@ impl PendingInput {
 
 /// Render `entries` in order, folding each continuation into the message it
 /// continues (one whose parent isn't rendered yet stands alone).
-pub fn render(entries: &[Entry], options: RenderOptions) -> Vec<Rendered> {
+pub fn render(entries: &[Entry]) -> Vec<Rendered> {
     let mut rendered: Vec<Rendered> = Vec::with_capacity(entries.len());
     for entry in entries {
-        let message = render_one(entry, options);
+        let message = render_one(entry);
         if let Some(parent) = entry
             .continuation_of
             .as_ref()
@@ -207,16 +166,6 @@ fn fold_into(parent: &mut Rendered, child: Rendered) {
         }
         parent.text.push_str(&child.text);
     }
-    match (&mut parent.reasoning, child.reasoning) {
-        (Some(existing), Some(more)) => {
-            existing.push_str("\n\n");
-            existing.push_str(&more);
-        }
-        (slot @ None, Some(more)) => *slot = Some(more),
-        _ => {}
-    }
-    parent.tools.extend(child.tools);
-    parent.errors.extend(child.errors);
     if child.pending_input.is_some() {
         parent.pending_input = child.pending_input;
     }
@@ -226,22 +175,12 @@ fn fold_into(parent: &mut Rendered, child: Rendered) {
     }
 }
 
-fn render_one(entry: &Entry, options: RenderOptions) -> Rendered {
+fn render_one(entry: &Entry) -> Rendered {
     let mut text = Vec::new();
-    let mut reasoning = Vec::new();
-    let mut tools = Vec::new();
     let mut pending_input = None;
-    let mut errors = Vec::new();
     for part in &entry.parts {
         match part {
             Part::Text { text: t } if !t.trim().is_empty() => text.push(t.as_str()),
-            Part::Reasoning { text: t } if options.include_reasoning && !t.trim().is_empty() => {
-                reasoning.push(t.as_str());
-            }
-            Part::Tool { .. } if !options.include_tools => {}
-            Part::Image { .. } | Part::Visual { .. } | Part::Tool { .. } => {
-                tools.extend(tool_line(part));
-            }
             Part::Input {
                 request_id,
                 questions,
@@ -252,7 +191,6 @@ fn render_one(entry: &Entry, options: RenderOptions) -> Rendered {
                     request_id: request_id.clone(),
                 });
             }
-            Part::Error { message } => errors.push(message.clone()),
             _ => {}
         }
     }
@@ -260,14 +198,9 @@ fn render_one(entry: &Entry, options: RenderOptions) -> Rendered {
         id: entry.id.clone(),
         role: entry.role,
         created_at: entry.created_at,
-        created_at_iso: iso(entry.created_at),
-        device_id: entry.device_id.clone(),
         status: entry.status.clone(),
         text: text.join("\n\n"),
-        reasoning: (!reasoning.is_empty()).then(|| reasoning.join("\n\n")),
-        tools,
         pending_input,
-        errors,
     }
 }
 
@@ -333,12 +266,6 @@ pub fn tool_line(part: &Part) -> Option<String> {
     Some(line)
 }
 
-fn iso(millis: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(millis)
-        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use serde_json::json;
@@ -389,28 +316,22 @@ pub(crate) mod tests {
         // The odd parts (a new kind, a text that isn't text) are skipped.
         assert_eq!(entries[1].parts[2], Part::Other);
         assert_eq!(entries[1].parts[3], Part::Other);
-        let rendered = render(&entries, RenderOptions::default());
+        let rendered = render(&entries);
         assert_eq!(rendered.len(), 2);
         assert_eq!(rendered[0].text, "hello");
         let a = &rendered[1];
         assert_eq!(a.text, "done");
-        assert_eq!(a.tools, ["exec: cargo test → ok", "Agent (running)"]);
-        assert!(a.reasoning.is_none(), "reasoning is opt-in");
+        let tools: Vec<String> = entries[1..]
+            .iter()
+            .flat_map(|e| &e.parts)
+            .filter_map(tool_line)
+            .collect();
+        assert_eq!(tools, ["exec: cargo test → ok", "Agent (running)"]);
         // The app reads this shape.
         assert_eq!(
             serde_json::to_string(pending_input(&rendered).unwrap()).unwrap(),
             r#"{"questions":[],"requestId":"req-1"}"#
         );
-        assert_eq!(a.created_at_iso, "2023-11-14T22:13:20Z");
-        let with_reasoning = render(
-            &entries,
-            RenderOptions {
-                include_reasoning: true,
-                include_tools: false,
-            },
-        );
-        assert_eq!(with_reasoning[1].reasoning.as_deref(), Some("thinking"));
-        assert!(with_reasoning[1].tools.is_empty());
     }
 
     #[test]

@@ -1,11 +1,10 @@
-//! zeron-tools: a background service for the running Zeron (`connect`),
-//! plus `export`. Both talk to Zeron through its engine's loopback IPC, so
-//! they work while Zeron runs and don't depend on Zeron's code. `update`
-//! installs the latest release.
+//! zeron-tools: a background service for the running Zeron (`connect`). It
+//! talks to Zeron through its engine's loopback IPC, so it works while Zeron
+//! runs and doesn't depend on Zeron's code. `update` installs the latest
+//! release.
 
 mod archive;
 mod connect;
-mod export;
 mod json_file;
 mod paths;
 mod rename;
@@ -16,14 +15,11 @@ mod zeron;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
 use clap::{Args, Parser, Subcommand};
 
 use crate::connect::{Link, NotifyWhen, RelayLink, RunMode, Upkeep};
-use crate::export::Format;
 use crate::rename::Pi;
 use crate::zeron::Zeron;
-use crate::zeron::transcript::RenderOptions;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -68,11 +64,6 @@ enum Cmd {
     /// closed: the app shows that and can open it. Pass --relay and --token
     /// once (the app shows them when you add a Mac); they're saved.
     Connect(ConnectArgs),
-    /// Export chats as plain text (needs Zeron running)
-    ///
-    /// Without --chat or --project, every chat is exported. Filters combine.
-    /// Chats come out oldest first, with whole transcripts.
-    Export(ExportArgs),
     /// Install the latest release if it's newer, and restart connect's
     /// background service on it
     Update,
@@ -114,40 +105,6 @@ struct ConnectArgs {
     agent: bool,
 }
 
-#[derive(Args)]
-struct ExportArgs {
-    /// Chat ids or id prefixes
-    #[arg(long = "chat", value_name = "ID")]
-    chats: Vec<String>,
-    /// Project name or folder (every chat in it)
-    #[arg(long)]
-    project: Option<String>,
-    /// Only chats active on or after this local date (YYYY-MM-DD) or
-    /// within this age (30d, 4w)
-    #[arg(long, value_parser = export::parse_since)]
-    since: Option<DateTime<Utc>>,
-    /// Only chats started on or before this local date (YYYY-MM-DD)
-    #[arg(long, value_parser = export::parse_until)]
-    until: Option<DateTime<Utc>>,
-    /// At most this many chats, the most recently active ones
-    #[arg(long)]
-    limit: Option<usize>,
-    /// Leave out archived chats
-    #[arg(long)]
-    skip_archived: bool,
-    #[arg(long, value_enum, default_value = "markdown")]
-    format: Format,
-    /// Include the model's reasoning
-    #[arg(long)]
-    reasoning: bool,
-    /// Leave out the one-line-per-call tool log
-    #[arg(long)]
-    no_tools: bool,
-    /// Write one file per chat into this folder (default: all to stdout)
-    #[arg(long, short)]
-    output: Option<PathBuf>,
-}
-
 /// The model that writes titles.
 #[derive(Args)]
 struct PiOpts {
@@ -183,17 +140,9 @@ impl PiOpts {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    // Die quietly on a closed pipe (`zeron-tools export | head`) like other CLIs.
-    #[cfg(unix)]
-    // SAFETY: this runs before any other thread exists, and SIG_DFL is a
-    // valid disposition for SIGPIPE.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
     let cli = Cli::parse();
     match cli.command {
         Cmd::Connect(args) => run_connect(&cli.global, args).await,
-        Cmd::Export(args) => run_export(&cli.global, args).await,
         Cmd::Update => update::run(),
     }
 }
@@ -289,25 +238,6 @@ async fn install(
         println!("to use Zeron from a phone, add this Mac in the app and run the command it shows");
     }
     Ok(())
-}
-
-/// Run `export` against the running Zeron.
-async fn run_export(global: &Global, args: ExportArgs) -> Result<()> {
-    let opts = export::Opts {
-        chats: args.chats,
-        project: args.project,
-        since: args.since,
-        until: args.until,
-        limit: args.limit,
-        skip_archived: args.skip_archived,
-        format: args.format,
-        render: RenderOptions {
-            include_reasoning: args.reasoning,
-            include_tools: !args.no_tools,
-        },
-        output: args.output,
-    };
-    export::run(&Zeron::new(global.ipc_port, &global.data_dir()), opts).await
 }
 
 /// The launch agent's arguments: this run's options, minus the link (saved).
