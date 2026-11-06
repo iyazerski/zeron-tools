@@ -1,10 +1,12 @@
 # zeron-tools
 
-A background service for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, it:
+Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, `connect`:
 
 - archives all but the 10 most recently active chats of each project (pinned chats and chats in sidebar sections stay),
 - titles chats that stayed untitled or got Zeron's fallback title (the prompt's first words), with a small model through pi,
 - links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications.
+
+`companion` shows Zeron's chats in a small floating window on a global shortcut, so you can follow and steer them from any app.
 
 It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools <command> --help` lists every option.
 
@@ -13,9 +15,10 @@ It talks to Zeron's engine over its local IPC and doesn't build against Zeron's 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | sh
 zeron-tools connect --install
+zeron-tools companion --install
 ```
 
-It installs to `~/.local/bin`. `zeron-tools update` installs the latest release and restarts the background service. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
+It installs to `~/.local/bin`. `zeron-tools update` installs the latest release and restarts the background services. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
 
 `connect --install` runs the service in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log`. `connect --uninstall` stops it. Run `--install` again to change its options.
 
@@ -28,6 +31,18 @@ zeron-tools connect --install --no-rename        # archive only
 
 - The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
 - Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
+
+## Companion
+
+```sh
+zeron-tools companion --install                          # Ctrl+Option+Space shows it
+zeron-tools companion --install --shortcut cmd+shift+k
+zeron-tools companion --show                             # once, in the terminal
+```
+
+`companion --install` runs it in the background like `connect`: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-companion.log`. `companion --uninstall` stops it. Quitting it with ⌘Q stops it until the next login or `--install`.
+
+The shortcut shows a floating, slightly transparent window with the phone app's chat list. Pick a chat to follow it, send messages, paste or attach images, answer the agent's questions, switch the model, or stop and archive it. ⌘N starts a new chat, ⌘[ goes back, and Esc or ⌘W hides the window. Drag it by its header; it reopens where you left it. It goes through the same tools as the phone, so it always shows what Zeron shows.
 
 ## Phone
 

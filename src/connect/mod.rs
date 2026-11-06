@@ -14,7 +14,6 @@
 //! reports chats that finish, need an answer, or fail. [`power`] reports the
 //! battery.
 
-mod agent;
 mod chat;
 mod composer;
 mod engine;
@@ -23,7 +22,7 @@ mod power;
 mod tools;
 mod watch;
 
-pub use agent::{install, restart, uninstall};
+pub use engine::spawn as watch_engine;
 pub use maintain::Upkeep;
 pub use watch::NotifyWhen;
 
@@ -45,6 +44,7 @@ use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Engine, Notice, PROTOCOL, U
 
 use self::tools::{Tool, Unavailable, parse_args};
 use crate::json_file;
+use crate::service::RunMode;
 use crate::zeron::Zeron;
 
 /// How often to ping the relay. Proxies drop idle sockets, and a reply
@@ -106,45 +106,6 @@ pub struct RelayLink {
     /// Where to save `link` once the relay accepts it; `None` when it was
     /// loaded from there.
     pub save_to: Option<PathBuf>,
-}
-
-/// How this `connect` was started.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RunMode {
-    /// From a terminal: a running `connect` or a rejected token is an error.
-    Manual,
-    /// By the launch agent: it waits for a running `connect` to stop, and a
-    /// rejected token ends the relay link for good, with a clean exit.
-    Agent,
-}
-
-/// Make sure this is the only `connect` for `data_dir`: two would keep
-/// replacing each other on the relay. The launch agent waits its turn (a
-/// manual run may be holding it); a manual run fails at once. Hold the
-/// returned file while connected.
-pub async fn single_instance(data_dir: &Path, mode: RunMode) -> Result<std::fs::File> {
-    let path = data_dir.join("zeron-tools-connect.lock");
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .with_context(|| format!("opening {}", path.display()))?;
-    match (file.try_lock(), mode) {
-        (Ok(()), _) => return Ok(file),
-        (Err(std::fs::TryLockError::Error(e)), _) => {
-            return Err(e).with_context(|| format!("locking {}", path.display()));
-        }
-        (Err(std::fs::TryLockError::WouldBlock), RunMode::Manual) => bail!(
-            "connect already runs on this Mac (maybe in the background; stop it with zeron-tools connect --uninstall)"
-        ),
-        (Err(std::fs::TryLockError::WouldBlock), RunMode::Agent) => {}
-    }
-    eprintln!("another connect runs on this Mac; waiting for it to stop");
-    tokio::task::spawn_blocking(move || file.lock().map(|()| file))
-        .await?
-        .with_context(|| format!("locking {}", path.display()))
 }
 
 /// What `connect` runs with.
@@ -306,7 +267,7 @@ fn spawn_call(mac: Arc<Mac>, engine: Engine, call: Call, replies: mpsc::Sender<U
     tokio::spawn(async move {
         let result = match mac.slots.acquire().await {
             Ok(_slot) => {
-                let run = run_tool(&mac, &engine, &call.tool, call.args);
+                let run = call_tool(&mac.zeron, &engine, &call.tool, call.args);
                 tokio::time::timeout(TOOL_TIMEOUT, run)
                     .await
                     .unwrap_or_else(|_| Err("Zeron didn't answer in time".into()))
@@ -408,15 +369,22 @@ impl FromStr for Request {
     }
 }
 
-/// Run one allowed tool and return its result, or why it can't run.
-async fn run_tool(mac: &Mac, engine: &Engine, tool: &str, args: Value) -> Result<Value, String> {
+/// Run one of the phone's tools by name and return its result, or why it
+/// can't run in Zeron's `engine` state. Clients on this Mac (the companion
+/// window) call it directly; the relay's calls come through here too.
+pub async fn call_tool(
+    zeron: &Zeron,
+    engine: &Engine,
+    tool: &str,
+    args: Value,
+) -> Result<Value, String> {
     let request: Request = tool.parse().map_err(|e: Unavailable| e.to_string())?;
     if request.needs_zeron()
         && let Some(why) = engine::refusal(engine)
     {
         return Err(why);
     }
-    dispatch(&mac.zeron, request, args)
+    dispatch(zeron, request, args)
         .await
         .map_err(|e| format!("{e:#}"))
 }
@@ -478,13 +446,10 @@ mod tests {
     #[tokio::test]
     async fn calls_wait_for_a_readable_zeron() {
         // Nothing listens here: a call that got through would fail differently.
-        let mac = Mac {
-            zeron: Arc::new(Zeron::new(9, Path::new("/nonexistent"))),
-            slots: Semaphore::new(MAX_CALLS),
-        };
+        let zeron = Zeron::new(9, Path::new("/nonexistent"));
         let call = |engine: Engine, tool: &'static str| {
-            let mac = &mac;
-            async move { run_tool(mac, &engine, tool, json!({})).await }
+            let zeron = &zeron;
+            async move { call_tool(zeron, &engine, tool, json!({})).await }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
         assert_eq!(closed, "Zeron isn't open on this Mac");

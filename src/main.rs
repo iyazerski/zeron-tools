@@ -1,13 +1,16 @@
-//! zeron-tools: a background service for the running Zeron (`connect`). It
-//! talks to Zeron through its engine's loopback IPC, so it works while Zeron
-//! runs and doesn't depend on Zeron's code. `update` installs the latest
-//! release.
+//! zeron-tools: background services for the running Zeron: `connect` keeps
+//! the sidebar short and links Zeron to the phone, and `companion` shows the
+//! chats in a floating window. They talk to Zeron through its engine's
+//! loopback IPC, so they work while Zeron runs and don't depend on Zeron's
+//! code. `update` installs the latest release.
 
 mod archive;
+mod companion;
 mod connect;
 mod json_file;
 mod paths;
 mod rename;
+mod service;
 mod text;
 mod update;
 mod zeron;
@@ -17,8 +20,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
-use crate::connect::{Link, NotifyWhen, RelayLink, RunMode, Upkeep};
+use crate::connect::{Link, NotifyWhen, RelayLink, Upkeep};
 use crate::rename::Pi;
+use crate::service::{COMPANION, CONNECT, RunMode};
 use crate::zeron::Zeron;
 
 #[derive(Parser)]
@@ -64,9 +68,35 @@ enum Cmd {
     /// closed: the app shows that and can open it. Pass --relay and --token
     /// once (the app shows them when you add a Mac); they're saved.
     Connect(ConnectArgs),
-    /// Install the latest release if it's newer, and restart connect's
-    /// background service on it
+    /// Show a floating window with this Mac's Zeron chats on a global
+    /// shortcut, like the phone app: pick a chat or start one, follow it,
+    /// send messages and images, and answer the agent's questions
+    Companion(CompanionArgs),
+    /// Install the latest release if it's newer, and restart the background
+    /// services on it
     Update,
+}
+
+#[derive(Args)]
+struct CompanionArgs {
+    /// The global shortcut that shows and hides the window, like
+    /// cmd+shift+k
+    #[arg(long, default_value = "ctrl+alt+space")]
+    shortcut: String,
+    /// Show the window at once instead of waiting for the shortcut
+    #[arg(long, conflicts_with_all = ["install", "uninstall"])]
+    show: bool,
+    /// Run in the background from now on, with these options: start at
+    /// login, restart after a crash, log to
+    /// ~/Library/Logs/zeron-tools-companion.log
+    #[arg(long, conflicts_with = "uninstall")]
+    install: bool,
+    /// Stop running in the background
+    #[arg(long)]
+    uninstall: bool,
+    /// Set by the launch agent
+    #[arg(long, hide = true)]
+    agent: bool,
 }
 
 #[derive(Args)]
@@ -138,19 +168,59 @@ impl PiOpts {
     }
 }
 
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+// Not `#[tokio::main]`: the companion's window needs the main thread, and
+// runs its own runtime beside it.
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Cmd::Connect(args) => run_connect(&cli.global, args).await,
+        Cmd::Connect(args) => tokio::runtime::Runtime::new()
+            .context("starting the runtime")?
+            .block_on(run_connect(&cli.global, args)),
+        Cmd::Companion(args) => run_companion(&cli.global, args),
         Cmd::Update => update::run(),
     }
+}
+
+/// Run `companion`: install or uninstall its launch agent, or show the window
+/// until it quits.
+fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
+    if args.uninstall {
+        if COMPANION.uninstall()? {
+            println!("stopped; companion no longer runs in the background");
+        } else {
+            println!("companion wasn't running in the background");
+        }
+        return Ok(());
+    }
+    if args.install {
+        let mut agent = global_args(global);
+        agent.extend(["companion".into(), "--agent".into()]);
+        agent.extend(["--shortcut".into(), args.shortcut.clone()]);
+        let log = COMPANION.install(&agent)?;
+        println!(
+            "companion now runs in the background and starts at login; {} shows it; log: {}",
+            args.shortcut,
+            log.display()
+        );
+        return Ok(());
+    }
+    companion::run(companion::Opts {
+        data_dir: &global.data_dir(),
+        ipc_port: global.ipc_port,
+        shortcut: &args.shortcut,
+        show: args.show,
+        mode: if args.agent {
+            RunMode::Agent
+        } else {
+            RunMode::Manual
+        },
+    })
 }
 
 /// Run `connect`: install or uninstall the launch agent, or serve until stopped.
 async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     if args.uninstall {
-        if connect::uninstall()? {
+        if CONNECT.uninstall()? {
             println!("stopped; connect no longer runs in the background");
         } else {
             println!("connect wasn't running in the background");
@@ -202,7 +272,8 @@ async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     if relay.is_none() {
         eprintln!("no phone link yet: add this Mac in the app to use it from a phone");
     }
-    let _only = connect::single_instance(&data_dir, mode).await?;
+    // Two would keep replacing each other on the relay.
+    let _only = CONNECT.single_instance(&data_dir, mode).await?;
     connect::run(connect::Opts {
         relay,
         zeron: Zeron::new(global.ipc_port, &data_dir),
@@ -229,7 +300,7 @@ async fn install(
         connect::verify(link).await?;
         link.save(path)?;
     }
-    let log = connect::install(&agent_args(global, notify, upkeep))?;
+    let log = CONNECT.install(&agent_args(global, notify, upkeep))?;
     println!(
         "connect now runs in the background and starts at login; log: {}",
         log.display()
@@ -242,11 +313,7 @@ async fn install(
 
 /// The launch agent's arguments: this run's options, minus the link (saved).
 fn agent_args(global: &Global, notify: NotifyWhen, upkeep: &Upkeep) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(dir) = &global.data_dir {
-        args.extend(["--data-dir".into(), dir.to_string_lossy().into_owned()]);
-    }
-    args.extend(["--ipc-port".into(), global.ipc_port.to_string()]);
+    let mut args = global_args(global);
     args.extend(["connect".into(), "--agent".into()]);
     if notify == NotifyWhen::Always {
         args.push("--notify-always".into());
@@ -266,6 +333,16 @@ fn agent_args(global: &Global, notify: NotifyWhen, upkeep: &Upkeep) -> Vec<Strin
         ]),
         None => args.push("--no-rename".into()),
     }
+    args
+}
+
+/// The global options a launch agent repeats.
+fn global_args(global: &Global) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(dir) = &global.data_dir {
+        args.extend(["--data-dir".into(), dir.to_string_lossy().into_owned()]);
+    }
+    args.extend(["--ipc-port".into(), global.ipc_port.to_string()]);
     args
 }
 

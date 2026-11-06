@@ -36,7 +36,12 @@ pub mod methods {
     pub const LIST_SKILLS: &str = "ListSkills";
     pub const MUTATE: &str = "Mutate";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
+    pub const UPLOAD_CHUNK: &str = "UploadChunk";
+    pub const UPLOAD_COMMIT: &str = "UploadCommit";
 }
+
+/// The bytes of one `UploadChunk`, before base64.
+const UPLOAD_CHUNK_BYTES: usize = 256 * 1024;
 
 /// How long a snapshot or transcript may take. The engine answers in
 /// milliseconds unless it's still starting.
@@ -206,6 +211,24 @@ impl Zeron {
             )
             .await?;
         Ok(text_field(&reply, "commandId"))
+    }
+
+    /// Save `bytes` as `file_name` in Zeron's uploads, as its composer saves a
+    /// pasted image. Returns the saved file's path, which a prompt can cite.
+    pub async fn upload(&self, file_name: &str, bytes: &[u8]) -> Result<PathBuf> {
+        use base64::Engine as _;
+        let id = uuid::Uuid::new_v4().to_string();
+        for (seq, chunk) in bytes.chunks(UPLOAD_CHUNK_BYTES).enumerate() {
+            let data = base64::engine::general_purpose::STANDARD.encode(chunk);
+            let params = json!({ "uploadId": id, "seq": seq, "data": data });
+            self.call(methods::UPLOAD_CHUNK, params).await?;
+        }
+        let params = json!({ "uploadId": id, "fileName": file_name });
+        let reply = self.call(methods::UPLOAD_COMMIT, params).await?;
+        match reply["path"].as_str() {
+            Some(path) => Ok(PathBuf::from(path)),
+            None => bail!("Zeron saved the upload without a path: {reply}"),
+        }
     }
 
     /// The chat with this id or unique id prefix.

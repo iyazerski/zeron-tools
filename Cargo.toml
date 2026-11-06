@@ -1,24 +1,30 @@
 [package]
 name = "zeron-tools"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2024"
 publish = false
-description = "A background service for Zeron: archive old chats, title untitled ones, and link the running app to a relay for phone access"
+description = "Background services for Zeron: archive old chats, title untitled ones, link the running app to a relay for phone access, and show its chats in a floating window"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "net", "process", "sync", "time"] }
 # The relay link and Zeron's IPC.
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 # tokio-tungstenite leaves the TLS crypto provider to the app; with only
 # `ring` enabled, rustls picks it on its own.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# The companion window. Rune is pre-release and changes often: keep one
+# tested revision.
+rune = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826", features = ["markdown"] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826" }
 uuid = { version = "1", features = ["v4", "serde"] }
 zeron-relay-proto = { path = "relay-proto" }
 

@@ -1,5 +1,5 @@
 //! `update`: replace this binary with the latest GitHub release when it's
-//! newer, and restart the background service on it.
+//! newer, and restart the background services on it.
 //!
 //! It downloads and checks the same files as `install.sh`, with the same
 //! tools (`curl`, `shasum`, `tar`), so zeron-tools needs no HTTP client.
@@ -9,7 +9,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::connect;
+use crate::service::{COMPANION, CONNECT};
 
 const REPO: &str = "iyazerski/zeron-tools";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -44,8 +44,10 @@ pub fn run() -> Result<()> {
     let _ = std::fs::remove_dir_all(&staging);
     installed?;
     println!("updated zeron-tools {VERSION} → {latest}");
-    if connect::restart()? {
-        println!("restarted connect in the background");
+    for service in [CONNECT, COMPANION] {
+        if service.restart()? {
+            println!("restarted {} in the background", service.name());
+        }
     }
     Ok(())
 }
