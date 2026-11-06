@@ -86,8 +86,7 @@ impl Service {
 </plist>
 "#
         );
-        // Stop the old one first: bootstrap fails while a job with the label is loaded.
-        let _ = launchctl(&["bootout", &self.target()]);
+        self.unload()?;
         std::fs::write(&plist, body).with_context(|| format!("writing {}", plist.display()))?;
         launchctl(&["bootstrap", &domain(), &plist.to_string_lossy()])?;
         Ok(log)
@@ -96,12 +95,32 @@ impl Service {
     /// Restart the agent on the current binary, if it's installed. Returns
     /// whether it restarted.
     pub fn restart(self) -> Result<bool> {
-        if !self.plist_path().exists() {
+        let plist = self.plist_path();
+        if !plist.exists() {
             return Ok(false);
         }
-        // A job that isn't loaded (it exited cleanly) stays stopped:
-        // `<name> --install` starts it again.
-        Ok(launchctl(&["kickstart", "-k", &self.target()]).is_ok())
+        // Load the job again rather than `kickstart` it: macOS has refused to
+        // start a kickstarted agent after an update (a launch constraint
+        // violation) until it was loaded again. This also brings back a job
+        // launchd dropped after it kept failing.
+        self.unload()?;
+        launchctl(&["bootstrap", &domain(), &plist.to_string_lossy()])?;
+        Ok(true)
+    }
+
+    /// Stop the agent's job and wait until launchd lets it go: `bootout`
+    /// returns before that, and `bootstrap` fails while the label is loaded.
+    fn unload(self) -> Result<()> {
+        let target = self.target();
+        // Not loaded (it exited cleanly, or never started) is fine.
+        let _ = launchctl(&["bootout", &target]);
+        for _ in 0..100 {
+            if launchctl(&["print", &target]).is_err() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        bail!("launchd didn't stop {target} in 10 s")
     }
 
     /// Stop and remove the agent. Returns whether one was installed.
