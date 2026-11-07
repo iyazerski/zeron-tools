@@ -87,7 +87,7 @@ impl fmt::Debug for Link {
 }
 
 impl Link {
-    /// Read the saved link from `path`, if `connect` was set up before.
+    /// Read the saved link from `path`, if zeron-tools was installed with one.
     pub fn load(path: &Path) -> Result<Option<Self>> {
         json_file::load(path)
     }
@@ -99,19 +99,10 @@ impl Link {
     }
 }
 
-/// The relay link to use, and where to save it if it is new.
-#[derive(Debug, Clone)]
-pub struct RelayLink {
-    pub link: Link,
-    /// Where to save `link` once the relay accepts it; `None` when it was
-    /// loaded from there.
-    pub save_to: Option<PathBuf>,
-}
-
 /// What `connect` runs with.
 pub struct Opts {
     /// The relay link; without one, only the upkeep runs.
-    pub relay: Option<RelayLink>,
+    pub relay: Option<Link>,
     pub zeron: Zeron,
     pub notify: NotifyWhen,
     pub upkeep: Upkeep,
@@ -124,10 +115,9 @@ pub async fn run(opts: Opts) -> Result<()> {
     let zeron = Arc::new(opts.zeron);
     let engine = engine::spawn(zeron.clone());
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.clone(), opts.upkeep));
-    if let Some(RelayLink { link, save_to }) = opts.relay {
+    if let Some(link) = opts.relay {
         let relay = Relay {
             link,
-            save_to,
             notify: opts.notify,
             mode: opts.mode,
         };
@@ -142,8 +132,6 @@ pub async fn run(opts: Opts) -> Result<()> {
 /// The link to the relay, kept up by [`Relay::run`].
 struct Relay {
     link: Link,
-    /// Where to save `link` once the relay first accepts it.
-    save_to: Option<PathBuf>,
     notify: NotifyWhen,
     mode: RunMode,
 }
@@ -151,7 +139,7 @@ struct Relay {
 impl Relay {
     /// Stay connected to the relay until it rejects the token. Returns `Ok`
     /// then if running as the launch agent.
-    async fn run(mut self, zeron: Arc<Zeron>, mut engine: state::Receiver<Engine>) -> Result<()> {
+    async fn run(self, zeron: Arc<Zeron>, mut engine: state::Receiver<Engine>) -> Result<()> {
         let url = socket_url(&self.link.relay)?;
         let mac = Arc::new(Mac {
             zeron: zeron.clone(),
@@ -168,7 +156,6 @@ impl Relay {
                 let socket = dial(&url, &self.link.token).await?;
                 eprintln!("connected to {url}");
                 connected = Some(Instant::now());
-                self.save_accepted_link()?;
                 serve(socket, &mac, &mut engine, &mut battery, &mut notices).await
             }
             .await;
@@ -192,18 +179,6 @@ impl Relay {
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
-    }
-
-    /// Save a new link, once: the relay just accepted it.
-    fn save_accepted_link(&mut self) -> Result<()> {
-        if let Some(path) = self.save_to.take() {
-            self.link.save(&path)?;
-            eprintln!(
-                "saved the link to {}; next time run just zeron-tools connect",
-                path.display()
-            );
-        }
-        Ok(())
     }
 }
 

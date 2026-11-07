@@ -154,7 +154,7 @@ impl Service {
                 return Err(e).with_context(|| format!("locking {}", path.display()));
             }
             (Err(std::fs::TryLockError::WouldBlock), RunMode::Manual) => bail!(
-                "{name} already runs on this Mac (maybe in the background; stop it with zeron-tools {name} --uninstall)"
+                "{name} already runs on this Mac (maybe in the background; stop it with zeron-tools uninstall)"
             ),
             (Err(std::fs::TryLockError::WouldBlock), RunMode::Agent) => {}
         }

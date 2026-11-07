@@ -1,12 +1,11 @@
 # zeron-tools
 
-Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, `connect`:
+Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, it:
 
 - archives all but the 10 most recently active chats of each project (pinned chats and chats in sidebar sections stay),
 - titles chats that stayed untitled or got Zeron's fallback title (the prompt's first words), with a small model through pi,
-- links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications.
-
-`companion` shows Zeron's chats in a small floating window on a global shortcut, so you can follow and steer them from any app.
+- links Zeron to a relay, so you can use it on all your Macs from a phone web app, with notifications,
+- shows Zeron's chats in a small floating window on a global shortcut, so you can follow and steer them from any app.
 
 It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools <command> --help` lists every option.
 
@@ -14,35 +13,31 @@ It talks to Zeron's engine over its local IPC and doesn't build against Zeron's 
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/iyazerski/zeron-tools/main/install.sh | sh
-zeron-tools connect --install
-zeron-tools companion --install
+zeron-tools install
 ```
 
-It installs to `~/.local/bin`. `zeron-tools update` installs the latest release and restarts the background services. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
+The script puts the binary in `~/.local/bin`. Pin an older release with `ZERON_TOOLS_VERSION=v0.1.0`. To build from source, run `make install`.
 
-`connect --install` runs the service in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log`. `connect --uninstall` stops it. Run `--install` again to change its options.
+zeron-tools has three commands:
+
+- `install` runs it in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log` and `~/Library/Logs/zeron-tools-companion.log`. Run it again to change the options.
+- `update` installs the latest release and restarts the background services.
+- `uninstall` stops them.
 
 ## Usage
 
 ```sh
-zeron-tools connect --install --keep 20 --title-model gpt-6-luna
-zeron-tools connect --install --no-rename        # archive only
+zeron-tools install --keep 20 --title-model gpt-6-luna
+zeron-tools install --no-rename                  # archive only
+zeron-tools install --shortcut cmd+shift+k       # another shortcut for the chats window
 ```
 
 - The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
 - Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
 
-## Companion
+## Chats window
 
-```sh
-zeron-tools companion --install                          # Ctrl+Option+Space shows it
-zeron-tools companion --install --shortcut cmd+shift+k
-zeron-tools companion --show                             # once, in the terminal
-```
-
-`companion --install` runs it in the background like `connect`: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-companion.log`. `companion --uninstall` stops it. Quitting it with ⌘Q stops it until the next login or `--install`.
-
-The shortcut shows a floating, slightly transparent window with the phone app's chat list. Pick a chat to follow it, send messages, paste or attach images, answer the agent's questions, switch the model, or stop and archive it. ⌘N starts a new chat, ⌘[ goes back, and Esc or ⌘W hides the window. Drag it by its header; it reopens where you left it. It goes through the same tools as the phone, so it always shows what Zeron shows.
+Ctrl+Option+Space (or `--shortcut`) shows shows a floating, slightly transparent window with the phone app's chat list. Pick a chat to follow it, send messages, paste or attach images, answer the agent's questions, switch the model, or stop and archive it. ⌘N starts a new chat, ⌘[ goes back, and Esc or ⌘W hides the window. Drag it by its header; it reopens where you left it. It goes through the same tools as the phone, so it always shows what Zeron shows. Quitting it with ⌘Q stops it until the next login or `install`.
 
 ## Phone
 
@@ -59,4 +54,4 @@ Each Mac dials out to a small relay, so no VPN or open ports are needed. You sig
   echo "https://zeron.iyazerski.dev/#/setup/$(kubectl get secret zeron-relay-secrets -o jsonpath='{.data.SETUP_TOKEN}' | base64 -d)"
   ```
 
-- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows (`connect --install` with the relay and token; the link is saved). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).
+- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows (`install` with the relay and token; the link is saved). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).

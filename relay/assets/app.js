@@ -291,7 +291,7 @@ function macNote(m) {
   }
   if (state === "offline") {
     return h("div", { class: "offline-note" }, h("span", {}, h("b", {}, `${m.name} is offline.`),
-      " Run zeron-tools connect --install on it."));
+      " Run zeron-tools install on it."));
   }
   return null;
 }
@@ -1643,7 +1643,7 @@ function settingsSheet() {
 /** One Mac's page: start or restart its Zeron, or remove it. */
 function macPage(m, close) {
   const state = macState(m);
-  const sub = { offline: "Offline. Run zeron-tools connect --install on it.", closed: "Zeron is closed.",
+  const sub = { offline: "Offline. Run zeron-tools install on it.", closed: "Zeron is closed.",
     outdated: `Runs Zeron ${m.status.engine?.running}. Update zeron-tools on it.`,
     ready: versions(m) }[state];
   return [
