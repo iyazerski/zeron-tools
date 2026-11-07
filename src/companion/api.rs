@@ -127,7 +127,7 @@ impl Api {
         self.rt.spawn(async move {
             let saving = async {
                 let (name, bytes) = match image {
-                    Payload::Png(name, bytes) => (name, bytes.to_vec()),
+                    Payload::Png { name, bytes } => (name, bytes.to_vec()),
                     Payload::File(path) => {
                         let name = path.file_name().map_or_else(
                             || "image".to_owned(),
@@ -157,7 +157,7 @@ impl Api {
 
 /// An image to upload: pasted bytes, or a file picked or copied in Finder.
 pub enum Payload {
-    Png(String, Arc<[u8]>),
+    Png { name: String, bytes: Arc<[u8]> },
     File(PathBuf),
 }
 

@@ -19,8 +19,8 @@ use super::data::{Chat, Chats};
 use super::prefs::Prefs;
 
 pub use self::attach::{Upload, ready};
-pub use self::draft::{Catalog, Draft};
-pub use self::page::{ChatPage, Existing, QuestionForm, Sheet, Target};
+pub use self::draft::{Catalog, Config, Draft, Pick};
+pub use self::page::{ChatPage, Existing, QuestionForm, Sheet, SkillList, Target};
 
 /// How often the list refreshes while shown, as on the phone.
 const LIST_EVERY: Duration = Duration::from_secs(4);
@@ -62,8 +62,14 @@ pub struct ListState {
 pub struct Toast {
     pub title: String,
     pub body: String,
-    pub error: bool,
+    pub kind: ToastKind,
     until: Instant,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ToastKind {
+    Note,
+    Failure,
 }
 
 /// When some data last loaded, and whether a load runs now.
@@ -156,11 +162,21 @@ impl State {
         self.page_at(nav)?.existing_mut()
     }
 
-    pub fn toast(&mut self, title: &str, body: impl Into<String>, error: bool) {
+    /// Show a short note.
+    pub fn notify(&mut self, title: &str) {
+        self.show_toast(ToastKind::Note, title, String::new());
+    }
+
+    /// Show what failed, and why.
+    pub fn fail(&mut self, title: &str, why: impl Into<String>) {
+        self.show_toast(ToastKind::Failure, title, why.into());
+    }
+
+    fn show_toast(&mut self, kind: ToastKind, title: &str, body: String) {
         self.toast = Some(Toast {
             title: title.to_owned(),
-            body: body.into(),
-            error,
+            body,
+            kind,
             until: Instant::now() + TOAST_FOR,
         });
     }

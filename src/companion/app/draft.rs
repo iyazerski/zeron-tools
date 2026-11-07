@@ -23,6 +23,22 @@ pub struct Draft {
     saved_project: ProjectPick,
 }
 
+/// The harness, model and reasoning the composer shows.
+#[derive(Clone, Copy, Default)]
+pub struct Config<'a> {
+    pub harness: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub reasoning: Option<&'a str>,
+}
+
+/// One pick in the model sheet.
+pub enum Pick {
+    /// A new chat's agent.
+    Harness(String),
+    Model(String),
+    Reasoning(String),
+}
+
 /// A harness's models and reasoning levels.
 pub enum Catalog {
     Loading,
@@ -98,7 +114,7 @@ impl State {
                         }
                         s.load_info();
                     }
-                    Err(e) => s.toast("Couldn't load the projects", e, true),
+                    Err(e) => s.fail("Couldn't load the projects", e),
                 }
             },
         );
@@ -139,7 +155,7 @@ impl State {
                             s.catalog(&h);
                         }
                     }
-                    Err(e) => s.toast("Couldn't load the agents", e, true),
+                    Err(e) => s.fail("Couldn't load the agents", e),
                 }
             },
         );
@@ -188,7 +204,7 @@ impl State {
                         if let Some(draft) = page.draft_mut() {
                             draft.creating = false;
                         }
-                        s.toast("Couldn't start the chat", e, true);
+                        s.fail("Couldn't start the chat", e);
                         return;
                     }
                 };
@@ -246,44 +262,49 @@ impl State {
     }
 
     /// The model, reasoning and harness the composer shows: a new chat's picks, else the chat's.
-    pub fn config(&self) -> (Option<String>, Option<String>, Option<String>) {
+    pub fn config(&self) -> Config<'_> {
         let Some(page) = self.chat() else {
-            return (None, None, None);
+            return Config::default();
         };
         let chat = match &page.target {
-            Target::New(d) => return (d.harness.clone(), d.model.clone(), d.reasoning.clone()),
+            Target::New(d) => {
+                return Config {
+                    harness: d.harness.as_deref(),
+                    model: d.model.as_deref(),
+                    reasoning: d.reasoning.as_deref(),
+                };
+            }
             Target::Existing(chat) => chat.chat.as_ref(),
         };
+        let chat_harness = chat.and_then(|c| c.harness.as_deref());
         match &page.info {
-            Some(info) => (
-                info.harness
-                    .clone()
-                    .or_else(|| chat.and_then(|c| c.harness.clone())),
-                info.model.clone(),
-                info.reasoning.clone(),
-            ),
-            None => (
-                chat.and_then(|c| c.harness.clone()),
-                chat.and_then(|c| c.model.clone()),
-                chat.and_then(|c| c.reasoning.clone()),
-            ),
+            Some(info) => Config {
+                harness: info.harness.as_deref().or(chat_harness),
+                model: info.model.as_deref(),
+                reasoning: info.reasoning.as_deref(),
+            },
+            None => Config {
+                harness: chat_harness,
+                model: chat.and_then(|c| c.model.as_deref()),
+                reasoning: chat.and_then(|c| c.reasoning.as_deref()),
+            },
         }
     }
 
     /// Pick a model or reasoning for the next turns (and a new chat's agent).
-    pub fn pick(
-        &mut self,
-        harness: Option<String>,
-        model: Option<String>,
-        reasoning: Option<String>,
-    ) {
+    pub fn pick(&mut self, pick: Pick) {
         let Some(page) = self.chat_mut() else { return };
         let nav = page.nav;
         let id = match &page.target {
-            Target::New(_) => return self.pick_draft(harness, model, reasoning),
+            Target::New(_) => return self.pick_draft(pick),
             Target::Existing(chat) => chat.id.clone(),
         };
-        let args = json!({ "chat": id, "model": model, "reasoning": reasoning });
+        let args = match pick {
+            // A created chat keeps its agent.
+            Pick::Harness(_) => return,
+            Pick::Model(model) => json!({ "chat": id, "model": model, "reasoning": null }),
+            Pick::Reasoning(level) => json!({ "chat": id, "model": null, "reasoning": level }),
+        };
         self.api.call(
             "set_chat_model",
             args,
@@ -294,35 +315,28 @@ impl State {
                         info.reasoning = saved.reasoning;
                     }
                 }
-                Err(e) => s.toast("Couldn't change the model", e, true),
+                Err(e) => s.fail("Couldn't change the model", e),
             },
         );
     }
 
-    fn pick_draft(
-        &mut self,
-        harness: Option<String>,
-        model: Option<String>,
-        reasoning: Option<String>,
-    ) {
+    fn pick_draft(&mut self, pick: Pick) {
         let Some(draft) = self.chat_mut().and_then(|p| p.draft_mut()) else {
             return;
         };
-        if let Some(h) = harness.filter(|h| Some(h) != draft.harness.as_ref()) {
-            draft.harness = Some(h.clone());
-            draft.model = None;
-            draft.reasoning = None;
-            self.catalog(&h);
-            self.reload_skills();
-        }
-        let Some(draft) = self.chat_mut().and_then(|p| p.draft_mut()) else {
-            return;
-        };
-        if model.is_some() {
-            draft.model = model;
-        }
-        if reasoning.is_some() {
-            draft.reasoning = reasoning;
+        match pick {
+            Pick::Harness(h) => {
+                if draft.harness.as_ref() == Some(&h) {
+                    return;
+                }
+                draft.harness = Some(h.clone());
+                draft.model = None;
+                draft.reasoning = None;
+                self.catalog(&h);
+                self.reload_skills();
+            }
+            Pick::Model(model) => draft.model = Some(model),
+            Pick::Reasoning(level) => draft.reasoning = Some(level),
         }
         self.fit_draft();
     }

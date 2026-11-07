@@ -202,7 +202,7 @@ fn section(k: &Kit, key: &str, items: &[&Chat], collapsed: bool) -> El {
 
 fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
     let t = tones(k);
-    let status = c.status();
+    let status = c.status;
     let unseen = status == Status::Idle && s.prefs.unseen(c);
     let corner = match status {
         Status::Working { stale } => row()

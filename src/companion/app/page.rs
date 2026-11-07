@@ -75,12 +75,31 @@ pub enum Sheet {
 
 #[derive(Default)]
 pub struct SkillMenu {
-    pub list: Option<Result<Vec<Skill>, String>>,
+    pub list: SkillList,
     pub active: usize,
     /// Escape closed the menu for the `$` word at this byte.
     pub dismissed: Option<usize>,
     /// The scope the list was loaded for.
     pub(super) key: String,
+}
+
+/// The skills of the page's agent, for the `$` menu.
+#[derive(Default)]
+pub enum SkillList {
+    #[default]
+    Loading,
+    Ready(Vec<Skill>),
+    Failed(String),
+}
+
+impl SkillList {
+    /// The loaded skills; none while loading or after a failure.
+    pub fn ready(&self) -> &[Skill] {
+        match self {
+            Self::Ready(skills) => skills,
+            Self::Loading | Self::Failed(_) => &[],
+        }
+    }
 }
 
 /// The answers being given to the agent's questions.

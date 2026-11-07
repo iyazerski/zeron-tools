@@ -10,9 +10,8 @@ use serde::Deserialize;
 pub struct Chat {
     pub id: String,
     pub title: Option<String>,
-    /// Zeron's status label, like `working` or `working (stale — …)`.
     #[serde(default)]
-    pub status: String,
+    pub status: Status,
     pub harness: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<String>,
@@ -32,29 +31,36 @@ pub struct Project {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A chat's status, read from Zeron's label (like `working` or
+/// `working (stale — …)`) as the app groups it: by its first word.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(from = "String")]
 pub enum Status {
+    #[default]
     Idle,
-    Working { stale: bool },
+    Working {
+        stale: bool,
+    },
     Input,
     Failed,
 }
 
-impl Chat {
-    /// The status as the app groups it: by its first word.
-    pub fn status(&self) -> Status {
-        match self.status.split(' ').next().unwrap_or_default() {
-            "working" => Status::Working {
-                stale: self.status.contains("stale"),
+impl From<String> for Status {
+    fn from(label: String) -> Self {
+        match label.split(' ').next().unwrap_or_default() {
+            "working" => Self::Working {
+                stale: label.contains("stale"),
             },
-            "awaitingInput" => Status::Input,
-            "errored" => Status::Failed,
-            _ => Status::Idle,
+            "awaitingInput" => Self::Input,
+            "errored" => Self::Failed,
+            _ => Self::Idle,
         }
     }
+}
 
+impl Chat {
     pub fn is_working(&self) -> bool {
-        matches!(self.status(), Status::Working { .. })
+        matches!(self.status, Status::Working { .. })
     }
 
     pub fn title(&self) -> &str {
@@ -99,8 +105,17 @@ pub struct Message {
     pub role: Role,
     /// Epoch milliseconds.
     pub created_at: i64,
-    pub status: Option<String>,
+    pub status: Option<MessageStatus>,
     pub parts: Vec<Part>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageStatus {
+    Streaming,
+    Aborted,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -165,11 +180,18 @@ pub struct Question {
 pub struct ComposerInfo {
     pub branch: Option<String>,
     /// Set for a git project, the only place the branch shows.
-    pub checkout: Option<serde_json::Value>,
+    pub checkout: Option<Checkout>,
     pub context_usage: Option<ContextUsage>,
     pub harness: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Checkout {
+    Local,
+    Worktree,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -248,4 +270,24 @@ pub fn levels_of<'a>(models: &'a [Model], harness: &'a [String], model: &str) ->
         .map(|m| m.reasoning_levels.as_slice())
         .filter(|l| !l.is_empty())
         .unwrap_or(harness)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statuses_group_by_their_first_word() {
+        let cases = [
+            ("working", Status::Working { stale: false }),
+            ("working (stale — 5m)", Status::Working { stale: true }),
+            ("awaitingInput", Status::Input),
+            ("errored", Status::Failed),
+            ("idle", Status::Idle),
+        ];
+        for (label, want) in cases {
+            let got: Status = serde_json::from_value(serde_json::json!(label)).unwrap();
+            assert_eq!(got, want, "{label}");
+        }
+    }
 }

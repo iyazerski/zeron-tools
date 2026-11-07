@@ -5,10 +5,21 @@
 use rune::{TextEdit, Tx};
 use serde_json::{Value, json};
 
-use super::page::SkillMenu;
+use super::page::{SkillList, SkillMenu};
 use super::{QuestionForm, State, Target, attach};
 use crate::companion::data::{ChatView, ComposerInfo, Role, Skills};
 use crate::companion::message::{split_from, with_images, with_skill_refs};
+
+/// A call on the open chat that refreshes it after.
+enum ChatAction {
+    Stop,
+    Archive,
+    /// Answer the agent's questions.
+    Respond {
+        request_id: String,
+        answers: Vec<Value>,
+    },
+}
 
 impl State {
     /// One call per poll: the chat, and its messages only when they may have
@@ -130,13 +141,9 @@ impl State {
         }
         let paths = match attach::ready(page) {
             Ok(paths) => paths,
-            Err(why) => return self.toast(why, "", true),
+            Err(why) => return self.fail(why, ""),
         };
-        let skills = match &page.skills.list {
-            Some(Ok(skills)) => skills.as_slice(),
-            _ => &[],
-        };
-        let text = with_images(&with_skill_refs(&typed, skills), &paths);
+        let text = with_images(&with_skill_refs(&typed, page.skills.list.ready()), &paths);
         let nav = page.nav;
         let Target::Existing(chat) = &mut page.target else {
             self.create(text);
@@ -169,31 +176,41 @@ impl State {
                         s.reattach(nav, paths);
                     }
                 }
-                s.toast("Not sent", e, true);
+                s.fail("Not sent", e);
             },
         );
     }
 
     /// Call a tool on the open chat, and refresh it after.
-    fn chat_action(&mut self, tool: &'static str, extra: Value, failed: &'static str) {
+    fn chat_action(&mut self, action: ChatAction) {
         let Some(page) = self.chat_mut() else { return };
         let nav = page.nav;
         let Some(chat) = page.existing() else { return };
-        let mut args = json!({ "chat": chat.id });
-        if let (Value::Object(args), Value::Object(extra)) = (&mut args, extra) {
-            args.extend(extra);
-        }
+        let archive = matches!(action, ChatAction::Archive);
+        let (tool, failed) = match &action {
+            ChatAction::Stop => ("interrupt_chat", "Couldn't stop"),
+            ChatAction::Archive => ("archive_chat", "Couldn't archive"),
+            ChatAction::Respond { .. } => ("respond_to_input", "Not sent"),
+        };
+        let args = match action {
+            ChatAction::Stop | ChatAction::Archive => json!({ "chat": chat.id }),
+            ChatAction::Respond {
+                request_id,
+                answers,
+            } => json!({ "chat": chat.id, "request_id": request_id, "answers": answers }),
+        };
         self.api.call(
             tool,
             args,
             move |s, result: Result<Value, String>, _| match result {
+                Ok(_) if archive => {
+                    s.notify("Chat archived");
+                    if s.page_at(nav).is_some() {
+                        s.back();
+                    }
+                }
                 Ok(_) => {
-                    if tool == "archive_chat" {
-                        s.toast("Chat archived", "", false);
-                        if s.page_at(nav).is_some() {
-                            s.back();
-                        }
-                    } else if let Some(chat) = s.existing_at(nav) {
+                    if let Some(chat) = s.existing_at(nav) {
                         chat.reload();
                         if let Some(q) = &mut chat.question {
                             q.sending = false;
@@ -204,18 +221,18 @@ impl State {
                     if let Some(q) = s.existing_at(nav).and_then(|c| c.question.as_mut()) {
                         q.sending = false;
                     }
-                    s.toast(failed, e, true);
+                    s.fail(failed, e);
                 }
             },
         );
     }
 
     pub fn stop(&mut self) {
-        self.chat_action("interrupt_chat", json!({}), "Couldn't stop");
+        self.chat_action(ChatAction::Stop);
     }
 
     pub fn archive(&mut self) {
-        self.chat_action("archive_chat", json!({}), "Couldn't archive");
+        self.chat_action(ChatAction::Archive);
     }
 
     /// Answer the agent's questions with the picked options and typed text.
@@ -227,31 +244,32 @@ impl State {
         else {
             return;
         };
-        let answers: Vec<Value> = form
+        let labels: Vec<Vec<&str>> = form
+            .picked
+            .iter()
+            .zip(&form.fields)
+            .map(|(picked, field)| {
+                let typed = Some(field.text.trim()).filter(|t| !t.is_empty());
+                picked.iter().map(String::as_str).chain(typed).collect()
+            })
+            .collect();
+        if labels.iter().any(Vec::is_empty) {
+            self.notify("Answer every question first");
+            return;
+        }
+        let answers = form
             .input
             .questions
             .iter()
-            .zip(form.picked.iter().zip(&form.fields))
-            .map(|(q, (picked, field))| {
-                let mut labels: Vec<&str> = picked.iter().map(String::as_str).collect();
-                let typed = field.text.trim();
-                if !typed.is_empty() {
-                    labels.push(typed);
-                }
-                json!({ "question_id": q.id, "labels": labels })
-            })
+            .zip(labels)
+            .map(|(q, labels)| json!({ "question_id": q.id, "labels": labels }))
             .collect();
-        if answers
-            .iter()
-            .any(|a| a["labels"].as_array().is_none_or(Vec::is_empty))
-        {
-            self.toast("Answer every question first", "", false);
-            return;
-        }
+        let request_id = form.input.request_id.clone();
         form.sending = true;
-        let request = form.input.request_id.clone();
-        let extra = json!({ "request_id": request, "answers": answers });
-        self.chat_action("respond_to_input", extra, "Not sent");
+        self.chat_action(ChatAction::Respond {
+            request_id,
+            answers,
+        });
     }
 
     pub fn open_zeron(&mut self) {
@@ -260,7 +278,7 @@ impl State {
             json!({}),
             |s, result: Result<Value, String>, _| {
                 if let Err(e) = result {
-                    s.toast("Couldn't open Zeron", e, true);
+                    s.fail("Couldn't open Zeron", e);
                 }
             },
         );
@@ -271,8 +289,8 @@ impl State {
             "restart_zeron",
             json!({}),
             |s, result: Result<Value, String>, _| match result {
-                Ok(_) => s.toast("Restarting Zeron", "", false),
-                Err(e) => s.toast("Couldn't restart Zeron", e, true),
+                Ok(_) => s.notify("Restarting Zeron"),
+                Err(e) => s.fail("Couldn't restart Zeron", e),
             },
         );
     }
@@ -292,7 +310,7 @@ impl State {
             return;
         }
         page.skills.key.clone_from(&key);
-        page.skills.list = None;
+        page.skills.list = SkillList::Loading;
         let nav = page.nav;
         self.api.call(
             "list_skills",
@@ -305,11 +323,14 @@ impl State {
                 else {
                     return;
                 };
-                if result.is_err() {
-                    // Forget the scope, so the next `$` tries again.
-                    skills.key.clear();
-                }
-                skills.list = Some(result.map(|r| r.skills));
+                skills.list = match result {
+                    Ok(got) => SkillList::Ready(got.skills),
+                    Err(e) => {
+                        // Forget the scope, so the next `$` tries again.
+                        skills.key.clear();
+                        SkillList::Failed(e)
+                    }
+                };
             },
         );
     }

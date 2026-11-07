@@ -72,7 +72,12 @@ pub fn run(opts: Opts) -> Result<()> {
         families: rune_theme_opencode::FAMILIES,
         on_key: Some(on_key),
         setup: Some(|s, waker| s.images = Some(rune::ImageCache::new(waker))),
-        ..AppSpec::new("Zeron Companion", SIZE, || unreachable!(), view)
+        ..AppSpec::new(
+            "Zeron Companion",
+            SIZE,
+            || unreachable!("init() below builds the state"),
+            view,
+        )
     };
     let app = App::new(spec).windowless();
     let me = app.handle();

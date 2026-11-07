@@ -7,8 +7,10 @@ use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit
 
 use super::icons;
 use super::widgets::tile;
-use crate::companion::app::{self, Catalog, ChatPage, Sheet, State, Upload};
-use crate::companion::data::{Skill, levels_of};
+use crate::companion::app::{
+    self, Catalog, ChatPage, Config, Pick, Sheet, SkillList, State, Upload,
+};
+use crate::companion::data::{Checkout, Skill, levels_of};
 use crate::companion::labels::{harness_name, reasoning_name, short_model};
 use crate::companion::message::skill_query;
 
@@ -170,9 +172,9 @@ fn query(page: &ChatPage) -> Option<(usize, String)> {
 /// hides the menu, as for a `$` word no skill matches (a price).
 fn matching<'a>(page: &'a ChatPage, q: &str) -> Option<Result<Vec<&'a Skill>, &'a str>> {
     match &page.skills.list {
-        None => Some(Ok(Vec::new())),
-        Some(Err(e)) => Some(Err(e)),
-        Some(Ok(skills)) => {
+        SkillList::Loading => Some(Ok(Vec::new())),
+        SkillList::Failed(e) => Some(Err(e)),
+        SkillList::Ready(skills) => {
             let mut found: Vec<&Skill> = skills
                 .iter()
                 .filter(|s| s.name.to_lowercase().contains(q))
@@ -243,7 +245,7 @@ fn skill_menu(page: &ChatPage, k: &Kit) -> Option<El> {
             stick_bottom: false,
         });
     menu = match (&page.skills.list, found) {
-        (None, _) => menu.child(
+        (SkillList::Loading, _) => menu.child(
             row()
                 .gap(6.0)
                 .padding(8.0)
@@ -251,7 +253,7 @@ fn skill_menu(page: &ChatPage, k: &Kit) -> Option<El> {
                 .child(note("Loading skills…".into())),
         ),
         (_, Err(e)) => menu.child(note(format!("Couldn't load the skills: {e}"))),
-        (Some(Ok(all)), Ok(found)) if found.is_empty() => menu.child(note(
+        (SkillList::Ready(all), Ok(found)) if found.is_empty() => menu.child(note(
             if all.is_empty() {
                 "No skills available"
             } else {
@@ -300,16 +302,20 @@ fn skill_menu(page: &ChatPage, k: &Kit) -> Option<El> {
 }
 
 fn model_chip(s: &State, k: &Kit) -> El {
-    let (harness, model, reasoning) = s.config();
+    let Config {
+        harness,
+        model,
+        reasoning,
+    } = s.config();
     let Some(harness) = harness else {
         return rune::el();
     };
     let catalog = s
         .catalogs
-        .get(&harness)
+        .get(harness)
         .and_then(Catalog::ready)
         .map(|(models, _)| models);
-    let label = model.as_deref().map_or("Default".to_owned(), |m| {
+    let label = model.map_or("Default".to_owned(), |m| {
         catalog
             .and_then(|ms| ms.iter().find(|x| x.id == m))
             .and_then(|x| x.label.clone())
@@ -322,7 +328,7 @@ fn model_chip(s: &State, k: &Kit) -> El {
         .radius(7.0)
         .center_y()
         .min_w(0.0)
-        .child(icon(icons::mark(&harness), 13.0).color(k.c.icon_muted))
+        .child(icon(icons::mark(harness), 13.0).color(k.c.icon_muted))
         .child(
             text(label)
                 .font(k.ty.small_medium)
@@ -331,7 +337,7 @@ fn model_chip(s: &State, k: &Kit) -> El {
         );
     if let Some(r) = reasoning {
         chip = chip.child(
-            text(reasoning_name(&r))
+            text(reasoning_name(r))
                 .font(k.ty.small)
                 .color(k.c.text_faint),
         );
@@ -342,7 +348,7 @@ fn model_chip(s: &State, k: &Kit) -> El {
         .on_press(|s: &mut State| {
             open_sheet(s, Sheet::Model);
             // Retry a catalog that failed to load.
-            if let Some(harness) = s.config().0 {
+            if let Some(harness) = s.config().harness.map(str::to_owned) {
                 s.catalog(&harness);
             }
         })
@@ -383,7 +389,7 @@ fn meta(page: &ChatPage, k: &Kit) -> El {
     }
     let Some(info) = &page.info else { return out };
     // Like the desktop footer: checkout and branch only show in a git project.
-    let Some(checkout) = info.checkout.as_ref().and_then(|c| c.as_str()) else {
+    let Some(checkout) = info.checkout else {
         return out;
     };
     let faint = |glyph: &'static rune::Icon, label: String| {
@@ -399,10 +405,9 @@ fn meta(page: &ChatPage, k: &Kit) -> El {
                     .truncate(),
             )
     };
-    let checkout = if checkout == "worktree" {
-        "Worktree"
-    } else {
-        "Local checkout"
+    let checkout = match checkout {
+        Checkout::Worktree => "Worktree",
+        Checkout::Local => "Local checkout",
     };
     out.child(faint(&icons::FOLDER, checkout.to_owned()))
         .child(faint(
@@ -466,8 +471,7 @@ fn sheets(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) {
     };
     match page.sheet {
         Some(Sheet::Model) => {
-            let (harness, _, _) = s.config();
-            let title = harness.as_deref().map_or("Model", harness_name).to_owned();
+            let title = s.config().harness.map_or("Model", harness_name).to_owned();
             Dialog::new("model-sheet", title)
                 .width(360.0)
                 .open(true)
@@ -560,8 +564,12 @@ fn sheet_scroll(body: El) -> El {
 
 /// Reasoning first, as pills: a harness like Pi lists dozens of models.
 fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
-    let (harness, current, reasoning) = s.config();
-    let (models, harness_levels) = match harness.as_ref().and_then(|h| s.catalogs.get(h)) {
+    let Config {
+        harness,
+        model: current,
+        reasoning,
+    } = s.config();
+    let (models, harness_levels) = match harness.and_then(|h| s.catalogs.get(h)) {
         Some(Catalog::Ready { models, levels }) => (models, levels),
         Some(Catalog::Failed(e)) => {
             return text(format!("Couldn't load the models: {e}"))
@@ -591,16 +599,12 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
                         k,
                         harness_name(h).to_owned(),
                         d.harness.as_ref() == Some(h),
-                        move |s| s.pick(Some(id.clone()), None, None),
+                        move |s| s.pick(Pick::Harness(id.clone())),
                     )
                 })),
         );
     }
-    let levels = levels_of(
-        models,
-        harness_levels,
-        current.as_deref().unwrap_or_default(),
-    );
+    let levels = levels_of(models, harness_levels, current.unwrap_or_default());
     if !levels.is_empty() {
         body = body.child(group_label(k, "Reasoning")).child(
             row()
@@ -612,8 +616,8 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
                     pill(
                         k,
                         reasoning_name(l),
-                        reasoning.as_ref() == Some(l),
-                        move |s| s.pick(None, None, Some(level.clone())),
+                        reasoning == Some(l.as_str()),
+                        move |s| s.pick(Pick::Reasoning(level.clone())),
                     )
                 })),
         );
@@ -629,7 +633,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
         .child(group_label(k, "Model"))
         .children(models.iter().map(|m| {
             let id = m.id.clone();
-            let on = current.as_ref() == Some(&m.id);
+            let on = current == Some(m.id.as_str());
             list_row(
                 k,
                 None,
@@ -638,7 +642,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
                 format!("model-{}", m.id),
                 move |s| {
                     if !on {
-                        s.pick(None, Some(id.clone()), None);
+                        s.pick(Pick::Model(id.clone()));
                     }
                 },
             )

@@ -10,7 +10,7 @@ mod widgets;
 use rune::{Cx, El, Key, KeyEvent, SystemMaterial, Tx, col};
 use rune_kit::{Kit, Toast, ToastRegion};
 
-use super::app::{Page, State};
+use super::app::{Page, State, ToastKind};
 
 /// The window's corner radius.
 pub const CORNER: f32 = 14.0;
@@ -27,7 +27,7 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
         if !t.body.is_empty() {
             toast = toast.description(t.body.clone());
         }
-        if t.error {
+        if t.kind == ToastKind::Failure {
             toast = toast.icon(k, &icons::ALERT);
         }
         layer.push(

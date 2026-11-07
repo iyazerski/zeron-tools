@@ -47,7 +47,10 @@ impl State {
         match content.image() {
             Some(image) if content.text().trim().is_empty() => {
                 let n = self.chat().map_or(0, |p| p.attached.len()) + 1;
-                self.attach(Payload::Png(format!("Image_{n}.png"), image.png().into()));
+                self.attach(Payload::Png {
+                    name: format!("Image_{n}.png"),
+                    bytes: image.png().into(),
+                });
                 true
             }
             _ => false,
@@ -64,13 +67,13 @@ impl State {
         tx.open_file(options, |s: &mut State, picked, _| match picked {
             Ok(Some(path)) => s.attach(Payload::File(path)),
             Ok(None) => {}
-            Err(e) => s.toast("Couldn't open the image", e.to_string(), true),
+            Err(e) => s.fail("Couldn't open the image", e.to_string()),
         });
     }
 
     fn attach(&mut self, image: Payload) {
         let thumb = self.images.as_ref().map(|cache| match &image {
-            Payload::Png(_, bytes) => cache.load(Arc::clone(bytes)),
+            Payload::Png { bytes, .. } => cache.load(Arc::clone(bytes)),
             Payload::File(path) => cache.file(path, THUMB, SCALE),
         });
         let Some(page) = self.chat_mut() else { return };
@@ -90,7 +93,7 @@ impl State {
                 Ok(path) => attached.upload = Upload::Done(path),
                 Err(e) => {
                     attached.upload = Upload::Failed(e.clone());
-                    s.toast("Couldn't attach the image", e, true);
+                    s.fail("Couldn't attach the image", e);
                 }
             }
         });

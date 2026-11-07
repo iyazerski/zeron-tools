@@ -1,5 +1,8 @@
 //! Small pieces the list and the chat share: tones, tiles, dots, notes.
 
+use std::sync::LazyLock;
+
+use rune::color::hex;
 use rune::{Color, El, TextStyle, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
 use zeron_relay_proto::Engine;
@@ -28,23 +31,11 @@ pub fn hide_button(k: &Kit) -> El {
         .build(k)
 }
 
-/// An sRGB `#rrggbb` as Rune's linear colour.
-fn hex(s: &str) -> Color {
-    let channel = |i: usize| {
-        let v = f32::from(u8::from_str_radix(&s[i..i + 2], 16).unwrap_or(0)) / 255.0;
-        if v <= 0.04045 {
-            v / 12.92
-        } else {
-            ((v + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    Color {
-        r: channel(1),
-        g: channel(3),
-        b: channel(5),
-        a: 1.0,
-    }
-}
+/// The project tones as colours, dark then light, parsed once.
+static TONES: LazyLock<[[Color; 8]; 2]> = LazyLock::new(|| {
+    [TONES_DARK, TONES_LIGHT]
+        .map(|tones| tones.map(|t| hex(t).unwrap_or_else(|| panic!("bad tone {t}"))))
+});
 
 /// The status tones the phone app uses: working, input, failed, done.
 pub struct Tones {
@@ -68,7 +59,7 @@ pub fn tile(k: &Kit, project: Option<&Project>, size: f32) -> El {
     let index = project.map_or(6, |p| {
         tone_index(if p.path.is_empty() { &p.name } else { &p.path })
     });
-    let tone = hex(if k.dark { TONES_DARK } else { TONES_LIGHT }[index]);
+    let tone = TONES[usize::from(!k.dark)][index];
     let name = project.map_or("Home", |p| p.name.trim());
     let letter = name
         .chars()

@@ -10,7 +10,7 @@ use rune_kit::{
 use super::icons;
 use super::widgets::{dot, engine_note, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, QuestionForm, State, Target};
-use crate::companion::data::{Message, Part, Role};
+use crate::companion::data::{Message, MessageStatus, Part, Role};
 use crate::companion::labels::{harness_name, short_model, tool_summary, tool_verb};
 use crate::companion::message::{ToolState, parse_tool, references, split_from, split_images};
 
@@ -242,7 +242,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
                 out.push(user_bubble(k, page, &m.text(), false).key(format!("m-{}", m.id)))
             }
             Role::Assistant => {
-                let streaming = m.status.as_deref() == Some("streaming")
+                let streaming = m.status == Some(MessageStatus::Streaming)
                     || (Some(m.id.as_str()) == last && working);
                 out.push(assistant(page, k, m, streaming).key(format!("m-{}", m.id)));
             }
@@ -358,7 +358,7 @@ fn assistant(page: &Existing, k: &Kit, m: &Message, streaming: bool) -> El {
             Part::Error { error } => errbox(k, error),
         });
     }
-    if m.status.as_deref() == Some("aborted") {
+    if m.status == Some(MessageStatus::Aborted) {
         out = out.child(text("Stopped").font(k.ty.small).color(k.c.text_faint));
     }
     out
