@@ -5,17 +5,15 @@
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
 use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, Spinner};
 
-use super::app::{Catalog, ChatPage, Sheet, State};
-use super::attach::Upload;
-use super::data::{Skill, harness_name, levels_of, reasoning_name, short_model, skill_query};
 use super::icons;
-use super::ui::tile;
+use super::widgets::tile;
+use crate::companion::app::{self, Catalog, ChatPage, Sheet, State, Upload};
+use crate::companion::data::{Skill, levels_of};
+use crate::companion::labels::{harness_name, reasoning_name, short_model};
+use crate::companion::message::skill_query;
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
-    let working = page
-        .chat
-        .as_ref()
-        .is_some_and(super::data::Chat::is_working);
+    let working = page.is_working();
     let typed = !page.composer.text.trim().is_empty() || !page.attached.is_empty();
     let stop = !typed && working;
     let field = text_input(&page.composer, k.ty.ui.lh(19.0))
@@ -23,7 +21,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .w_full()
         .color(k.c.text_base)
         .placeholder(
-            if page.draft.is_some() {
+            if page.draft().is_some() {
                 "Describe the task"
             } else {
                 "Message"
@@ -40,8 +38,8 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
             }
         })
         .on_submit(State::send);
-    let ready = page.draft.as_ref().is_none_or(|d| d.harness.is_some())
-        && super::attach::ready(page).is_ok();
+    let creating = page.draft().is_some_and(|d| d.creating);
+    let ready = page.draft().is_none_or(|d| d.harness.is_some()) && app::ready(page).is_ok();
     let send = IconButton::new(if stop { &icons::STOP } else { &icons::SEND })
         .variant(if stop {
             IconButtonVariant::Neutral
@@ -49,7 +47,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
             IconButtonVariant::Submit
         })
         .label(if stop { "Stop" } else { "Send" })
-        .disabled(page.sending || !(stop || typed && ready))
+        .disabled(creating || !(stop || typed && ready))
         .on_press_tx(move |s: &mut State, tx: &mut Tx| if stop { s.stop() } else { s.send(tx) })
         .build(k);
     let attach = IconButton::new(&icons::PAPERCLIP)
@@ -358,7 +356,7 @@ fn open_sheet(s: &mut State, sheet: Sheet) {
 
 fn meta(page: &ChatPage, k: &Kit) -> El {
     let mut out = row().gap(8.0).center_y().min_w(0.0).shrink();
-    if let Some(d) = &page.draft {
+    if let Some(d) = page.draft() {
         let project = d
             .project
             .as_ref()
@@ -581,7 +579,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
         }
     };
     let mut body = col().w_full().gap(6.0);
-    if let Some(d) = page.draft.as_ref().filter(|d| d.harnesses.len() > 1) {
+    if let Some(d) = page.draft().filter(|d| d.harnesses.len() > 1) {
         body = body.child(group_label(k, "Agent")).child(
             row()
                 .w_full()
@@ -620,11 +618,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
                 })),
         );
     }
-    if page
-        .chat
-        .as_ref()
-        .is_some_and(super::data::Chat::is_working)
-    {
+    if page.is_working() {
         body = body.child(
             text("Changes apply from the next turn.")
                 .font(k.ty.small)
@@ -653,7 +647,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
 }
 
 fn project_body(page: &ChatPage, k: &Kit) -> El {
-    let Some(d) = &page.draft else {
+    let Some(d) = page.draft() else {
         return rune::el();
     };
     let pick = |project: Option<String>| {

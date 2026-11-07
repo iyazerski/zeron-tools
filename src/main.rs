@@ -107,9 +107,8 @@ struct InstallArgs {
 struct ConnectArgs {
     #[command(flatten)]
     opts: ConnectOpts,
-    /// Set by the launch agent
-    #[arg(long)]
-    agent: bool,
+    #[command(flatten)]
+    agent: AgentFlag,
 }
 
 #[derive(Args)]
@@ -119,9 +118,25 @@ struct CompanionArgs {
     /// Show the window at once instead of waiting for the shortcut
     #[arg(long)]
     show: bool,
+    #[command(flatten)]
+    agent: AgentFlag,
+}
+
+#[derive(Args)]
+struct AgentFlag {
     /// Set by the launch agent
     #[arg(long)]
     agent: bool,
+}
+
+impl AgentFlag {
+    fn mode(&self) -> RunMode {
+        if self.agent {
+            RunMode::Agent
+        } else {
+            RunMode::Manual
+        }
+    }
 }
 
 /// What `connect` does besides the relay link.
@@ -247,10 +262,7 @@ async fn install(global: &Global, args: InstallArgs) -> Result<()> {
     }
     let connect_log = CONNECT.install(&agent_args(global, notify, &upkeep))?;
     let shortcut = args.companion.shortcut;
-    let mut companion = global_args(global);
-    companion.extend(["companion".into(), "--agent".into()]);
-    companion.extend(["--shortcut".into(), shortcut.clone()]);
-    let companion_log = COMPANION.install(&companion)?;
+    let companion_log = COMPANION.install(&companion_args(global, &shortcut))?;
     println!(
         "zeron-tools now runs in the background and starts at login; {shortcut} shows the chats window"
     );
@@ -291,11 +303,7 @@ async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     if relay.is_none() {
         eprintln!("no phone link yet: add this Mac in the app to use it from a phone");
     }
-    let mode = if args.agent {
-        RunMode::Agent
-    } else {
-        RunMode::Manual
-    };
+    let mode = args.agent.mode();
     // Two would keep replacing each other on the relay.
     let _only = CONNECT.single_instance(&data_dir, mode).await?;
     connect::run(connect::Opts {
@@ -315,12 +323,16 @@ fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
         ipc_port: global.ipc_port,
         shortcut: &args.opts.shortcut,
         show: args.show,
-        mode: if args.agent {
-            RunMode::Agent
-        } else {
-            RunMode::Manual
-        },
+        mode: args.agent.mode(),
     })
+}
+
+/// `companion`'s launch agent arguments.
+fn companion_args(global: &Global, shortcut: &str) -> Vec<String> {
+    let mut args = global_args(global);
+    args.extend(["companion".into(), "--agent".into()]);
+    args.extend(["--shortcut".into(), shortcut.to_owned()]);
+    args
 }
 
 /// `connect`'s launch agent arguments: this run's options, minus the link

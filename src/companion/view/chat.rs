@@ -7,26 +7,25 @@ use rune_kit::{
     TextInput,
 };
 
-use super::app::{ChatPage, QuestionForm, State};
-use super::data::{
-    Message, Part, Role, ToolState, harness_name, parse_tool, references, short_model, split_from,
-    split_images, tool_summary, tool_verb,
-};
 use super::icons;
-use super::ui::{dot, engine_note, tones};
+use super::widgets::{dot, engine_note, hide_button, tones};
+use crate::companion::app::{ChatPage, Existing, QuestionForm, State, Target};
+use crate::companion::data::{Message, Part, Role};
+use crate::companion::labels::{harness_name, short_model, tool_summary, tool_verb};
+use crate::companion::message::{ToolState, parse_tool, references, split_from, split_images};
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let mut body = col().key("transcript").w_full().px(14.0).py(10.0).gap(14.0);
+    let error = page.existing().and_then(|c| c.error.as_deref());
     if let Some(note) = engine_note(s, k) {
         body = body.child(note);
-    } else if let Some(e) = &page.error {
+    } else if let Some(e) = error {
         body = body.child(errbox(k, e));
     }
-    if page.draft.is_some() {
-        body = body.child(hero(k));
-    } else {
-        body = body.children(transcript(page, k));
-    }
+    body = match &page.target {
+        Target::New(_) => body.child(hero(k)),
+        Target::Existing(chat) => body.children(transcript(chat, k)),
+    };
     let scroll = col()
         .key("transcript")
         .w_full()
@@ -58,14 +57,14 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     col()
         .w_full()
         .h_full()
-        .child(header(s, page, k, layer))
+        .child(header(page, k, layer))
         .child(stack)
         .child(super::composer::view(s, page, k, layer))
 }
 
-fn header(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
-    let (title, sub) = match (&page.draft, &page.chat) {
-        (Some(d), _) => {
+fn header(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
+    let (title, sub) = match &page.target {
+        Target::New(d) => {
             let project = d
                 .project
                 .as_ref()
@@ -79,7 +78,7 @@ fn header(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
                 parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
             )
         }
-        (None, Some(c)) => {
+        Target::Existing(Existing { chat: Some(c), .. }) => {
             let parts = [
                 c.harness.as_deref().map(harness_name),
                 c.model.as_deref().map(short_model),
@@ -90,7 +89,7 @@ fn header(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
                 parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
             )
         }
-        (None, None) => (String::new(), String::new()),
+        Target::Existing(_) => (String::new(), String::new()),
     };
     let back = IconButton::new(&icons::BACK)
         .variant(IconButtonVariant::Ghost)
@@ -125,14 +124,14 @@ fn header(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .window_drag()
         .child(back)
         .child(titles);
-    if page.draft.is_none() {
-        bar = bar.child(more_menu(s, page, k, layer));
+    if page.existing().is_some() {
+        bar = bar.child(more_menu(page, k, layer));
     }
-    bar = bar.child(super::ui::hide_button(k));
+    bar = bar.child(hide_button(k));
     bar
 }
 
-fn more_menu(_: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
+fn more_menu(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let trigger = IconButton::new(&icons::MORE)
         .variant(IconButtonVariant::Ghost)
         .label("More")
@@ -147,11 +146,7 @@ fn more_menu(_: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .trigger(trigger)
         .open(page.menu)
         .on_close(close_menu);
-    if page
-        .chat
-        .as_ref()
-        .is_some_and(super::data::Chat::is_working)
-    {
+    if page.is_working() {
         menu = menu.item(
             MenuItem::new("Stop the agent")
                 .icon(&icons::STOP)
@@ -218,7 +213,7 @@ fn errbox(k: &Kit, why: &str) -> El {
         )
 }
 
-fn transcript(page: &ChatPage, k: &Kit) -> Vec<El> {
+fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
     let Some(read) = &page.read else {
         return vec![
             row()
@@ -228,10 +223,7 @@ fn transcript(page: &ChatPage, k: &Kit) -> Vec<El> {
                 .child(Spinner::new().build(k)),
         ];
     };
-    let working = page
-        .chat
-        .as_ref()
-        .is_some_and(super::data::Chat::is_working);
+    let working = page.chat.as_ref().is_some_and(|c| c.is_working());
     let mut out = Vec::new();
     if read.older_remaining > 0 {
         out.push(
@@ -300,7 +292,7 @@ fn quiet(last: Option<&Message>) -> bool {
     })
 }
 
-fn user_bubble(k: &Kit, page: &ChatPage, text_in: &str, pending: bool) -> El {
+fn user_bubble(k: &Kit, page: &Existing, text_in: &str, pending: bool) -> El {
     let (from, body) = split_from(text_in);
     let (body, images) = split_images(body);
     // Composer references become labels; the rest stays literal text.
@@ -353,7 +345,7 @@ fn user_bubble(k: &Kit, page: &ChatPage, text_in: &str, pending: bool) -> El {
 }
 
 /// Prose, tool groups and errors in transcript order, as on the desktop.
-fn assistant(page: &ChatPage, k: &Kit, m: &Message, streaming: bool) -> El {
+fn assistant(page: &Existing, k: &Kit, m: &Message, streaming: bool) -> El {
     let mut out = col().w_full().gap(10.0);
     for (i, part) in m.parts.iter().enumerate() {
         out = out.child(match part {
@@ -372,7 +364,7 @@ fn assistant(page: &ChatPage, k: &Kit, m: &Message, streaming: bool) -> El {
     out
 }
 
-fn tool_group(page: &ChatPage, k: &Kit, key: &str, lines: &[String]) -> El {
+fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
     let tools: Vec<_> = lines.iter().map(|l| parse_tool(l)).collect();
     let open = page.open_groups.contains(key);
     let live = tools.iter().any(|t| t.state == ToolState::Running);
@@ -401,10 +393,10 @@ fn tool_group(page: &ChatPage, k: &Kit, key: &str, lines: &[String]) -> El {
     let head = k
         .interactive(head.px(6.0).py(4.0).radius(6.0))
         .on_press(move |s: &mut State| {
-            if let Some(p) = s.chat_mut()
-                && !p.open_groups.remove(&toggle)
+            if let Some(chat) = s.chat_mut().and_then(ChatPage::existing_mut)
+                && !chat.open_groups.remove(&toggle)
             {
-                p.open_groups.insert(toggle.clone());
+                chat.open_groups.insert(toggle.clone());
             }
         });
     let mut group = col()
@@ -536,7 +528,11 @@ fn question(k: &Kit, form: &QuestionForm) -> El {
                 k.interactive(opt)
                     .key(format!("opt-{qi}-{option}"))
                     .on_press(move |s: &mut State| {
-                        let Some(form) = s.chat_mut().and_then(|p| p.question.as_mut()) else {
+                        let Some(form) = s
+                            .chat_mut()
+                            .and_then(ChatPage::existing_mut)
+                            .and_then(|c| c.question.as_mut())
+                        else {
                             return;
                         };
                         let picked = &mut form.picked[qi];

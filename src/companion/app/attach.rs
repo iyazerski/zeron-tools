@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use rune::{ClipboardContent, FileDialogOptions, Image, ImageCache, Tx};
 
-use super::api::Payload;
-use super::app::{ChatPage, State};
-use super::data::split_images;
+use super::{ChatPage, Page, State};
+use crate::companion::api::Payload;
+use crate::companion::message::split_images;
 
 /// Thumbnails decode at this many points square: the largest they draw.
 const THUMB: f32 = 72.0;
@@ -123,14 +123,17 @@ impl State {
 
     /// Decode the transcript's images the first time they show.
     pub fn load_thumbs(&mut self) {
-        let (Some(cache), super::app::Page::Chat(page)) = (&self.images, &mut self.page) else {
+        let (Some(cache), Page::Chat(page)) = (&self.images, &mut self.page) else {
             return;
         };
-        let sent = page.read.iter().flat_map(|r| &r.messages).map(|m| m.text());
-        let texts: Vec<String> = sent.chain(page.pending.iter().cloned()).collect();
+        let Some(chat) = page.existing_mut() else {
+            return;
+        };
+        let sent = chat.read.iter().flat_map(|r| &r.messages).map(|m| m.text());
+        let texts: Vec<String> = sent.chain(chat.pending.iter().cloned()).collect();
         for text in &texts {
             for path in split_images(text).1 {
-                remember(cache, &mut page.thumbs, path);
+                remember(cache, &mut chat.thumbs, path);
             }
         }
     }

@@ -5,10 +5,11 @@ use chrono::Utc;
 use rune::{El, TextStyle, Tx, col, icon, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Kit, Spinner, TextInput};
 
-use super::app::State;
-use super::data::{Chat, Status, ago, harness_name};
 use super::icons;
-use super::ui::{dot, engine_note, faint, tile, tones};
+use super::widgets::{dot, engine_note, faint, hide_button, tile, tones};
+use crate::companion::app::State;
+use crate::companion::data::{Chat, Status};
+use crate::companion::labels::{ago, harness_name};
 
 pub fn view(s: &State, k: &Kit) -> El {
     let header = row()
@@ -36,7 +37,7 @@ pub fn view(s: &State, k: &Kit) -> El {
                 .on_press(State::new_chat)
                 .build(k),
         )
-        .child(super::ui::hide_button(k));
+        .child(hide_button(k));
     let search = TextInput::new(&s.list.query)
         .placeholder("Search")
         .leading_icon(&icons::SEARCH)

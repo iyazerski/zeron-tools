@@ -4,9 +4,10 @@ use rune::{Color, El, TextStyle, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
 use zeron_relay_proto::Engine;
 
-use super::app::State;
-use super::data::{Project, tone_index};
 use super::icons;
+use crate::companion::app::State;
+use crate::companion::data::Project;
+use crate::companion::labels::tone_index;
 
 /// The desktop's project tones (`project_icon.rs`): slate, blue, violet,
 /// rose, amber, emerald, teal, orange.
@@ -19,7 +20,7 @@ const TONES_LIGHT: [&str; 8] = [
 
 /// Hides the window; the shortcut brings it back.
 pub fn hide_button(k: &Kit) -> El {
-    IconButton::new(&super::icons::CLOSE)
+    IconButton::new(&icons::CLOSE)
         .variant(IconButtonVariant::GhostMuted)
         .label("Hide")
         .help("Hide (Esc)")
