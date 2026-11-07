@@ -979,12 +979,14 @@ function chatView(machine, id, fromList) {
   scroll.addEventListener("scroll", () => jump.classList.toggle("on", !nearBottom()), { passive: true });
 
   const isWorking = () => statusOf(chat) === "working";
+  // The first message is creating the chat; typing must not re-enable Send meanwhile.
+  let creating = false;
   function updateComposer() {
     const text = textarea.value.trim();
     const stop = !text && isWorking();
     sendBtn.classList.toggle("stop", stop);
     sendBtn.replaceChildren(icon(stop ? "stop" : "send"));
-    sendBtn.disabled = isDraft ? !text || !machine || !draft.harness : !text && !stop;
+    sendBtn.disabled = isDraft ? creating || !text || !machine || !draft.harness : !text && !stop;
     sendBtn.setAttribute("aria-label", stop ? "Stop" : "Send");
     hint.classList.toggle("hide", !(text && isWorking()));
   }
@@ -993,6 +995,8 @@ function chatView(machine, id, fromList) {
     textarea.style.height = `${Math.min(textarea.scrollHeight, window.innerHeight * 0.4)}px`;
     updateComposer();
     drafts[draftKey] = textarea.value;
+    // After a failed load, the next keystroke tries again.
+    if (skillsError) skillsFor = "";
     drawSkills();
   });
   textarea.addEventListener("keydown", e => {
@@ -1019,8 +1023,11 @@ function chatView(machine, id, fromList) {
     skillsError = "";
     if (isDraft && (!machine || !draft.harness)) { skills = []; return; }
     const args = isDraft ? { harness: draft.harness, ...(draft.project ? { project: draft.project } : {}) } : { chat: id };
-    call(machine, "list_skills", args).then(r => { skills = r.skills || []; }, e => { skills = []; skillsError = e.message; })
-      .then(() => key === skillsFor && drawSkills());
+    call(machine, "list_skills", args).then(r => {
+      if (key === skillsFor) skills = r.skills || [];
+    }, e => {
+      if (key === skillsFor) { skills = []; skillsError = e.message; }
+    }).then(() => key === skillsFor && drawSkills());
   }
 
   /** The `$` word the caret ends: where its `$` is and the text after it. */
@@ -1097,8 +1104,11 @@ function chatView(machine, id, fromList) {
     } catch (e) {
       bubble.remove();
       pending = pending.filter(p => p.el !== bubble);
-      textarea.value = typed;
-      updateComposer();
+      // Don't overwrite what was typed while it was sending.
+      if (!textarea.value.trim()) {
+        textarea.value = typed;
+        updateComposer();
+      }
       toast({ title: "Not sent", body: e.message, kind: "error" });
     }
   }
@@ -1442,10 +1452,14 @@ function chatView(machine, id, fromList) {
   /** Create the chat with the first message, then show it in place of this screen. */
   async function create() {
     const typed = textarea.value.trim();
-    if (!typed || !machine || !draft.harness) return;
+    if (creating || !typed || !machine || !draft.harness) return;
     const text = withSkillRefs(typed);
     haptic(12);
-    sendBtn.disabled = true;
+    creating = true;
+    updateComposer();
+    // The picks may change while the chat is created; use the ones sent.
+    const target = machine;
+    const picks = { machine: target, project: draft.project, harness: draft.harness, model: draft.model, reasoning: draft.reasoning };
     const args = { prompt: text, harness: draft.harness };
     if (draft.project) args.project = draft.project;
     if (draft.model) args.model = draft.model;
@@ -1453,13 +1467,14 @@ function chatView(machine, id, fromList) {
     // The desktop records the project's branch on the chat it creates.
     if (info?.branch) args.branch = info.branch;
     try {
-      const made = await call(machine, "create_chat", args);
-      prefs.set({ machine, project: draft.project, harness: draft.harness, model: draft.model, reasoning: draft.reasoning });
+      const made = await call(target, "create_chat", args);
+      prefs.set(picks);
       delete drafts[draftKey];
       handoff = { chat: made.chatId, text };
-      location.replace(chatHash(machine, made.chatId));
+      location.replace(chatHash(target, made.chatId));
     } catch (e) {
       toast({ title: "Couldn't start the chat", body: e.message, kind: "error" });
+      creating = false;
       updateComposer();
     }
   }
@@ -1675,7 +1690,8 @@ function addMac(close) {
         h("div", { class: "note", style: { margin: "-6px 4px 12px" } }, "Run this on the Mac. It keeps the Mac connected in the background from then on, even while Zeron is closed. The token is shown only once."),
         h("div", { class: "command" }, command),
         h("button", { class: "btn full", style: { marginBottom: "8px" }, onclick: () => { copyText(command); toast({ title: "Command copied", kind: "done", timeout: 1600 }); } }, icon("copy"), "Copy command"),
-        h("button", { class: "btn solid full", onclick: close }, "Done"));
+        // Not `onclick: close`: the click event would count as `fromHistory`.
+        h("button", { class: "btn solid full", onclick: () => close() }, "Done"));
     } catch (e) { toast({ title: "Couldn't add the Mac", body: e.message, kind: "error" }); create.disabled = false; }
   });
   setTimeout(() => name.focus(), 300);
