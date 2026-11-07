@@ -666,7 +666,7 @@ function offlineBanner(text = "Can't reach the relay. Retrying…") {
   return { el, stop: () => net.listeners.delete(show) };
 }
 
-/** Turn the bar to glass once content scrolls under it. */
+/** Turn the bar's card to glass once content scrolls under it. */
 function solidOnScroll(scroll, bar, at = 8) {
   const update = () => bar.classList.toggle("solid", scroll.scrollTop > at);
   scroll.addEventListener("scroll", update, { passive: true });
@@ -706,11 +706,11 @@ const listState = { query: "", scroll: 0 };
 const collapsed = new Set(JSON.parse(localStorage.getItem("zeron.collapsed") || "[]"));
 
 function listView() {
-  const bar = h("div", { class: "bar" },
+  const bar = h("div", { class: "bar floating" }, h("div", { class: "bar-card" },
     h("div", { class: "circle" }),
     h("div", { class: "grow" }, h("div", { class: "t fade" }, "Chats")),
     h("button", { class: "circle glass", "aria-label": "New chat", onclick: () => { haptic(); go("#/new"); } }, icon("plus")),
-    h("button", { class: "circle glass", "aria-label": "Settings", onclick: settingsSheet }, icon("more")));
+    h("button", { class: "circle glass", "aria-label": "Settings", onclick: settingsSheet }, icon("more"))));
   const macs = h("div", { class: "macs" });
   const input = h("input", { type: "search", placeholder: "Search", value: listState.query, enterkeyhint: "search" });
   const rows = h("div", {}, Array.from({ length: 7 }, () => h("div", { class: "skeleton" })));
