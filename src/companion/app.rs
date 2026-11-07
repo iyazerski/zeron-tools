@@ -13,7 +13,7 @@ use super::data::{
     Chat, ChatView, Chats, ComposerInfo, Created, Harnesses, Model, Models, PendingInput, Picked,
     Project, Projects, Read, Skill, Skills, levels_of, with_images, with_skill_refs,
 };
-use super::prefs::{NewChat, Prefs};
+use super::prefs::{NewChat, Prefs, ProjectPick};
 
 /// How often the list refreshes while shown, as on the phone.
 const LIST_EVERY: Duration = Duration::from_secs(4);
@@ -64,15 +64,23 @@ pub struct Toast {
     until: Instant,
 }
 
-#[derive(Default)]
-pub struct Catalog {
-    pub models: Option<Vec<Model>>,
-    pub levels: Option<Vec<String>>,
+/// A harness's models and reasoning levels.
+pub enum Catalog {
+    Loading,
+    Ready {
+        models: Vec<Model>,
+        levels: Vec<String>,
+    },
+    /// Loading failed; the next [`State::catalog`] call tries again.
+    Failed(String),
 }
 
 impl Catalog {
     pub fn ready(&self) -> Option<(&[Model], &[String])> {
-        Some((self.models.as_deref()?, self.levels.as_deref()?))
+        match self {
+            Self::Ready { models, levels } => Some((models, levels)),
+            Self::Loading | Self::Failed(_) => None,
+        }
     }
 }
 
@@ -107,6 +115,11 @@ pub struct ChatPage {
     pub attached: Vec<super::attach::Attached>,
     /// The transcript's images by path, decoded once.
     pub thumbs: HashMap<String, Image>,
+    /// The next attached image's id; ids are never reused, so a late upload
+    /// can't land on a newer image.
+    next_attached: u64,
+    /// Counts chat refreshes, so an older one that answers late is dropped.
+    refresh: u64,
     /// Edits aimed at a field that's gone (an answered question) land here.
     scratch: TextEdit,
     version: String,
@@ -134,7 +147,7 @@ pub struct Draft {
     pub model: Option<String>,
     pub reasoning: Option<String>,
     pub loaded: bool,
-    saved_project: Option<Option<String>>,
+    saved_project: ProjectPick,
 }
 
 /// The answers being given to the agent's questions.
@@ -330,6 +343,8 @@ impl State {
             draft: None,
             attached: Vec::new(),
             thumbs: HashMap::new(),
+            next_attached: 0,
+            refresh: 0,
             far_from_bottom: false,
             scratch: TextEdit::default(),
             version: String::new(),
@@ -358,7 +373,10 @@ impl State {
         page.draft = Some(Draft {
             projects: Vec::new(),
             harnesses: Vec::new(),
-            project: project.clone().flatten(),
+            project: match &project {
+                ProjectPick::Project(id) => Some(id.clone()),
+                ProjectPick::Recent | ProjectPick::NoProject => None,
+            },
             harness,
             model,
             reasoning,
@@ -393,13 +411,16 @@ impl State {
         let Some(page) = self.chat_mut() else { return };
         let Some(id) = page.id.clone() else { return };
         page.loading = true;
-        let (nav, limit, known) = (page.nav, page.limit, page.version.clone());
-        let args = json!({ "chat": id, "limit": limit, "known": known });
+        page.refresh += 1;
+        let (nav, seq, limit) = (page.nav, page.refresh, page.limit);
+        let args = json!({ "chat": id, "limit": limit, "known": page.version });
         self.api.call(
             "chat_view",
             args,
             move |s, result: Result<ChatView, String>, tx| {
-                let Some(page) = s.page_at(nav) else { return };
+                let Some(page) = s.page_at(nav).filter(|p| p.refresh == seq) else {
+                    return;
+                };
                 page.loading = false;
                 page.last = Some(Instant::now());
                 let view = match result {
@@ -496,32 +517,40 @@ impl State {
 
     /// Load `harness`'s models and levels unless they are loaded or loading.
     pub fn catalog(&mut self, harness: &str) {
-        if self.catalogs.contains_key(harness) {
+        if matches!(
+            self.catalogs.get(harness),
+            Some(Catalog::Loading | Catalog::Ready { .. })
+        ) {
             return;
         }
-        self.catalogs.insert(harness.to_owned(), Catalog::default());
+        self.catalogs.insert(harness.to_owned(), Catalog::Loading);
         let key = harness.to_owned();
-        self.api.call(
-            "list_models",
-            json!({ "harness": harness }),
-            move |s, result: Result<Models, String>, _| match result {
-                Ok(got) => s.catalogs.entry(key).or_default().models = Some(got.models),
-                Err(e) => {
-                    s.catalogs.remove(&key);
-                    eprintln!("list_models: {e}");
-                }
+        let args = json!({ "harness": harness });
+        let id = key.clone();
+        self.api.run(
+            move |tools| async move {
+                let (models, harnesses) = tokio::join!(
+                    tools.call::<Models>("list_models", args),
+                    tools.call::<Harnesses>("list_harnesses", json!({})),
+                );
+                let levels = harnesses?
+                    .harnesses
+                    .into_iter()
+                    .find(|h| h.id == id)
+                    .map(|h| h.reasoning_levels)
+                    .unwrap_or_default();
+                Ok::<_, String>((models?.models, levels))
             },
-        );
-        let key = harness.to_owned();
-        self.api.call(
-            "list_harnesses",
-            json!({}),
-            move |s, result: Result<Harnesses, String>, _| {
-                let levels = result
-                    .ok()
-                    .and_then(|h| h.harnesses.into_iter().find(|h| h.id == key));
-                s.catalogs.entry(key).or_default().levels =
-                    Some(levels.map(|h| h.reasoning_levels).unwrap_or_default());
+            move |s, result, _| {
+                let catalog = match result {
+                    Ok((models, levels)) => Catalog::Ready { models, levels },
+                    Err(e) => {
+                        eprintln!("loading {key}'s models: {e}");
+                        Catalog::Failed(e)
+                    }
+                };
+                s.catalogs.insert(key, catalog);
+                s.fit_draft();
             },
         );
     }
@@ -542,7 +571,7 @@ impl State {
                     Ok(mut got) => {
                         got.projects.sort_by(|a, b| a.name.cmp(&b.name));
                         draft.projects = got.projects;
-                        if draft.saved_project.is_none() {
+                        if draft.saved_project == ProjectPick::Recent {
                             draft.project = recent.and_then(|c| c.project).map(|p| p.id);
                         }
                         if !draft
@@ -661,21 +690,21 @@ impl State {
         page.sending = true;
         let nav = page.nav;
         let mut args = json!({ "prompt": text, "harness": harness });
-        let pick = NewChat {
-            project: Some(draft.project.clone()),
-            harness: Some(harness),
-            model: draft.model.clone(),
-            reasoning: draft.reasoning.clone(),
-        };
         for (key, value) in [
-            ("project", &pick.project.clone().flatten()),
-            ("model", &pick.model),
-            ("reasoning", &pick.reasoning),
+            ("project", &draft.project),
+            ("model", &draft.model),
+            ("reasoning", &draft.reasoning),
         ] {
             if let Some(value) = value {
                 args[key] = json!(value);
             }
         }
+        let pick = NewChat {
+            project: ProjectPick::from(draft.project.clone()),
+            harness: Some(harness),
+            model: draft.model.clone(),
+            reasoning: draft.reasoning.clone(),
+        };
         // The desktop records the project's branch on the chat it creates.
         if let Some(branch) = page.info.as_ref().and_then(|i| i.branch.clone()) {
             args["branch"] = json!(branch);
@@ -844,6 +873,7 @@ impl State {
                 draft.model = None;
                 draft.reasoning = None;
                 self.catalog(&h);
+                self.reload_skills();
             }
             let Some(draft) = self.chat_mut().and_then(|p| p.draft.as_mut()) else {
                 return;
@@ -916,7 +946,16 @@ impl State {
                 page.info = None;
             }
             self.load_info();
+            self.reload_skills();
         }
+    }
+
+    /// Drop the skills of a new chat's old agent or project, and load its new ones.
+    fn reload_skills(&mut self) {
+        if let Some(page) = self.chat_mut() {
+            page.skills = SkillMenu::default();
+        }
+        self.load_skills();
     }
 
     /// Load the skills for the `$` menu: the chat's agent's, or a new chat's in its project.
@@ -934,18 +973,35 @@ impl State {
         if page.skills.key == key {
             return;
         }
-        page.skills.key = key;
+        page.skills.key.clone_from(&key);
         page.skills.list = None;
         let nav = page.nav;
         self.api.call(
             "list_skills",
             args,
             move |s, result: Result<Skills, String>, _| {
-                if let Some(page) = s.page_at(nav) {
-                    page.skills.list = Some(result.map(|r| r.skills));
+                let Some(skills) = s
+                    .page_at(nav)
+                    .map(|p| &mut p.skills)
+                    .filter(|m| m.key == key)
+                else {
+                    return;
+                };
+                if result.is_err() {
+                    // Forget the scope, so the next `$` tries again.
+                    skills.key.clear();
                 }
+                skills.list = Some(result.map(|r| r.skills));
             },
         );
+    }
+}
+
+impl ChatPage {
+    /// A fresh id for an attached image.
+    pub fn attached_id(&mut self) -> u64 {
+        self.next_attached += 1;
+        self.next_attached
     }
 }
 

@@ -236,17 +236,12 @@ async fn serve(
     }
 }
 
-/// Run `call` in its own task, within [`MAX_CALLS`] and [`TOOL_TIMEOUT`],
-/// and send its reply to `replies`.
+/// Run `call` in its own task, within [`MAX_CALLS`], and send its reply to
+/// `replies`.
 fn spawn_call(mac: Arc<Mac>, engine: Engine, call: Call, replies: mpsc::Sender<Up>) {
     tokio::spawn(async move {
         let result = match mac.slots.acquire().await {
-            Ok(_slot) => {
-                let run = call_tool(&mac.zeron, &engine, &call.tool, call.args);
-                tokio::time::timeout(TOOL_TIMEOUT, run)
-                    .await
-                    .unwrap_or_else(|_| Err("Zeron didn't answer in time".into()))
-            }
+            Ok(_slot) => call_tool(&mac.zeron, &engine, &call.tool, call.args).await,
             Err(_) => Err("connect is stopping".into()),
         };
         // The connection may be gone by now; the relay times the call out.
@@ -345,8 +340,9 @@ impl FromStr for Request {
 }
 
 /// Run one of the phone's tools by name and return its result, or why it
-/// can't run in Zeron's `engine` state. Clients on this Mac (the companion
-/// window) call it directly; the relay's calls come through here too.
+/// can't run in Zeron's `engine` state, within [`TOOL_TIMEOUT`]. Clients on
+/// this Mac (the companion window) call it directly; the relay's calls come
+/// through here too.
 pub async fn call_tool(
     zeron: &Zeron,
     engine: &Engine,
@@ -359,9 +355,10 @@ pub async fn call_tool(
     {
         return Err(why);
     }
-    dispatch(zeron, request, args)
-        .await
-        .map_err(|e| format!("{e:#}"))
+    match tokio::time::timeout(TOOL_TIMEOUT, dispatch(zeron, request, args)).await {
+        Ok(result) => result.map_err(|e| format!("{e:#}")),
+        Err(_) => Err("Zeron didn't answer in time".into()),
+    }
 }
 
 /// Run `request` with its JSON `args`.

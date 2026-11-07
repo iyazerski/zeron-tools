@@ -27,11 +27,27 @@ pub struct Prefs {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NewChat {
-    /// `None` starts in the most recent chat's project.
-    pub project: Option<Option<String>>,
+    pub project: ProjectPick,
     pub harness: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<String>,
+}
+
+/// The project a new chat starts in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectPick {
+    /// The most recent chat's project.
+    #[default]
+    Recent,
+    NoProject,
+    Project(String),
+}
+
+impl From<Option<String>> for ProjectPick {
+    fn from(project: Option<String>) -> Self {
+        project.map_or(Self::NoProject, Self::Project)
+    }
 }
 
 impl Prefs {
@@ -90,5 +106,26 @@ impl Prefs {
             self.collapsed.insert(key.to_owned());
         }
         self.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_chat_picks_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+        for project in [
+            ProjectPick::Recent,
+            ProjectPick::NoProject,
+            ProjectPick::Project("p1".into()),
+        ] {
+            let mut prefs = Prefs::load(path.clone());
+            prefs.new_chat.project = project.clone();
+            prefs.save();
+            assert_eq!(Prefs::load(path.clone()).new_chat.project, project);
+        }
     }
 }

@@ -74,7 +74,7 @@ impl State {
             Payload::File(path) => cache.file(path, THUMB, SCALE),
         });
         let Some(page) = self.chat_mut() else { return };
-        let id = page.attached.iter().map(|a| a.id + 1).max().unwrap_or(0);
+        let id = page.attached_id();
         page.attached.push(Attached {
             id,
             thumb,
@@ -105,7 +105,8 @@ impl State {
         let Some(page) = self.page_at(nav) else {
             return;
         };
-        for (id, (path, thumb)) in (0..).zip(paths.into_iter().zip(thumbs)) {
+        for (path, thumb) in paths.into_iter().zip(thumbs) {
+            let id = page.attached_id();
             page.attached.push(Attached {
                 id,
                 thumb,

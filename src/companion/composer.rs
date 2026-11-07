@@ -5,7 +5,7 @@
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
 use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, Spinner};
 
-use super::app::{ChatPage, Sheet, State};
+use super::app::{Catalog, ChatPage, Sheet, State};
 use super::attach::Upload;
 use super::data::{Skill, harness_name, levels_of, reasoning_name, short_model, skill_query};
 use super::icons;
@@ -306,7 +306,11 @@ fn model_chip(s: &State, k: &Kit) -> El {
     let Some(harness) = harness else {
         return rune::el();
     };
-    let catalog = s.catalogs.get(&harness).and_then(|c| c.models.as_deref());
+    let catalog = s
+        .catalogs
+        .get(&harness)
+        .and_then(Catalog::ready)
+        .map(|(models, _)| models);
     let label = model.as_deref().map_or("Default".to_owned(), |m| {
         catalog
             .and_then(|ms| ms.iter().find(|x| x.id == m))
@@ -337,7 +341,13 @@ fn model_chip(s: &State, k: &Kit) -> El {
     k.interactive(chip)
         .key("model-chip")
         .label("Model")
-        .on_press(|s: &mut State| open_sheet(s, Sheet::Model))
+        .on_press(|s: &mut State| {
+            open_sheet(s, Sheet::Model);
+            // Retry a catalog that failed to load.
+            if let Some(harness) = s.config().0 {
+                s.catalog(&harness);
+            }
+        })
 }
 
 fn open_sheet(s: &mut State, sheet: Sheet) {
@@ -553,16 +563,22 @@ fn sheet_scroll(body: El) -> El {
 /// Reasoning first, as pills: a harness like Pi lists dozens of models.
 fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
     let (harness, current, reasoning) = s.config();
-    let Some((models, harness_levels)) = harness
-        .as_ref()
-        .and_then(|h| s.catalogs.get(h))
-        .and_then(|c| c.ready())
-    else {
-        return row()
-            .w_full()
-            .py(24.0)
-            .justify_center()
-            .child(Spinner::new().build(k));
+    let (models, harness_levels) = match harness.as_ref().and_then(|h| s.catalogs.get(h)) {
+        Some(Catalog::Ready { models, levels }) => (models, levels),
+        Some(Catalog::Failed(e)) => {
+            return text(format!("Couldn't load the models: {e}"))
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .wrap()
+                .padding(16.0);
+        }
+        Some(Catalog::Loading) | None => {
+            return row()
+                .w_full()
+                .py(24.0)
+                .justify_center()
+                .child(Spinner::new().build(k));
+        }
     };
     let mut body = col().w_full().gap(6.0);
     if let Some(d) = page.draft.as_ref().filter(|d| d.harnesses.len() > 1) {

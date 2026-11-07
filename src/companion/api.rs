@@ -1,6 +1,7 @@
 //! The bridge from the window to Zeron: tool calls run on a tokio runtime and
 //! hand their results back to the UI thread through the app's handle.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,12 +21,34 @@ use super::State;
 
 /// How often the UI checks what's due: polls, the working clock.
 const TICK: Duration = Duration::from_secs(1);
+/// How long saving one image may take: a hung Zeron must not leave it
+/// spinning in the composer.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub struct Api {
     rt: Handle,
+    tools: Tools,
+    app: AppHandle<State>,
+}
+
+/// Zeron's phone tools, callable from tasks on the runtime.
+#[derive(Clone)]
+pub struct Tools {
     zeron: Arc<Zeron>,
     engine: watch::Receiver<Engine>,
-    app: AppHandle<State>,
+}
+
+impl Tools {
+    /// Run the phone's tool `tool` with `args` and parse its result, or say why it failed.
+    pub async fn call<T: DeserializeOwned>(
+        &self,
+        tool: &'static str,
+        args: Value,
+    ) -> Result<T, String> {
+        let state = self.engine.borrow().clone();
+        let value = call_tool(&self.zeron, &state, tool, args).await?;
+        serde_json::from_value(value).map_err(|e| format!("unexpected {tool} answer: {e}"))
+    }
 }
 
 impl Api {
@@ -56,8 +79,7 @@ impl Api {
         });
         Self {
             rt,
-            zeron,
-            engine,
+            tools: Tools { zeron, engine },
             app,
         }
     }
@@ -74,12 +96,23 @@ impl Api {
         args: Value,
         done: impl FnOnce(&mut State, Result<T, String>, &mut Tx) + Send + 'static,
     ) {
-        let (zeron, engine, app) = (self.zeron.clone(), self.engine.clone(), self.app.clone());
+        self.run(
+            move |tools| async move { tools.call(tool, args).await },
+            done,
+        );
+    }
+
+    /// Run `work` with the tools on the runtime, then `done` with its result
+    /// on the UI thread: for answers that take more than one call.
+    pub fn run<R: Send + 'static, F: Future<Output = R> + Send + 'static>(
+        &self,
+        work: impl FnOnce(Tools) -> F,
+        done: impl FnOnce(&mut State, R, &mut Tx) + Send + 'static,
+    ) {
+        let app = self.app.clone();
+        let work = work(self.tools.clone());
         self.rt.spawn(async move {
-            let state = engine.borrow().clone();
-            let result = call_tool(&zeron, &state, tool, args).await.and_then(|v| {
-                serde_json::from_value(v).map_err(|e| format!("unexpected {tool} answer: {e}"))
-            });
+            let result = work.await;
             app.update(move |s, tx| done(s, result, tx));
         });
     }
@@ -90,9 +123,9 @@ impl Api {
         image: Payload,
         done: impl FnOnce(&mut State, Result<String, String>, &mut Tx) + Send + 'static,
     ) {
-        let (zeron, app) = (self.zeron.clone(), self.app.clone());
+        let (zeron, app) = (self.tools.zeron.clone(), self.app.clone());
         self.rt.spawn(async move {
-            let result = async {
+            let saving = async {
                 let (name, bytes) = match image {
                     Payload::Png(name, bytes) => (name, bytes.to_vec()),
                     Payload::File(path) => {
@@ -110,10 +143,13 @@ impl Api {
                     bail!("{} is too large (24 MB max)", name.as_str());
                 }
                 zeron.upload(&name, &bytes).await
-            }
-            .await
-            .map(|path| path.to_string_lossy().into_owned())
-            .map_err(|e| format!("{e:#}"));
+            };
+            let result = match tokio::time::timeout(UPLOAD_TIMEOUT, saving).await {
+                Ok(saved) => saved
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|e| format!("{e:#}")),
+                Err(_) => Err("Zeron didn't save the image in time".to_owned()),
+            };
             app.update(move |s, tx| done(s, result, tx));
         });
     }
