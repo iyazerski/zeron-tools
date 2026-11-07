@@ -63,7 +63,8 @@ pub fn run(opts: Opts) -> Result<()> {
     // Two would both take the shortcut, and each press would toggle twice.
     let _only = rt.block_on(COMPANION.single_instance(opts.data_dir, opts.mode))?;
     let zeron = Arc::new(Zeron::new(opts.ipc_port, opts.data_dir));
-    let prefs = Prefs::load(opts.data_dir.join("zeron-tools-companion.json"));
+    let prefs_path = opts.data_dir.join("zeron-tools-companion.json");
+    let prefs = Prefs::load(&prefs_path);
     let handle = rt.handle().clone();
 
     let spec = AppSpec {
@@ -85,7 +86,7 @@ pub fn run(opts: Opts) -> Result<()> {
         me.update(|s, _| s.toggle_window());
     }
     let app = app
-        .init(move || State::new(Api::start(handle, zeron, me), prefs))
+        .init(move || State::new(Api::start(handle, zeron, me, prefs_path), prefs))
         .global_shortcut(opts.shortcut, |s, _| s.toggle_window());
     eprintln!("companion is running; {} shows it", opts.shortcut);
     rune::run_windows_with_args(RunOptions { accessory: true }, [], move |displays| {

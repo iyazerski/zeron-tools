@@ -197,7 +197,10 @@ fn section(k: &Kit, key: &str, items: &[&Chat], collapsed: bool) -> El {
         });
     head.child(rune::spacer())
         .child(chevron)
-        .on_press(move |s: &mut State| s.prefs.toggle_collapsed(&toggle))
+        .on_press(move |s: &mut State| {
+            s.prefs.toggle_collapsed(&toggle);
+            s.save_prefs();
+        })
 }
 
 fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {

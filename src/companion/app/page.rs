@@ -9,7 +9,7 @@ use rune::{Image, TextEdit};
 use super::Poll;
 use super::attach::Attached;
 use super::draft::Draft;
-use crate::companion::data::{Chat, ComposerInfo, PendingInput, Read, Skill};
+use crate::companion::data::{Chat, ComposerInfo, Part, PendingInput, Read, Role, Skill};
 
 /// Messages per page, and how many more "Load earlier messages" adds.
 const PAGE: usize = 40;
@@ -56,7 +56,7 @@ pub struct Existing {
     pub open_groups: HashSet<String>,
     pub question: Option<QuestionForm>,
     /// The transcript's images by path, decoded once.
-    pub thumbs: HashMap<String, Image>,
+    pub thumbs: HashMap<String, Option<Image>>,
     pub(super) limit: usize,
     /// The transcript version shown; empty to load it whole.
     pub(super) version: String,
@@ -180,6 +180,23 @@ impl Target {
 }
 
 impl Existing {
+    /// Whether the agent works but shows nothing yet (no prose and no
+    /// running tool), so the transcript counts the seconds instead.
+    pub fn shows_clock(&self) -> bool {
+        let working = self.chat.as_ref().is_some_and(Chat::is_working);
+        working
+            && self.read.as_ref().is_some_and(|r| {
+                r.messages.last().is_none_or(|m| {
+                    m.role == Role::User
+                        || !m.parts.iter().any(|p| match p {
+                            Part::Text { .. } => true,
+                            Part::Tools { tools } => tools.iter().any(|t| t.ends_with("(running)")),
+                            Part::Error { .. } => false,
+                        })
+                })
+            })
+    }
+
     pub(super) fn new(id: String, chat: Option<Chat>) -> Self {
         Self {
             id,

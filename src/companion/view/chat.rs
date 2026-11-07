@@ -252,7 +252,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
     for (i, text) in page.pending.iter().enumerate() {
         out.push(user_bubble(k, page, text, true).key(format!("pending-{i}")));
     }
-    if working && quiet(read.messages.last()) {
+    if page.shows_clock() {
         let since = read
             .messages
             .iter()
@@ -278,18 +278,6 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
         out.push(question(k, form).key(format!("q-{}", form.input.request_id)));
     }
     out
-}
-
-/// Whether the agent shows nothing yet: no prose and no running tool.
-fn quiet(last: Option<&Message>) -> bool {
-    last.is_none_or(|m| {
-        m.role == Role::User
-            || !m.parts.iter().any(|p| match p {
-                Part::Text { .. } => true,
-                Part::Tools { tools } => tools.iter().any(|t| t.ends_with("(running)")),
-                Part::Error { .. } => false,
-            })
-    })
 }
 
 fn user_bubble(k: &Kit, page: &Existing, text_in: &str, pending: bool) -> El {
@@ -334,11 +322,15 @@ fn user_bubble(k: &Kit, page: &Existing, text_in: &str, pending: bool) -> El {
     if !images.is_empty() {
         out = out.child(row().gap(6.0).children(images.into_iter().map(|path| {
             let url = format!("file://{path}");
-            k.interactive(super::composer::thumb(k, page.thumbs.get(path), 72.0))
-                .key(format!("img-{path}"))
-                .label("Open the image")
-                .opacity(if pending { 0.6 } else { 1.0 })
-                .on_press_tx(move |_: &mut State, tx: &mut Tx| drop(tx.open_url(&url)))
+            k.interactive(super::composer::thumb(
+                k,
+                page.thumbs.get(path).and_then(Option::as_ref),
+                72.0,
+            ))
+            .key(format!("img-{path}"))
+            .label("Open the image")
+            .opacity(if pending { 0.6 } else { 1.0 })
+            .on_press_tx(move |_: &mut State, tx: &mut Tx| drop(tx.open_url(&url)))
         })));
     }
     out.child(bubble)

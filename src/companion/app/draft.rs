@@ -211,7 +211,7 @@ impl State {
                 // Sent, so there's no text to keep for the next new chat.
                 page.composer.clear();
                 s.prefs.new_chat = pick;
-                s.prefs.save();
+                s.save_prefs();
                 s.open_chat(made.chat_id);
                 if let Some(chat) = s.chat_mut().and_then(|p| p.existing_mut()) {
                     chat.pending.push(text);

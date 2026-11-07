@@ -5720,6 +5720,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures-util",
+ "image",
  "libc",
  "rune",
  "rune-kit",

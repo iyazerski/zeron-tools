@@ -18,7 +18,7 @@ use super::api::Api;
 use super::data::{Chat, Chats};
 use super::prefs::Prefs;
 
-pub use self::attach::{Upload, ready};
+pub use self::attach::Upload;
 pub use self::draft::{Catalog, Config, Draft, Pick};
 pub use self::page::{ChatPage, Existing, QuestionForm, Sheet, SkillList, Target};
 
@@ -162,6 +162,10 @@ impl State {
         self.page_at(nav)?.existing_mut()
     }
 
+    pub fn save_prefs(&self) {
+        self.api.save_prefs(&self.prefs);
+    }
+
     /// Show a short note.
     pub fn notify(&mut self, title: &str) {
         self.show_toast(ToastKind::Note, title, String::new());
@@ -235,17 +239,19 @@ impl State {
                 }
             }
             Page::Chat(page) => {
-                let working = page.is_working();
-                let every = if working {
+                let Some(chat) = page.existing() else {
+                    return changed;
+                };
+                let every = if page.is_working() {
                     CHAT_WORKING_EVERY
                 } else {
                     CHAT_IDLE_EVERY
                 };
-                if page.existing().is_some_and(|c| c.poll.due(every)) {
+                // The working clock counts seconds; nothing else moves.
+                changed |= chat.shows_clock();
+                if chat.poll.due(every) {
                     self.refresh_chat();
                 }
-                // The working clock counts seconds.
-                changed |= working;
             }
         }
         changed
@@ -261,7 +267,9 @@ impl State {
                 match result {
                     Ok(mut got) => {
                         got.chats.sort_by_key(|c| std::cmp::Reverse(c.active_at()));
-                        s.prefs.prime(&got.chats);
+                        if s.prefs.prime(&got.chats) {
+                            s.save_prefs();
+                        }
                         s.list.chats = Some(got.chats);
                         s.list.error = None;
                     }

@@ -7,9 +7,7 @@ use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit
 
 use super::icons;
 use super::widgets::tile;
-use crate::companion::app::{
-    self, Catalog, ChatPage, Config, Pick, Sheet, SkillList, State, Upload,
-};
+use crate::companion::app::{Catalog, ChatPage, Config, Pick, Sheet, SkillList, State, Upload};
 use crate::companion::data::{Checkout, Skill, levels_of};
 use crate::companion::labels::{harness_name, reasoning_name, short_model};
 use crate::companion::message::skill_query;
@@ -41,7 +39,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         })
         .on_submit(State::send);
     let creating = page.draft().is_some_and(|d| d.creating);
-    let ready = page.draft().is_none_or(|d| d.harness.is_some()) && app::ready(page).is_ok();
+    let ready = page.draft().is_none_or(|d| d.harness.is_some()) && page.uploads_done();
     let send = IconButton::new(if stop { &icons::STOP } else { &icons::SEND })
         .variant(if stop {
             IconButtonVariant::Neutral
@@ -175,11 +173,16 @@ fn matching<'a>(page: &'a ChatPage, q: &str) -> Option<Result<Vec<&'a Skill>, &'
         SkillList::Loading => Some(Ok(Vec::new())),
         SkillList::Failed(e) => Some(Err(e)),
         SkillList::Ready(skills) => {
-            let mut found: Vec<&Skill> = skills
+            let mut found: Vec<(bool, &Skill)> = skills
                 .iter()
-                .filter(|s| s.name.to_lowercase().contains(q))
+                .filter_map(|s| {
+                    let name = s.name.to_lowercase();
+                    name.contains(q).then(|| (!name.starts_with(q), s))
+                })
                 .collect();
-            found.sort_by_key(|s| !s.name.to_lowercase().starts_with(q));
+            // Stable: names that start with the query first, each in list order.
+            found.sort_by_key(|&(later, _)| later);
+            let found: Vec<&Skill> = found.into_iter().map(|(_, s)| s).collect();
             (!found.is_empty() || q.is_empty() || skills.is_empty()).then_some(Ok(found))
         }
     }

@@ -15,9 +15,11 @@ use tokio::sync::watch;
 use zeron_relay_proto::Engine;
 
 use crate::connect::{call_tool, watch_engine};
+use crate::json_file;
 use crate::zeron::Zeron;
 
 use super::State;
+use super::prefs::Prefs;
 
 /// How often the UI checks what's due: polls, the working clock.
 const TICK: Duration = Duration::from_secs(1);
@@ -29,6 +31,7 @@ pub struct Api {
     rt: Handle,
     tools: Tools,
     app: AppHandle<State>,
+    prefs: watch::Sender<Value>,
 }
 
 /// Zeron's phone tools, callable from tasks on the runtime.
@@ -52,8 +55,14 @@ impl Tools {
 }
 
 impl Api {
-    /// Watch Zeron's engine and tick the UI, both on `rt`.
-    pub fn start(rt: Handle, zeron: Arc<Zeron>, app: AppHandle<State>) -> Self {
+    /// Watch Zeron's engine, tick the UI and write the prefs to
+    /// `prefs_path`, all on `rt`.
+    pub fn start(
+        rt: Handle,
+        zeron: Arc<Zeron>,
+        app: AppHandle<State>,
+        prefs_path: PathBuf,
+    ) -> Self {
         let engine = {
             let _entered = rt.enter();
             watch_engine(zeron.clone())
@@ -77,10 +86,23 @@ impl Api {
                 ticks.update_if(State::tick);
             }
         });
+        let prefs = write_prefs(&rt, prefs_path);
         Self {
             rt,
             tools: Tools { zeron, engine },
             app,
+            prefs,
+        }
+    }
+
+    /// Save the prefs off the UI thread; losing them only resets what the
+    /// list shows as new and the last picks.
+    pub fn save_prefs(&self, prefs: &Prefs) {
+        match serde_json::to_value(prefs) {
+            Ok(prefs) => {
+                self.prefs.send_replace(prefs);
+            }
+            Err(e) => eprintln!("{e:#}"),
         }
     }
 
@@ -126,23 +148,23 @@ impl Api {
         let (zeron, app) = (self.tools.zeron.clone(), self.app.clone());
         self.rt.spawn(async move {
             let saving = async {
-                let (name, bytes) = match image {
-                    Payload::Png { name, bytes } => (name, bytes.to_vec()),
+                match image {
+                    Payload::Png { name, bytes } => {
+                        check_size(&name, bytes.len() as u64)?;
+                        zeron.upload(&name, &bytes).await
+                    }
                     Payload::File(path) => {
                         let name = path.file_name().map_or_else(
                             || "image".to_owned(),
                             |n| n.to_string_lossy().into_owned(),
                         );
-                        let bytes = tokio::fs::read(&path)
-                            .await
-                            .with_context(|| format!("reading {}", path.display()))?;
-                        (name, bytes)
+                        let reading = || format!("reading {}", path.display());
+                        let size = tokio::fs::metadata(&path).await.with_context(reading)?;
+                        check_size(&name, size.len())?;
+                        let bytes = tokio::fs::read(&path).await.with_context(reading)?;
+                        zeron.upload(&name, &bytes).await
                     }
-                };
-                if bytes.len() > MAX_IMAGE_BYTES {
-                    bail!("{} is too large (24 MB max)", name.as_str());
                 }
-                zeron.upload(&name, &bytes).await
             };
             let result = match tokio::time::timeout(UPLOAD_TIMEOUT, saving).await {
                 Ok(saved) => saved
@@ -155,11 +177,36 @@ impl Api {
     }
 }
 
+/// Write the newest prefs sent to `path`, one write at a time: saves made
+/// during a slow write collapse into one.
+fn write_prefs(rt: &Handle, path: PathBuf) -> watch::Sender<Value> {
+    let (saves, mut latest) = watch::channel(Value::Null);
+    rt.spawn(async move {
+        while latest.changed().await.is_ok() {
+            let prefs = latest.borrow_and_update().clone();
+            let path = path.clone();
+            let written = tokio::task::spawn_blocking(move || json_file::save(&path, &prefs));
+            if let Ok(Err(e)) = written.await {
+                eprintln!("{e:#}");
+            }
+        }
+    });
+    saves
+}
+
 /// An image to upload: pasted bytes, or a file picked or copied in Finder.
+#[derive(Clone)]
 pub enum Payload {
     Png { name: String, bytes: Arc<[u8]> },
     File(PathBuf),
 }
 
 /// Zeron's own limit on one image.
-const MAX_IMAGE_BYTES: usize = 24 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 24 * 1024 * 1024;
+
+fn check_size(name: &str, bytes: u64) -> anyhow::Result<()> {
+    if bytes > MAX_IMAGE_BYTES {
+        bail!("{name} is too large (24 MB max)");
+    }
+    Ok(())
+}

@@ -71,7 +71,9 @@ impl State {
                     chat.version = view.version;
                     s.load_thumbs();
                 }
-                s.prefs.mark_seen(&view.chat);
+                if s.prefs.mark_seen(&view.chat) {
+                    s.save_prefs();
+                }
                 if let Some(chat) = s.existing_at(nav) {
                     chat.chat = Some(view.chat);
                 }

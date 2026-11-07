@@ -25,6 +25,8 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rune = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826", features = ["markdown"] }
 rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "d03349e25189ce1edc8c26ada6bf6d4aac72c826" }
+# Shrinks image thumbnails before Rune keeps them; matches Rune's own image build.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zeron-relay-proto = { path = "relay-proto" }
 

@@ -3,7 +3,7 @@
 //! chat's picks.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::json_file;
 use chrono::{DateTime, Utc};
@@ -20,8 +20,6 @@ pub struct Prefs {
     pub collapsed: BTreeSet<String>,
     /// The picks of the last chat started here.
     pub new_chat: NewChat,
-    #[serde(skip)]
-    path: PathBuf,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -52,26 +50,19 @@ impl From<Option<String>> for ProjectPick {
 
 impl Prefs {
     /// Load the prefs at `path`; a missing or broken file starts fresh.
-    pub fn load(path: PathBuf) -> Self {
-        let mut prefs = json_file::load::<Prefs>(&path)
+    pub fn load(path: &Path) -> Self {
+        json_file::load::<Prefs>(path)
             .unwrap_or_else(|e| {
                 eprintln!("{e:#}");
                 None
             })
-            .unwrap_or_default();
-        prefs.path = path;
-        prefs
-    }
-
-    /// Save the prefs; losing them only resets what the list shows as new.
-    pub fn save(&self) {
-        if let Err(e) = json_file::save(&self.path, self) {
-            eprintln!("{e:#}");
-        }
+            .unwrap_or_default()
     }
 
     /// Count chats not met before as seen, so only later turns read "Done".
-    pub fn prime(&mut self, chats: &[Chat]) {
+    /// Return whether any was new.
+    #[must_use]
+    pub fn prime(&mut self, chats: &[Chat]) -> bool {
         let mut changed = false;
         for c in chats {
             if !self.seen.contains_key(&c.id) {
@@ -79,18 +70,16 @@ impl Prefs {
                 changed = true;
             }
         }
-        if changed {
-            self.save();
-        }
+        changed
     }
 
-    pub fn mark_seen(&mut self, chat: &Chat) {
+    /// Count the chat's latest turn as seen. Return whether it was new.
+    #[must_use]
+    pub fn mark_seen(&mut self, chat: &Chat) -> bool {
         let Some(at) = chat.last_message_at else {
-            return;
+            return false;
         };
-        if self.seen.insert(chat.id.clone(), Some(at)) != Some(Some(at)) {
-            self.save();
-        }
+        self.seen.insert(chat.id.clone(), Some(at)) != Some(Some(at))
     }
 
     /// Whether the chat moved since it was last shown here.
@@ -105,7 +94,6 @@ impl Prefs {
         if !self.collapsed.remove(key) {
             self.collapsed.insert(key.to_owned());
         }
-        self.save();
     }
 }
 
@@ -122,10 +110,10 @@ mod tests {
             ProjectPick::NoProject,
             ProjectPick::Project("p1".into()),
         ] {
-            let mut prefs = Prefs::load(path.clone());
+            let mut prefs = Prefs::load(&path);
             prefs.new_chat.project = project.clone();
-            prefs.save();
-            assert_eq!(Prefs::load(path.clone()).new_chat.project, project);
+            json_file::save(&path, &prefs).unwrap();
+            assert_eq!(Prefs::load(&path).new_chat.project, project);
         }
     }
 }
