@@ -1,5 +1,5 @@
-//! The phone app's icons (`relay/assets/app.js` `ICONS`), with the group
-//! attributes moved onto each element, as Rune's SVG subset reads them.
+//! The phone app's icons (`relay/assets/app.js` `ICONS`), with each group's
+//! attributes moved onto its elements.
 
 use std::sync::LazyLock;
 

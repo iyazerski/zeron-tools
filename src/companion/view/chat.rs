@@ -403,7 +403,7 @@ fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
             .gap(4.0)
             .pl(12.0)
             .ml(6.0)
-            .border(0.0, k.c.border_muted);
+            .border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_muted);
         for tool in &tools {
             let lead = match tool.state {
                 ToolState::Running => Spinner::new().size(11.0).build(k),
