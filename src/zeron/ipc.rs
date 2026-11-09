@@ -12,17 +12,18 @@
 //! <token>`, where the token is what the engine wrote to
 //! `{data_dir}/ipc-token` when it started (`crates/rpc/src/ipc_auth.rs`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -32,7 +33,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 /// How long dialing may take. It's localhost, but another process holding
 /// the port could accept TCP and never finish the handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Items a stream buffers before the reader waits for its consumer.
+/// Items a stream buffers. A consumer that falls this far behind loses the
+/// stream, so one slow reader can't stall the shared connection.
 const STREAM_BUFFER: usize = 64;
 /// The engine's reply to a method it doesn't have.
 const UNKNOWN_METHOD: &str = "unknown method: ";
@@ -49,8 +51,12 @@ pub struct Ipc {
 /// Why a call or stream failed.
 #[derive(Debug)]
 enum CallError {
-    /// The connection dropped; a new one may work.
-    Closed,
+    /// The connection closed before the request went out; a new one may work.
+    NotSent,
+    /// The connection closed after the request went out: it may have run.
+    Lost,
+    /// The stream's consumer fell [`STREAM_BUFFER`] items behind.
+    Lagged,
     /// The engine answered with an error.
     Failed(String),
 }
@@ -59,7 +65,11 @@ impl CallError {
     /// The error to report for a failed `method`.
     fn into_error(self, method: &str) -> anyhow::Error {
         match self {
-            Self::Closed => anyhow!("{method}: the connection to Zeron closed"),
+            Self::NotSent => anyhow!("{method}: the connection to Zeron closed"),
+            Self::Lost => anyhow!(
+                "{method}: the connection to Zeron closed before it answered; it may have run"
+            ),
+            Self::Lagged => anyhow!("{method}: fell behind the stream"),
             Self::Failed(message) => EngineError {
                 method: method.to_owned(),
                 message,
@@ -103,11 +113,12 @@ impl Ipc {
     }
 
     /// Call `method` and return its result, redialing once if the engine
-    /// restarted since the last call.
+    /// restarted before the request went out. A request that went out is
+    /// never sent again: a write could run twice.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
         let conn = self.conn().await?;
         let result = match conn.call(method, &params).await {
-            Err(CallError::Closed) => self.conn().await?.call(method, &params).await,
+            Err(CallError::NotSent) => self.conn().await?.call(method, &params).await,
             other => other,
         };
         result.map_err(|e| e.into_error(method))
@@ -122,7 +133,7 @@ impl Ipc {
                 .conn()
                 .await?
                 .subscribe(method, &params)
-                .ok_or_else(|| anyhow!("{method}: the connection to Zeron closed")),
+                .ok_or_else(|| CallError::NotSent.into_error(method)),
         }
     }
 
@@ -149,16 +160,34 @@ pub fn is_unknown_method(error: &anyhow::Error) -> bool {
 /// One WebSocket to the engine. A task owns the socket; it ends when every
 /// sender of `out` is gone or the socket closes.
 struct Conn {
-    out: mpsc::UnboundedSender<String>,
+    out: mpsc::UnboundedSender<Outgoing>,
     pending: Arc<StdMutex<Pending>>,
     next: AtomicU64,
+}
+
+/// A frame for the engine, with the call it carries, if any.
+struct Outgoing {
+    call: Option<u64>,
+    text: String,
+}
+
+impl Outgoing {
+    fn other(text: String) -> Self {
+        Self { call: None, text }
+    }
 }
 
 /// Calls and streams waiting for frames, by id.
 #[derive(Default)]
 struct Pending {
     calls: HashMap<u64, oneshot::Sender<Result<Value, CallError>>>,
-    streams: HashMap<u64, mpsc::Sender<Result<Value, CallError>>>,
+    streams: HashMap<u64, StreamSlot>,
+}
+
+/// Where a stream's items go, and the flag that says it fell behind.
+struct StreamSlot {
+    tx: mpsc::Sender<Result<Value, CallError>>,
+    lagged: Arc<AtomicBool>,
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -167,7 +196,7 @@ impl Conn {
     async fn dial(url: &str, token: &Path) -> Result<Arc<Self>> {
         // The engine writes the file when it starts, so a missing one means
         // Zeron isn't running (or never ran with this data dir).
-        let token = match std::fs::read_to_string(token) {
+        let token = match tokio::fs::read_to_string(token).await {
             Ok(token) => token.trim().to_owned(),
             Err(e) => bail!(
                 "no Zeron engine at {url} (reading {}: {e}); is Zeron running?",
@@ -185,7 +214,7 @@ impl Conn {
             Ok(Err(e)) => bail!("no Zeron engine at {url} ({e}); is Zeron running?"),
             Err(_) => bail!("timed out dialing Zeron at {url}"),
         };
-        let (out, out_rx) = mpsc::unbounded_channel::<String>();
+        let (out, out_rx) = mpsc::unbounded_channel();
         let pending = Arc::new(StdMutex::new(Pending::default()));
         tokio::spawn(pump(socket, out_rx, pending.clone()));
         Ok(Arc::new(Self {
@@ -199,21 +228,34 @@ impl Conn {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         lock(&self.pending).calls.insert(id, tx);
+        // Forget the call however it ends, also when its caller gives up.
+        let _waiting = Waiting {
+            pending: &self.pending,
+            id,
+        };
         let frame = json!({ "id": id, "method": method, "params": params });
-        if self.out.send(frame.to_string()).is_err() {
-            lock(&self.pending).calls.remove(&id);
-            return Err(CallError::Closed);
+        let outgoing = Outgoing {
+            call: Some(id),
+            text: frame.to_string(),
+        };
+        if self.out.send(outgoing).is_err() {
+            return Err(CallError::NotSent);
         }
-        rx.await.unwrap_or(Err(CallError::Closed))
+        rx.await.unwrap_or(Err(CallError::Lost))
     }
 
     /// Start a stream; `None` if the connection is closed.
     fn subscribe(self: &Arc<Self>, method: &str, params: &Value) -> Option<Subscription> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(STREAM_BUFFER);
-        lock(&self.pending).streams.insert(id, tx);
+        let lagged = Arc::new(AtomicBool::new(false));
+        let slot = StreamSlot {
+            tx,
+            lagged: lagged.clone(),
+        };
+        lock(&self.pending).streams.insert(id, slot);
         let frame = json!({ "id": id, "method": method, "params": params });
-        if self.out.send(frame.to_string()).is_err() {
+        if self.out.send(Outgoing::other(frame.to_string())).is_err() {
             lock(&self.pending).streams.remove(&id);
             return None;
         }
@@ -221,8 +263,21 @@ impl Conn {
             id,
             method: method.to_owned(),
             rx,
+            lagged,
             conn: self.clone(),
         })
+    }
+}
+
+/// Removes a call's waiter when the call ends.
+struct Waiting<'a> {
+    pending: &'a StdMutex<Pending>,
+    id: u64,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        lock(self.pending).calls.remove(&self.id);
     }
 }
 
@@ -231,17 +286,29 @@ pub struct Subscription {
     id: u64,
     method: String,
     rx: mpsc::Receiver<Result<Value, CallError>>,
+    lagged: Arc<AtomicBool>,
     conn: Arc<Conn>,
 }
 
 impl Subscription {
     /// Return the next item, or `None` once the stream ended.
     pub async fn next(&mut self) -> Result<Option<Value>> {
-        self.rx
-            .recv()
-            .await
-            .transpose()
-            .map_err(|e| e.into_error(&self.method))
+        match self.rx.recv().await {
+            Some(item) => item.map(Some).map_err(|e| e.into_error(&self.method)),
+            None if self.lagged.load(Ordering::Relaxed) => {
+                Err(CallError::Lagged.into_error(&self.method))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        // Still listed means still running in the engine.
+        if lock(&self.conn.pending).streams.remove(&self.id).is_some() {
+            let _ = self.conn.out.send(Outgoing::other(cancel_frame(self.id)));
+        }
     }
 }
 
@@ -249,15 +316,18 @@ impl Subscription {
 /// until either side closes, then fail every call and stream still waiting.
 async fn pump(
     socket: Socket,
-    mut out: mpsc::UnboundedReceiver<String>,
+    mut out: mpsc::UnboundedReceiver<Outgoing>,
     pending: Arc<StdMutex<Pending>>,
 ) {
     let (mut sink, mut stream) = socket.split();
+    // The call whose frame failed to go out, if one did.
+    let mut unsent = None;
     loop {
         tokio::select! {
-            text = out.recv() => match text {
-                Some(text) => {
+            outgoing = out.recv() => match outgoing {
+                Some(Outgoing { call, text }) => {
                     if sink.send(Message::Text(text)).await.is_err() {
+                        unsent = call;
                         break;
                     }
                 }
@@ -268,7 +338,7 @@ async fn pump(
             },
             message = stream.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    if let Some(cancel) = route(&pending, &text).await
+                    if let Some(cancel) = route(&pending, &text)
                         && sink.send(Message::Text(cancel)).await.is_err()
                     {
                         break;
@@ -279,82 +349,99 @@ async fn pump(
             },
         }
     }
-    // Dropping the receiver marks `out` closed, so the next call redials.
-    drop(out);
+    // Closing marks `out` closed, so the next call redials; calls still
+    // queued never went out.
+    out.close();
+    let mut not_sent: HashSet<u64> = unsent.into_iter().collect();
+    while let Ok(outgoing) = out.try_recv() {
+        not_sent.extend(outgoing.call);
+    }
     let mut pending = lock(&pending);
-    pending.calls.clear();
+    for (id, call) in pending.calls.drain() {
+        let error = if not_sent.contains(&id) {
+            CallError::NotSent
+        } else {
+            CallError::Lost
+        };
+        let _ = call.send(Err(error));
+    }
     for (_, stream) in pending.streams.drain() {
-        let _ = stream.try_send(Err(CallError::Closed));
+        let _ = stream.tx.try_send(Err(CallError::Lost));
     }
 }
 
-impl Drop for Subscription {
-    fn drop(&mut self) {
-        // Still listed means still running in the engine.
-        if lock(&self.conn.pending).streams.remove(&self.id).is_some() {
-            let _ = self
-                .conn
-                .out
-                .send(json!({ "id": self.id, "cancel": true }).to_string());
-        }
-    }
-}
-
-/// An engine frame: exactly one of `ok`, `err`, `item`, or `done` matters.
+/// An engine frame for the call or stream `id`.
 #[derive(Deserialize)]
 struct ServerFrame {
     id: u64,
-    /// Present but `null` is a call whose result is `null`.
-    #[serde(default, deserialize_with = "present")]
-    ok: Option<Value>,
-    #[serde(default)]
-    err: Option<String>,
-    #[serde(default, deserialize_with = "present")]
-    item: Option<Value>,
-    #[serde(default)]
-    done: bool,
+    #[serde(flatten)]
+    body: FrameBody,
 }
 
-/// Deserialize a field that is there, even as `null`, as `Some`.
-fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
-    Value::deserialize(deserializer).map(Some)
+/// What an engine frame says; tried in this order.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FrameBody {
+    Err {
+        err: String,
+    },
+    /// Present but `null` is a call whose result is `null`.
+    Ok {
+        ok: Value,
+    },
+    Item {
+        item: Value,
+    },
+    Done {
+        done: bool,
+    },
 }
 
 /// Hand one engine frame to its call or stream. Return a cancel frame to
-/// send if it was an item for a stream nobody reads anymore.
-async fn route(pending: &StdMutex<Pending>, text: &str) -> Option<String> {
-    let Ok(frame) = serde_json::from_str::<ServerFrame>(text) else {
+/// send if it was an item for a stream that's gone or fell behind.
+fn route(pending: &StdMutex<Pending>, text: &str) -> Option<String> {
+    let Ok(ServerFrame { id, body }) = serde_json::from_str::<ServerFrame>(text) else {
         return None;
     };
-    let id = frame.id;
-    if let Some(err) = frame.err {
-        let mut pending = lock(pending);
-        if let Some(call) = pending.calls.remove(&id) {
-            let _ = call.send(Err(CallError::Failed(err)));
-        } else if let Some(stream) = pending.streams.remove(&id) {
-            let _ = stream.try_send(Err(CallError::Failed(err)));
+    let mut pending = lock(pending);
+    match body {
+        FrameBody::Err { err } => {
+            if let Some(call) = pending.calls.remove(&id) {
+                let _ = call.send(Err(CallError::Failed(err)));
+            } else if let Some(stream) = pending.streams.remove(&id) {
+                let _ = stream.tx.try_send(Err(CallError::Failed(err)));
+            }
         }
-        return None;
-    }
-    if let Some(value) = frame.ok {
-        if let Some(call) = lock(pending).calls.remove(&id) {
-            let _ = call.send(Ok(value));
+        FrameBody::Ok { ok } => {
+            if let Some(call) = pending.calls.remove(&id) {
+                let _ = call.send(Ok(ok));
+            }
         }
-        return None;
-    }
-    if let Some(item) = frame.item {
-        // Send outside the lock: a full buffer waits for the consumer.
-        let stream = lock(pending).streams.get(&id).cloned()?;
-        if stream.send(Ok(item)).await.is_err() {
-            lock(pending).streams.remove(&id);
-            return Some(json!({ "id": id, "cancel": true }).to_string());
+        FrameBody::Item { item } => {
+            let stream = pending.streams.get(&id)?;
+            match stream.tx.try_send(Ok(item)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    stream.lagged.store(true, Ordering::Relaxed);
+                    pending.streams.remove(&id);
+                    return Some(cancel_frame(id));
+                }
+                Err(TrySendError::Closed(_)) => {
+                    pending.streams.remove(&id);
+                    return Some(cancel_frame(id));
+                }
+            }
         }
-        return None;
-    }
-    if frame.done {
-        lock(pending).streams.remove(&id);
+        FrameBody::Done { done: true } => {
+            pending.streams.remove(&id);
+        }
+        FrameBody::Done { done: false } => {}
     }
     None
+}
+
+fn cancel_frame(id: u64) -> String {
+    json!({ "id": id, "cancel": true }).to_string()
 }
 
 fn lock(pending: &StdMutex<Pending>) -> MutexGuard<'_, Pending> {
@@ -381,8 +468,9 @@ mod tests {
     /// Serve one connection like the engine, refusing a handshake without
     /// `TOKEN` as its bearer: `Echo` answers its params, `Null` answers
     /// `null`, `Count` streams 1, 2 and ends, `Forever` streams until
-    /// cancelled (then reports it with a `Cancelled` call), and anything else
-    /// is an unknown method.
+    /// cancelled (then reports it with a `Cancelled` call), `Flood` streams
+    /// more than a stream buffers, `Hang` never answers, `Die` drops the
+    /// connection, and anything else is an unknown method.
     #[expect(
         clippy::result_large_err,
         reason = "tungstenite's handshake callback fixes the error type"
@@ -424,6 +512,11 @@ mod tests {
                     ],
                     "Forever" => vec![json!({ "id": id, "item": "first" })],
                     "Cancelled" => vec![json!({ "id": id, "ok": cancelled })],
+                    "Flood" => (0..STREAM_BUFFER + 10)
+                        .map(|n| json!({ "id": id, "item": n }))
+                        .collect(),
+                    "Hang" => vec![],
+                    "Die" => break,
                     other => vec![json!({ "id": id, "err": format!("{UNKNOWN_METHOD}{other}") })],
                 };
                 for reply in replies {
@@ -456,6 +549,33 @@ mod tests {
         let id = forever.id;
         drop(forever);
         assert_eq!(ipc.call("Cancelled", json!({})).await.unwrap(), json!([id]));
+    }
+
+    #[tokio::test]
+    async fn slow_streams_and_lost_calls_dont_hold_up_the_connection() {
+        let (_dir, token) = token_file(TOKEN);
+        let ipc = Ipc::new(engine().await, token);
+        let mut flood = ipc.subscribe("Flood", json!({})).await.unwrap();
+        // Nobody reads the flood, yet calls still get through.
+        assert_eq!(ipc.call("Echo", json!(1)).await.unwrap(), json!(1));
+        for n in 0..STREAM_BUFFER {
+            assert_eq!(flood.next().await.unwrap(), Some(json!(n)));
+        }
+        let lagged = flood.next().await.unwrap_err();
+        assert!(format!("{lagged:#}").contains("fell behind"), "{lagged:#}");
+
+        let hang = ipc.call("Hang", json!({}));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), hang)
+                .await
+                .is_err()
+        );
+        let conn = ipc.conn().await.unwrap();
+        assert!(lock(&conn.pending).calls.is_empty());
+
+        // Zeron may have run it, so it isn't sent again.
+        let died = ipc.call("Die", json!({})).await.unwrap_err();
+        assert!(format!("{died:#}").contains("may have run"), "{died:#}");
     }
 
     #[tokio::test]
