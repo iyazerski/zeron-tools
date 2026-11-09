@@ -49,15 +49,22 @@ pub async fn run(zeron: Arc<Zeron>, mut engine: watch::Receiver<Engine>, upkeep:
         Memory::empty(&upkeep.memory)
     });
     let mut tried = Tried::new();
+    let mut delay = START_DELAY;
     loop {
-        let was_running = engine.borrow().is_running();
         if engine.wait_for(Engine::is_running).await.is_err() {
             return;
         }
-        tokio::time::sleep(if was_running { EVERY } else { START_DELAY }).await;
-        if !engine.borrow().is_running() {
-            continue;
+        // Zeron closing during the wait starts it over when Zeron reopens.
+        let closed = engine.wait_for(|e| !e.is_running());
+        match tokio::time::timeout(delay, closed).await {
+            Err(_) => {}
+            Ok(Ok(_)) => {
+                delay = START_DELAY;
+                continue;
+            }
+            Ok(Err(_)) => return,
         }
+        delay = EVERY;
         if let Some(keep) = upkeep.keep
             && let Err(e) = archive::run(&zeron, keep, &mut memory).await
         {

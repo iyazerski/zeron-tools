@@ -12,9 +12,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::watch;
-use zeron_relay_proto::Engine;
 
-use crate::connect::{call_tool, watch_engine};
+use crate::connect::{EngineWatch, call_tool, watch_engine};
 use crate::json_file;
 use crate::pi::Pi;
 use crate::zeron::Zeron;
@@ -40,7 +39,7 @@ pub struct Api {
 pub struct Tools {
     zeron: Arc<Zeron>,
     pi: Option<Arc<Pi>>,
-    engine: watch::Receiver<Engine>,
+    engine: EngineWatch,
 }
 
 impl Tools {
@@ -50,8 +49,7 @@ impl Tools {
         tool: &'static str,
         args: Value,
     ) -> Result<T, String> {
-        let state = self.engine.borrow().clone();
-        let value = call_tool(&self.zeron, self.pi.as_deref(), &state, tool, args).await?;
+        let value = call_tool(&self.zeron, self.pi.as_deref(), &self.engine, tool, args).await?;
         serde_json::from_value(value).map_err(|e| format!("unexpected {tool} answer: {e}"))
     }
 }
@@ -70,7 +68,7 @@ impl Api {
             let _entered = rt.enter();
             watch_engine(zeron.clone())
         };
-        let mut changes = engine.clone();
+        let mut changes = engine.changes();
         let to_ui = app.clone();
         rt.spawn(async move {
             loop {

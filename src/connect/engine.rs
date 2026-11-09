@@ -35,24 +35,67 @@ const BUNDLE_ID: &str = "sh.zeron.app";
 /// Quits an app by bundle id, force-quitting it if it hangs.
 const QUIT_SCRIPT: &str = include_str!("quit.js");
 
-/// Wakes the prober early, so a restart shows up without waiting a full
-/// probe interval.
-static WAKE: Notify = Notify::const_new();
+/// Zeron's state as the prober last saw it, and opening or restarting Zeron.
+#[derive(Clone)]
+pub struct EngineWatch {
+    state: watch::Receiver<Engine>,
+    /// Wakes the prober early, so a restart shows up without waiting a full
+    /// probe interval.
+    wake: Arc<Notify>,
+}
+
+impl EngineWatch {
+    /// Return the state now.
+    pub fn now(&self) -> Engine {
+        self.state.borrow().clone()
+    }
+
+    /// Return a receiver that sees each new state.
+    pub fn changes(&self) -> watch::Receiver<Engine> {
+        self.state.clone()
+    }
+
+    /// Start Zeron hidden in the background, as if opened from the Dock.
+    pub async fn open(&self) -> Result<()> {
+        open().await?;
+        self.wake.notify_one();
+        Ok(())
+    }
+
+    /// Quit Zeron (force-quitting it if it hangs), then start it again.
+    /// Works while Zeron is closed too: then it just opens it.
+    pub async fn restart(&self) -> Result<()> {
+        quit().await?;
+        self.wake.notify_one();
+        self.open().await
+    }
+
+    /// Return a watch stuck at `state`, with no prober.
+    #[cfg(test)]
+    pub fn fixed(state: Engine) -> Self {
+        Self {
+            state: watch::channel(state).1,
+            wake: Arc::default(),
+        }
+    }
+}
 
 /// Probe Zeron forever and publish its state.
-pub fn spawn(zeron: Arc<Zeron>) -> watch::Receiver<Engine> {
+pub fn spawn(zeron: Arc<Zeron>) -> EngineWatch {
     let (tx, rx) = watch::channel(Engine::Closed);
+    let wake = Arc::new(Notify::new());
+    let woken = wake.clone();
     tokio::spawn(async move {
         let mut prober = Prober {
             zeron,
-            since_check: 0,
+            check: Check::Due,
         };
         let mut first = true;
         loop {
             let current = tx.borrow().clone();
             let Some(state) = prober.next_state(current).await else {
                 eprintln!("Zeron isn't answering");
-                sleep(PROBE_RUNNING).await;
+                sleep(PROBE_RUNNING, &woken).await;
                 continue;
             };
             tx.send_if_modified(|now| {
@@ -65,21 +108,37 @@ pub fn spawn(zeron: Arc<Zeron>) -> watch::Receiver<Engine> {
                 changed
             });
             first = false;
-            sleep(match state {
+            let wait = match state {
                 Engine::Closed => PROBE_CLOSED,
                 _ => PROBE_RUNNING,
-            })
-            .await;
+            };
+            sleep(wait, &woken).await;
         }
     });
-    rx
+    EngineWatch { state: rx, wake }
+}
+
+/// Sleep for `wait`, or until `wake` wakes the prober.
+async fn sleep(wait: Duration, wake: &Notify) {
+    tokio::select! {
+        () = tokio::time::sleep(wait) => {}
+        () = wake.notified() => {}
+    }
 }
 
 /// Probes Zeron, and checks that it's still readable now and then.
 struct Prober {
     zeron: Arc<Zeron>,
-    /// Probes of a running Zeron since its last compatibility check.
-    since_check: u32,
+    check: Check,
+}
+
+/// When the next compatibility check runs.
+#[derive(Clone, Copy)]
+enum Check {
+    /// On the next probe.
+    Due,
+    /// After this many more probes of a running Zeron.
+    After(u32),
 }
 
 impl Prober {
@@ -98,28 +157,22 @@ impl Prober {
         {
             return Some(Engine::Closed);
         }
-        if current.is_running() && self.since_check < CHECK_EVERY {
-            self.since_check += 1;
+        if let (true, Check::After(left @ 1..)) = (current.is_running(), self.check) {
+            self.check = Check::After(left - 1);
             return Some(current);
         }
-        self.since_check = 0;
         let why = match tokio::time::timeout(CHECK_TIMEOUT, check(&self.zeron)).await {
-            Ok(Ok(state)) => return Some(state),
+            Ok(Ok(state)) => {
+                self.check = Check::After(CHECK_EVERY);
+                return Some(state);
+            }
             Ok(Err(e)) => format!("{e:#}"),
             Err(_) => "it didn't answer in time".into(),
         };
         // A check that couldn't finish keeps the state and runs next probe.
         eprintln!("can't check Zeron yet: {why}");
-        self.since_check = CHECK_EVERY;
+        self.check = Check::Due;
         Some(current)
-    }
-}
-
-/// Sleep for `wait`, or until something wakes the prober.
-async fn sleep(wait: Duration) {
-    tokio::select! {
-        () = tokio::time::sleep(wait) => {}
-        () = WAKE.notified() => {}
     }
 }
 
@@ -183,7 +236,7 @@ fn describe(state: &Engine) -> String {
 }
 
 /// Start Zeron hidden in the background, as if opened from the Dock.
-pub async fn open() -> Result<()> {
+async fn open() -> Result<()> {
     let out = tokio::process::Command::new("/usr/bin/open")
         .args(["-g", "-j", "-b", BUNDLE_ID])
         .output()
@@ -195,13 +248,11 @@ pub async fn open() -> Result<()> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    WAKE.notify_one();
     Ok(())
 }
 
-/// Quit Zeron (force-quitting it if it hangs), then start it again. Works
-/// while Zeron is closed too: then it just opens it.
-pub async fn restart() -> Result<()> {
+/// Quit Zeron, force-quitting it if it hangs.
+async fn quit() -> Result<()> {
     let out = tokio::process::Command::new("/usr/bin/osascript")
         .args(["-l", "JavaScript", "-e", QUIT_SCRIPT, BUNDLE_ID])
         .output()
@@ -218,6 +269,5 @@ pub async fn restart() -> Result<()> {
         (true, "killed") => eprintln!("force-quit Zeron for a restart"),
         (true, _) => eprintln!("quit Zeron for a restart"),
     }
-    WAKE.notify_one();
-    open().await
+    Ok(())
 }

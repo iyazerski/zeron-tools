@@ -23,7 +23,7 @@ mod power;
 mod tools;
 mod watch;
 
-pub use engine::spawn as watch_engine;
+pub use engine::{EngineWatch, spawn as watch_engine};
 pub use maintain::Upkeep;
 pub use watch::NotifyWhen;
 
@@ -42,7 +42,7 @@ use tokio::task::JoinSet;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
-use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Engine, Notice, PROTOCOL, Up};
+use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Notice, PROTOCOL, Up};
 
 use self::tools::{Tool, Unavailable, parse_args};
 use crate::json_file;
@@ -120,7 +120,7 @@ pub async fn run(opts: Opts) -> Result<()> {
     let zeron = Arc::new(opts.zeron);
     let engine = engine::spawn(zeron.clone());
     let pi = opts.upkeep.pi.clone();
-    let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.clone(), opts.upkeep));
+    let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.changes(), opts.upkeep));
     if let Some(link) = opts.relay {
         let relay = Relay {
             link,
@@ -148,7 +148,7 @@ struct Relay {
 impl Relay {
     /// Stay connected to the relay until it rejects the token. Returns `Ok`
     /// then if running as the launch agent.
-    async fn run(self, zeron: Arc<Zeron>, mut engine: state::Receiver<Engine>) -> Result<()> {
+    async fn run(self, zeron: Arc<Zeron>, engine: EngineWatch) -> Result<()> {
         let url = socket_url(&self.link.relay)?;
         let mac = Arc::new(Mac {
             zeron: zeron.clone(),
@@ -157,7 +157,7 @@ impl Relay {
         });
         // Notices wait here while the relay is unreachable.
         let (notices_tx, mut notices) = mpsc::channel(QUEUE);
-        tokio::spawn(watch::run(zeron, engine.clone(), notices_tx, self.notify));
+        tokio::spawn(watch::run(zeron, engine.changes(), notices_tx, self.notify));
         let mut battery = power::spawn();
         let mut backoff = MIN_BACKOFF;
         loop {
@@ -166,7 +166,7 @@ impl Relay {
                 let socket = dial(&url, &self.link.token).await?;
                 eprintln!("connected to {url}");
                 connected = Some(Instant::now());
-                serve(socket, &mac, &mut engine, &mut battery, &mut notices).await
+                serve(socket, &mac, &engine, &mut battery, &mut notices).await
             }
             .await;
             if connected.is_some_and(|at| at.elapsed() >= STABLE_AFTER) {
@@ -197,13 +197,14 @@ impl Relay {
 async fn serve(
     socket: Socket,
     mac: &Arc<Mac>,
-    engine: &mut state::Receiver<Engine>,
+    engine: &EngineWatch,
     battery: &mut state::Receiver<Option<Battery>>,
     notices: &mut mpsc::Receiver<Notice>,
 ) -> Result<()> {
     let (mut sink, mut stream) = socket.split();
     sink.send(encode(&hello())?).await?;
-    let now = engine.borrow_and_update().clone();
+    let mut changes = engine.changes();
+    let now = changes.borrow_and_update().clone();
     sink.send(encode(&Up::Engine(now))?).await?;
     let now = *battery.borrow_and_update();
     sink.send(encode(&Up::Power { battery: now })?).await?;
@@ -235,8 +236,8 @@ async fn serve(
             }
             Some(Ok(reply)) = calls.join_next() => sink.send(encode(&reply)?).await?,
             Some(notice) = notices.recv() => sink.send(encode(&Up::Notify(notice))?).await?,
-            Ok(()) = engine.changed() => {
-                let now = engine.borrow_and_update().clone();
+            Ok(()) = changes.changed() => {
+                let now = changes.borrow_and_update().clone();
                 sink.send(encode(&Up::Engine(now))?).await?;
             }
             Ok(()) = battery.changed() => {
@@ -256,7 +257,7 @@ async fn serve(
 /// Run `call` within [`MAX_CALLS`] and return its reply. The wait for a slot
 /// counts toward [`TOOL_TIMEOUT`], so the reply still reaches the relay in
 /// time, and the call sees Zeron's state when it starts.
-async fn run_call(mac: Arc<Mac>, engine: state::Receiver<Engine>, call: Call) -> Up {
+async fn run_call(mac: Arc<Mac>, engine: EngineWatch, call: Call) -> Up {
     let Call { id, tool, args } = call;
     let run = async {
         let _slot = mac
@@ -264,8 +265,7 @@ async fn run_call(mac: Arc<Mac>, engine: state::Receiver<Engine>, call: Call) ->
             .acquire()
             .await
             .map_err(|_| "connect is stopping")?;
-        let now = engine.borrow().clone();
-        call_tool(&mac.zeron, mac.pi.as_ref(), &now, &tool, args).await
+        call_tool(&mac.zeron, mac.pi.as_ref(), &engine, &tool, args).await
     };
     let result = tokio::time::timeout(TOOL_TIMEOUT, run)
         .await
@@ -366,33 +366,40 @@ impl FromStr for Request {
 }
 
 /// Run one of the phone's tools by name and return its result, or why it
-/// can't run in Zeron's `engine` state, within [`TOOL_TIMEOUT`]; `pi` is the
+/// can't run in Zeron's `engine` state now, within [`TOOL_TIMEOUT`]; `pi` is the
 /// model for the calls that need one. Clients on this Mac (the companion
 /// window) call it directly; the relay's calls come through here too.
 pub async fn call_tool(
     zeron: &Zeron,
     pi: Option<&Pi>,
-    engine: &Engine,
+    engine: &EngineWatch,
     tool: &str,
     args: Value,
 ) -> Result<Value, String> {
     let request: Request = tool.parse().map_err(|e: Unavailable| e.to_string())?;
     if request.needs_zeron()
-        && let Some(why) = engine::refusal(engine)
+        && let Some(why) = engine::refusal(&engine.now())
     {
         return Err(why);
     }
-    match tokio::time::timeout(TOOL_TIMEOUT, dispatch(zeron, pi, request, args)).await {
+    let run = dispatch(zeron, pi, engine, request, args);
+    match tokio::time::timeout(TOOL_TIMEOUT, run).await {
         Ok(result) => result.map_err(|e| format!("{e:#}")),
         Err(_) => Err("Zeron didn't answer in time".into()),
     }
 }
 
 /// Run `request` with its JSON `args`.
-async fn dispatch(zeron: &Zeron, pi: Option<&Pi>, request: Request, args: Value) -> Result<Value> {
+async fn dispatch(
+    zeron: &Zeron,
+    pi: Option<&Pi>,
+    engine: &EngineWatch,
+    request: Request,
+    args: Value,
+) -> Result<Value> {
     match request {
-        Request::OpenZeron => engine::open().await.map(|()| opening()),
-        Request::RestartZeron => engine::restart().await.map(|()| opening()),
+        Request::OpenZeron => engine.open().await.map(|()| opening()),
+        Request::RestartZeron => engine.restart().await.map(|()| opening()),
         Request::ChatView => chat::view(zeron, parse_args(args)?).await,
         Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
         Request::SetChatModel => composer::set_model(zeron, parse_args(args)?).await,
@@ -442,6 +449,7 @@ pub fn link_path(data_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zeron_relay_proto::Engine;
 
     #[tokio::test]
     async fn dictation_is_cleaned_up_by_the_model_even_while_zeron_is_closed() {
@@ -461,16 +469,22 @@ mod tests {
         let polished = call_tool(
             &zeron,
             Some(&pi),
-            &Engine::Closed,
+            &EngineWatch::fixed(Engine::Closed),
             "polish_dictation",
             args(),
         )
         .await
         .unwrap();
         assert_eq!(polished, json!({ "text": "Tidy: um hello there" }));
-        let without = call_tool(&zeron, None, &Engine::Closed, "polish_dictation", args())
-            .await
-            .unwrap_err();
+        let without = call_tool(
+            &zeron,
+            None,
+            &EngineWatch::fixed(Engine::Closed),
+            "polish_dictation",
+            args(),
+        )
+        .await
+        .unwrap_err();
         assert!(without.contains("--no-rename"), "{without}");
     }
 
@@ -480,7 +494,7 @@ mod tests {
         let zeron = Zeron::new(9, Path::new("/nonexistent"));
         let call = |engine: Engine, tool: &'static str| {
             let zeron = &zeron;
-            async move { call_tool(zeron, None, &engine, tool, json!({})).await }
+            async move { call_tool(zeron, None, &EngineWatch::fixed(engine), tool, json!({})).await }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
         assert_eq!(closed, "Zeron isn't open on this Mac");
@@ -521,13 +535,11 @@ mod tests {
             pi: None,
             slots: Semaphore::new(MAX_CALLS),
         });
-        let (_engine_tx, mut engine) = state::channel(Engine::Closed);
+        let engine = EngineWatch::fixed(Engine::Closed);
         let (_battery_tx, mut battery) = state::channel(None);
         let (_notices_tx, mut notices) = mpsc::channel(1);
         let socket = dial(&url, "t").await.unwrap();
-        tokio::spawn(
-            async move { serve(socket, &mac, &mut engine, &mut battery, &mut notices).await },
-        );
+        tokio::spawn(async move { serve(socket, &mac, &engine, &mut battery, &mut notices).await });
         let (id, result) = relay.await.unwrap();
         assert_eq!(
             (id, result),
