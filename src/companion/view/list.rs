@@ -6,7 +6,7 @@ use rune::{El, TextStyle, Tx, col, icon, row, text};
 use rune_kit::{IconButton, IconButtonVariant, Kit, Spinner, TextInput};
 
 use super::icons;
-use super::widgets::{dot, engine_note, faint, hide_button, tile, tones};
+use super::widgets::{dot, engine_note, faint, head, head_titles, hide_button, tile, tones};
 use crate::companion::app::State;
 use crate::companion::data::Chat;
 use crate::companion::labels::{ago, harness_name};
@@ -16,22 +16,17 @@ use crate::connect::ChatStatus;
 const SEARCH_HEIGHT: f32 = 32.0;
 
 pub fn view(s: &State, k: &Kit) -> El {
-    let header = row()
-        .key("list-head")
-        .w_full()
-        .px(14.0)
-        .pt(12.0)
-        .pb(6.0)
-        .center_y()
-        .window_drag()
+    let header = head("list-head")
         .child(
-            text("Chats")
-                .font(TextStyle {
-                    size: 17.0,
-                    ..k.ty.body_medium
-                })
-                .color(k.c.text_base)
-                .grow(1.0),
+            // The inset keeps the title in line with the search field below.
+            head_titles().pl(4.0).child(
+                text("Chats")
+                    .font(TextStyle {
+                        size: 17.0,
+                        ..k.ty.body_medium
+                    })
+                    .color(k.c.text_base),
+            ),
         )
         .child(
             IconButton::new(&icons::PLUS)

@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use rune::color::hex;
-use rune::{Color, El, TextStyle, el, icon, row, text};
+use rune::{Color, El, TextStyle, col, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
 use zeron_relay_proto::Engine;
 
@@ -20,6 +20,32 @@ const TONES_DARK: [&str; 8] = [
 const TONES_LIGHT: [&str; 8] = [
     "#475569", "#2563eb", "#7c3aed", "#be123c", "#a16207", "#047857", "#0f766e", "#c2410c",
 ];
+
+/// The height of a page header's title block: a chat's title over its
+/// subtitle. Both pages use it, so the header buttons sit in the same place.
+const HEAD_TITLES_HEIGHT: f32 = 39.0;
+
+/// A page header's row, with the padding both pages share.
+pub fn head(key: &'static str) -> El {
+    row()
+        .key(key)
+        .w_full()
+        .px(8.0)
+        .pt(8.0)
+        .pb(6.0)
+        .gap(6.0)
+        .center_y()
+        .window_drag()
+}
+
+/// A page header's title block, between its leading and trailing buttons.
+pub fn head_titles() -> El {
+    col()
+        .grow(1.0)
+        .min_w(0.0)
+        .h(HEAD_TITLES_HEIGHT)
+        .justify_center()
+}
 
 /// Hides the window; the shortcut brings it back.
 pub fn hide_button(k: &Kit) -> El {

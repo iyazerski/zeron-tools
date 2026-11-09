@@ -1582,10 +1582,10 @@ function chatView(machine, id, fromList) {
   function drawHeader() {
     if (isDraft) {
       const project = draft.projects.find(p => p.id === draft.project);
-      subEl.textContent = machine ? [draft.harness && harnessName(draft.harness), project?.name, severalMacs() && machineName(machine)].filter(Boolean).join(" · ") : " ";
+      subEl.textContent = machine ? [project?.name, severalMacs() && machineName(machine)].filter(Boolean).join(" · ") || " " : " ";
     } else {
       titleEl.textContent = chat.title || "Untitled chat";
-      subEl.textContent = [harnessName(chat.harness), shortModel(chat.model), chat.project?.name].filter(Boolean).join(" · ");
+      subEl.textContent = chat.project?.name || " ";
     }
     updateComposer();
     drawInfo();

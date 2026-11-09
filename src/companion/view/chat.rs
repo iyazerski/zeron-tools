@@ -10,10 +10,10 @@ use rune_kit::{
 
 use super::{code, copy, icons};
 
-use super::widgets::{dot, engine_note, hide_button, tones};
+use super::widgets::{dot, engine_note, head, head_titles, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
 use crate::companion::data::{Message, MessageStatus, Part, Role};
-use crate::companion::labels::{harness_name, short_model, tool_summary, tool_verb};
+use crate::companion::labels::{tool_summary, tool_verb};
 use crate::companion::message::{ToolState, parse_tool, references, split_from, split_images};
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -71,26 +71,18 @@ fn header(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
                 .project
                 .as_ref()
                 .and_then(|id| d.projects.iter().find(|p| &p.id == id));
-            let parts = [
-                d.harness.as_deref().map(harness_name),
-                project.map(|p| p.name.as_str()),
-            ];
             (
                 "New chat".to_owned(),
-                parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
+                project.map(|p| p.name.clone()).unwrap_or_default(),
             )
         }
-        Target::Existing(Existing { chat: Some(c), .. }) => {
-            let parts = [
-                c.harness.as_deref().map(harness_name),
-                c.model.as_deref().map(short_model),
-                c.project.as_ref().map(|p| p.name.as_str()),
-            ];
-            (
-                c.title().to_owned(),
-                parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
-            )
-        }
+        Target::Existing(Existing { chat: Some(c), .. }) => (
+            c.title().to_owned(),
+            c.project
+                .as_ref()
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+        ),
         Target::Existing(_) => (String::new(), String::new()),
     };
     let back = IconButton::new(&icons::BACK)
@@ -99,9 +91,7 @@ fn header(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .help("Back (⌘[)")
         .on_press(State::back)
         .build(k);
-    let titles = col()
-        .grow(1.0)
-        .min_w(0.0)
+    let titles = head_titles()
         .gap(1.0)
         .child(
             text(title)
@@ -115,17 +105,7 @@ fn header(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
                 .color(k.c.text_faint)
                 .truncate(),
         );
-    let mut bar = row()
-        .key("chat-head")
-        .w_full()
-        .px(8.0)
-        .pt(8.0)
-        .pb(6.0)
-        .gap(6.0)
-        .center_y()
-        .window_drag()
-        .child(back)
-        .child(titles);
+    let mut bar = head("chat-head").child(back).child(titles);
     if page.existing().is_some() {
         bar = bar.child(more_menu(page, k, layer));
     }
