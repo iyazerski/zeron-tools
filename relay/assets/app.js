@@ -919,8 +919,16 @@ function chatView(machine, id, fromList) {
   // The browser's speech recognition, where it has one (Safari, Chrome).
   const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
   const micBtn = Speech && h("button", { class: "mic", "aria-label": "Dictate", onclick: () => dictate() }, icon("mic"));
+  // The running dictation, and whether what it heard is being cleaned up.
+  let dictation = null, polishing = false;
+  // Bars of varied height and pace, so the waveform looks alive.
+  const recTime = h("span", { class: "rec-time" }, "0:00");
+  const recorder = Speech && h("div", { class: "recorder", "aria-live": "polite" },
+    h("div", { class: "wave", "aria-label": "Listening" }, Array.from({ length: 72 }, (_, i) =>
+      h("i", { style: { "--h": (0.3 + ((i * 37) % 70) / 100).toFixed(2), "--d": `${380 + ((i * 53) % 320)}ms`, "--o": `-${(i * 97) % 600}ms` } }))),
+    recTime,
+    h("span", { class: "rec-busy" }, glyph("spin"), "Cleaning up…"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
-  const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
   // As on the desktop: the box holds the text, the model chip, dictation and Send;
   // under it, the project and branch, and the context ring.
   const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
@@ -929,9 +937,10 @@ function chatView(machine, id, fromList) {
   const footer = h("div", { class: "composer-foot hide" }, meta, ctxSlot);
   // The desktop's `$` menu: the agent's skills, filtered by what follows the `$`.
   const skillMenu = h("div", { class: "skill-menu glass hide", role: "listbox" });
+  const composerBox = h("div", { class: "composer glass" }, textarea, recorder, h("div", { class: "composer-tools" }, modelChip, h("span", { class: "spacer" }), micBtn, sendBtn));
   const dock = h("div", { class: "dock" }, jump, skillMenu, h("div", { class: "dock-base" },
-    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, h("span", { class: "spacer" }), micBtn, sendBtn)),
-    hint, footer));
+    composerBox,
+    footer));
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
@@ -966,9 +975,8 @@ function chatView(machine, id, fromList) {
     const stop = !text && isWorking();
     sendBtn.classList.toggle("stop", stop);
     sendBtn.replaceChildren(icon(stop ? "stop" : "send"));
-    sendBtn.disabled = isDraft ? creating || !text || !machine || !draft.harness : !text && !stop;
+    sendBtn.disabled = Boolean(dictation) || polishing || (isDraft ? creating || !text || !machine || !draft.harness : !text && !stop);
     sendBtn.setAttribute("aria-label", stop ? "Stop" : "Send");
-    hint.classList.toggle("hide", !(text && isWorking()));
   }
   textarea.addEventListener("input", () => {
     textarea.style.height = "auto";
@@ -1059,8 +1067,8 @@ function chatView(machine, id, fromList) {
     const refs = new Map((skills || []).map(s => [s.name, s.ref]));
     return refs.size ? text.replace(/(^|\s)\$([\w-]+(?::[\w-]+)*)/g, (all, lead, name) => (refs.has(name) ? lead + refs.get(name) : all)) : text;
   }
-  /** Start or stop dictation: what's heard goes after the typed text, live. */
-  let dictation = null;
+  /** Start or stop dictation. Like Codex, a waveform replaces the text while
+   * listening; what's heard shows only once cleaned up, after the typed text. */
   function dictate() {
     if (dictation) { dictation.stop(); return; }
     haptic(5);
@@ -1084,8 +1092,6 @@ function chatView(machine, id, fromList) {
         else phrases.push(said);
       }
       heard = phrases.join(" ");
-      textarea.value = typed + (heard ? lead + heard : "");
-      textarea.dispatchEvent(new Event("input"));
     };
     rec.onerror = e => {
       if (e.error === "aborted" || e.error === "no-speech") return;
@@ -1093,42 +1099,49 @@ function chatView(machine, id, fromList) {
     };
     rec.onend = () => {
       if (dictation === rec) dictation = null;
+      clearInterval(clock);
       micBtn.classList.remove("on");
-      if (!rec.cancelled && heard) polish(typed + lead, heard);
+      if (!rec.cancelled && heard.trim()) polish(typed + lead, heard);
+      else showRecorder("");
     };
     try { rec.start(); } catch (e) { toast({ title: "Couldn't start dictation", body: e.message, kind: "error" }); return; }
     dictation = rec;
     micBtn.classList.add("on");
+    const started = Date.now();
+    const tick = () => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      recTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    tick();
+    const clock = setInterval(tick, 500);
+    showRecorder("recording");
+  }
+  /** Show the waveform ("recording"), the cleanup spinner ("polishing"), or the text (""). */
+  function showRecorder(state) {
+    composerBox.classList.toggle("recording", state === "recording");
+    composerBox.classList.toggle("polishing", state === "polishing");
+    updateComposer();
   }
   const stopDictation = () => { if (dictation) { dictation.cancelled = true; dictation.abort(); } };
 
-  /** Like Codex: once dictation stops, the Mac's model turns what it heard
-   * into a clean message, which replaces it after `before` unless the text
-   * changed meanwhile. A failed cleanup leaves the words as heard. */
+  /** Have the Mac's model turn what dictation heard into a clean message, put
+   * after `before`. A failed cleanup puts the words in as heard. */
   async function polish(before, heard) {
-    const raw = textarea.value;
-    textarea.readOnly = true;
+    polishing = true;
     micBtn.disabled = true;
-    micBtn.replaceChildren(glyph("spin"));
+    showRecorder("polishing");
+    let text = heard;
     try {
       const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("The Mac didn't answer in time.")), POLISH_TIMEOUT));
-      const { text } = await Promise.race([call(machine, "polish_dictation", { text: heard }), timeout]);
-      if (textarea.value !== raw) return;
-      const fixed = before + text;
-      textarea.value = fixed;
-      textarea.dispatchEvent(new Event("input"));
-      if (fixed !== raw) toast({ title: "Dictation cleaned up", body: "Tap to undo.", onclick: () => {
-        if (textarea.value !== fixed) return;
-        textarea.value = raw;
-        textarea.dispatchEvent(new Event("input"));
-      } });
+      ({ text } = await Promise.race([call(machine, "polish_dictation", { text: heard }), timeout]));
     } catch (e) {
-      toast({ title: "Couldn't clean up dictation", body: e.message, kind: "error" });
-    } finally {
-      textarea.readOnly = false;
-      micBtn.disabled = false;
-      micBtn.replaceChildren(icon("mic"));
+      toast({ title: "Couldn't clean up dictation", body: `${e.message} The words are as heard.`, kind: "error" });
     }
+    polishing = false;
+    micBtn.disabled = false;
+    textarea.value = before + text;
+    textarea.dispatchEvent(new Event("input"));
+    showRecorder("");
   }
   /** A phrase's words, for comparing two updates of it: no case or punctuation. */
   const words = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();

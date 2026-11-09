@@ -1,7 +1,7 @@
 //! A chat's page: an existing chat, or a new one until its first message
 //! creates it, under the composer they share.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use rune::{Image, TextEdit};
@@ -29,6 +29,8 @@ pub struct ChatPage {
     pub attached: Vec<Attached>,
     pub far_from_bottom: bool,
     pub dictating: Option<Dictating>,
+    /// What dictation heard is being cleaned up.
+    pub polishing: bool,
     /// Edits aimed at a field that's gone (an answered question) land here.
     pub(super) scratch: TextEdit,
     /// The next attached image's id; ids are never reused, so a late upload
@@ -38,12 +40,18 @@ pub struct ChatPage {
     pub(super) next_dictation: u64,
 }
 
+/// How many recent loudness readings the waveform shows.
+pub const LEVELS_KEPT: usize = 60;
+
 /// Dictation into the composer.
 pub struct Dictating {
     pub id: u64,
     pub session: Listening,
-    /// The composer's text when it started; what's heard follows it.
-    pub base: String,
+    pub started: Instant,
+    /// What's heard so far, shown only once cleaned up.
+    pub heard: String,
+    /// Recent loudness, 0 to 1, oldest first.
+    pub levels: VecDeque<f32>,
 }
 
 /// What the page shows above the composer.
@@ -135,6 +143,7 @@ impl ChatPage {
             attached: Vec::new(),
             far_from_bottom: false,
             dictating: None,
+            polishing: false,
             scratch: TextEdit::default(),
             next_attached: 0,
             next_dictation: 0,

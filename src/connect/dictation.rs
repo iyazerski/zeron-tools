@@ -1,6 +1,6 @@
-//! The phone's dictation cleanup: when dictation stops, the raw speech-to-text
-//! goes through the title model, with thinking off for speed, and comes back
-//! as a clean written message. The prompt is Fettle's "Dictation" rewrite
+//! Dictation cleanup, for the phone and the companion: when dictation stops,
+//! the raw speech-to-text goes through the title model, with thinking off for
+//! speed, and comes back as a clean written message. The prompt is Fettle's "Dictation" rewrite
 //! (`~/projects/fettle/src/prompts.rs`).
 
 use anyhow::{Result, bail};
@@ -25,10 +25,10 @@ pub struct Args {
     text: String,
 }
 
-/// Clean up dictated text with `pi`; `None` when connect runs without one.
+/// Clean up dictated text with `pi`, which is `None` when zeron-tools runs without one.
 pub async fn polish(pi: Option<&Pi>, args: Args) -> Result<Value> {
     let Some(pi) = pi else {
-        bail!("connect runs without a model (--no-rename), so dictation stays as heard");
+        bail!("no model to clean it up: zeron-tools runs with --no-rename or without pi");
     };
     let text = pi.ask("off", INSTRUCTIONS, &args.text).await?;
     let text = text.trim();

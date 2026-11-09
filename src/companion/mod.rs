@@ -18,6 +18,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rune::{App, AppSpec, MacWindowOptions, RunOptions, WindowOptions, WindowSpec};
 
+use crate::pi::Pi;
 use crate::service::{COMPANION, RunMode};
 use crate::zeron::Zeron;
 
@@ -51,6 +52,8 @@ pub struct Opts<'a> {
     /// Show the window at launch instead of waiting for the shortcut.
     pub show: bool,
     pub mode: RunMode,
+    /// The model that cleans up dictation; without it, words stay as heard.
+    pub pi: Option<Pi>,
 }
 
 /// Run the window until it quits. It owns the main thread, as macOS needs;
@@ -87,7 +90,7 @@ pub fn run(opts: Opts) -> Result<()> {
         me.update(|s, _| s.toggle_window());
     }
     let app = app
-        .init(move || State::new(Api::start(handle, zeron, me, prefs_path), prefs))
+        .init(move || State::new(Api::start(handle, zeron, opts.pi, me, prefs_path), prefs))
         .global_shortcut(opts.shortcut, |s, _| s.toggle_window());
     eprintln!("companion is running; {} shows it", opts.shortcut);
     rune::run_windows_with_args(RunOptions { accessory: true }, [], move |displays| {

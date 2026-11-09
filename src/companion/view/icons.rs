@@ -131,11 +131,6 @@ pub static MIC: Icon = icon(
     24.0,
     r#"<rect x="8.75" y="2.75" width="6.5" height="11.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.75" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>"#,
 );
-pub static FOLDER: Icon = icon(
-    "folder",
-    24.0,
-    r#"<path d="M3.75 7.25a2 2 0 0 1 2-2h3.6l2 2.25h6.9a2 2 0 0 1 2 2v7.75a2 2 0 0 1-2 2H5.75a2 2 0 0 1-2-2Z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>"#,
-);
 pub static CLOSE: Icon = icon(
     "close",
     24.0,

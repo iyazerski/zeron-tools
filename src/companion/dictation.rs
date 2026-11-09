@@ -22,10 +22,12 @@ const NO_SPEECH: isize = 1110;
 /// Where System Settings lets the user change their answer.
 const SETTINGS: &str = "Allow zeron-tools in System Settings ▸ Privacy & Security";
 
-/// What a session reports, on the main thread.
+/// What a session reports.
 pub enum Heard {
     /// Everything heard since the session started, as text.
     Words(String),
+    /// How loud the microphone is, from 0 to 1, many times a second.
+    Level(f32),
     /// The session is over and its words are final.
     Done,
     Failed(String),
@@ -84,9 +86,11 @@ fn microphone(done: Once) {
 }
 
 impl Listening {
-    /// Listen to the microphone, calling `heard` on the main thread with what
-    /// it hears until the session ends. Needs `authorize` to have passed.
-    pub fn start(heard: impl Fn(Heard) + 'static) -> Result<Self, String> {
+    /// Listen to the microphone, calling `heard` with what it hears until the
+    /// session ends: on the audio thread for levels, else on the main thread.
+    /// Needs `authorize` to have passed.
+    pub fn start(heard: impl Fn(Heard) + Send + Sync + 'static) -> Result<Self, String> {
+        let heard = Arc::new(heard);
         // SAFETY: plain Speech and AVFAudio calls on the main thread, with
         // valid objects. The recognizer reports on the main queue, its default.
         unsafe {
@@ -105,9 +109,15 @@ impl Listening {
             let input = engine.inputNode();
             let format = input.outputFormatForBus(0);
             let feed = request.clone();
+            let loud = heard.clone();
             let tap = RcBlock::new(
                 move |buffer: NonNull<AVAudioPCMBuffer>, _: NonNull<AVAudioTime>| {
-                    feed.appendAudioPCMBuffer(buffer.as_ref());
+                    let buffer = buffer.as_ref();
+                    feed.appendAudioPCMBuffer(buffer);
+                    // Each buffer, a small fraction of a second, draws one bar.
+                    if let Some(level) = level(buffer) {
+                        loud(Heard::Level(level));
+                    }
                 },
             );
             input.installTapOnBus_bufferSize_format_block(
@@ -116,18 +126,14 @@ impl Listening {
                 Some(&format),
                 RcBlock::as_ptr(&tap),
             );
-            // Each pause starts a new transcription; earlier ones are kept here.
-            let said = RefCell::new(String::new());
+            let transcript = RefCell::new(Transcript::default());
             let handler = RcBlock::new(
                 move |result: *mut SFSpeechRecognitionResult, error: *mut NSError| {
                     if let Some(result) = result.as_ref() {
                         let current = result.bestTranscription().formattedString().to_string();
-                        let mut said = said.borrow_mut();
-                        let words = join(&said, &current);
                         // Metadata comes with the last result before a pause.
-                        if result.speechRecognitionMetadata().is_some() {
-                            *said = words.clone();
-                        }
+                        let pause = result.speechRecognitionMetadata().is_some();
+                        let words = transcript.borrow_mut().take(&current, pause);
                         heard(Heard::Words(words));
                         if result.isFinal() {
                             heard(Heard::Done);
@@ -175,6 +181,68 @@ impl Drop for Listening {
     }
 }
 
+/// How loud `buffer` is, from 0 for silence to 1 for loud speech.
+///
+/// # Safety
+/// `buffer` must be a valid buffer from the tap, alive for the call.
+unsafe fn level(buffer: &AVAudioPCMBuffer) -> Option<f32> {
+    // SAFETY: the tap's buffers hold float samples, `frameLength` of them in
+    // each channel; the first channel is enough.
+    let samples = unsafe {
+        let channels = NonNull::new(buffer.floatChannelData())?;
+        std::slice::from_raw_parts(channels.read().as_ptr(), buffer.frameLength() as usize)
+    };
+    if samples.is_empty() {
+        return None;
+    }
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+    // Speech sits between about -50 dBFS (quiet) and -10 dBFS (loud).
+    let db = 20.0 * rms.max(1e-6).log10();
+    Some(((db + 50.0) / 40.0).clamp(0.0, 1.0))
+}
+
+/// What a session heard so far. The recognizer starts a new transcription
+/// after each pause, and once listening stops, repeats the last one or all
+/// of them as final.
+#[derive(Default)]
+struct Transcript {
+    /// Everything before the current transcription.
+    said: String,
+    /// The transcription kept at the last pause, until another starts.
+    kept: Option<String>,
+}
+
+impl Transcript {
+    /// Take a result's transcription, `pause` when it's the last before a
+    /// pause, and return everything heard.
+    fn take(&mut self, current: &str, pause: bool) -> String {
+        if self
+            .kept
+            .as_deref()
+            .is_some_and(|kept| words(kept) == words(current))
+        {
+            return self.said.clone();
+        }
+        if !self.said.is_empty() && words(current).starts_with(&words(&self.said)) {
+            return current.to_owned();
+        }
+        let words = join(&self.said, current);
+        self.kept = pause.then(|| current.to_owned());
+        if pause {
+            self.said = words.clone();
+        }
+        words
+    }
+}
+
+/// The words of `s`, to compare transcriptions whatever their case and punctuation.
+fn words(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
 /// `before`, then `after`, with a space between when both have text.
 pub fn join(before: &str, after: &str) -> String {
     match (before.trim_end(), after.trim_start()) {
@@ -204,5 +272,34 @@ impl Once {
         if let Some(f) = f {
             f(allowed);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Transcript;
+
+    #[test]
+    fn keeps_each_pause_once() {
+        let mut t = Transcript::default();
+        // (transcription, before a pause, everything heard)
+        let steps = [
+            ("Nice", false, "Nice"),
+            ("Nice it works", true, "Nice it works"),
+            ("Really", false, "Nice it works Really"),
+            ("Really well", true, "Nice it works Really well"),
+            // Stopping repeats the last transcription as final.
+            ("Really well.", false, "Nice it works Really well"),
+        ];
+        for (current, pause, heard) in steps {
+            assert_eq!(t.take(current, pause), heard, "after {current:?}");
+        }
+        let mut t = Transcript::default();
+        t.take("Nice it works", true);
+        // Or it repeats everything.
+        assert_eq!(
+            t.take("Nice, it works really well.", false),
+            "Nice, it works really well."
+        );
     }
 }

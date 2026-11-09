@@ -20,7 +20,7 @@ use super::prefs::Prefs;
 
 pub use self::attach::Upload;
 pub use self::draft::{Catalog, Config, Draft, Pick};
-pub use self::page::{ChatPage, Existing, QuestionForm, Sheet, SkillList, Target};
+pub use self::page::{ChatPage, Existing, LEVELS_KEPT, QuestionForm, Sheet, SkillList, Target};
 
 /// How often the list refreshes while shown, as on the phone.
 const LIST_EVERY: Duration = Duration::from_secs(4);

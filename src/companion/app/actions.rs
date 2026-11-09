@@ -2,12 +2,15 @@
 //! transcript, send, answer the agent, stop, archive, dictate, and load what
 //! the composer shows.
 
+use std::collections::VecDeque;
+use std::time::Instant;
+
 use rune::{TextEdit, Tx};
 use serde_json::{Value, json};
 
-use super::page::{Dictating, SkillList, SkillMenu};
+use super::page::{Dictating, LEVELS_KEPT, SkillList, SkillMenu};
 use super::{QuestionForm, State, Target, attach};
-use crate::companion::data::{ChatView, ComposerInfo, Role, Skills};
+use crate::companion::data::{ChatView, ComposerInfo, Polished, Role, Skills};
 use crate::companion::dictation::{self, Heard, Listening};
 use crate::companion::message::{split_from, with_images, with_skill_refs};
 
@@ -239,6 +242,9 @@ impl State {
     pub fn dictate(&mut self) {
         let Some(page) = self.chat_mut() else { return };
         page.composer.focused = true;
+        if page.polishing {
+            return;
+        }
         if page.dictating.is_some() {
             return self.stop_dictating();
         }
@@ -252,7 +258,7 @@ impl State {
         });
     }
 
-    /// Stop listening; the words heard so far stay in the composer.
+    /// Stop listening; what was heard goes on to be cleaned up.
     pub fn stop_dictating(&mut self) {
         if let Some(d) = self.chat_mut().and_then(|p| p.dictating.as_ref()) {
             d.session.stop();
@@ -275,33 +281,74 @@ impl State {
                 page.dictating = Some(Dictating {
                     id,
                     session,
-                    base: page.composer.text.clone(),
+                    started: Instant::now(),
+                    heard: String::new(),
+                    levels: VecDeque::new(),
                 });
             }
             Err(why) => self.fail("Couldn't start dictation", why),
         }
     }
 
-    /// Put what dictation `id` heard after the text it started from.
+    /// Keep what dictation `id` heard, out of sight until it's cleaned up.
     fn heard(&mut self, nav: u64, id: u64, heard: Heard) {
         let Some(page) = self.page_at(nav) else {
             return;
         };
-        let Some(d) = page.dictating.as_ref().filter(|d| d.id == id) else {
+        let Some(d) = page.dictating.as_mut().filter(|d| d.id == id) else {
             return;
         };
         match heard {
-            Heard::Words(words) => {
-                page.composer = TextEdit::new(dictation::join(&d.base, &words));
-                page.composer.set_caret(page.composer.text.len());
-                page.composer.focused = true;
+            Heard::Words(words) => d.heard = words,
+            Heard::Level(level) => {
+                if d.levels.len() == LEVELS_KEPT {
+                    d.levels.pop_front();
+                }
+                d.levels.push_back(level);
             }
-            Heard::Done => page.dictating = None,
+            Heard::Done => {
+                let Some(d) = page.dictating.take() else {
+                    return;
+                };
+                if !d.heard.trim().is_empty() {
+                    self.polish(nav, d.heard);
+                }
+            }
             Heard::Failed(why) => {
                 page.dictating = None;
                 self.fail("Dictation stopped", why);
             }
         }
+    }
+
+    /// Have the model turn what dictation heard into a clean message, put
+    /// after the composer's text. A failed cleanup puts the words as heard.
+    fn polish(&mut self, nav: u64, heard: String) {
+        let Some(page) = self.page_at(nav) else {
+            return;
+        };
+        page.polishing = true;
+        self.api.call(
+            "polish_dictation",
+            json!({ "text": heard }),
+            move |s, result: Result<Polished, String>, _| {
+                let words = match result {
+                    Ok(polished) => polished.text,
+                    Err(e) => {
+                        s.fail(
+                            "Couldn't clean up dictation",
+                            format!("{e}. The words are as heard."),
+                        );
+                        heard
+                    }
+                };
+                let Some(page) = s.page_at(nav) else { return };
+                page.polishing = false;
+                let text = dictation::join(&page.composer.text, &words);
+                page.composer.replace_text(text);
+                page.composer.focused = true;
+            },
+        );
     }
 
     /// Answer the agent's questions with the picked options and typed text.

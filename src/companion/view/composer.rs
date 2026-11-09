@@ -1,14 +1,16 @@
 //! The composer under a chat: the text and its images, its `$` skill menu,
-//! the model chip with its picker, a new chat's project, the checkout and
-//! branch, the context ring, dictation, and Send.
+//! the model chip with its picker, a new chat's project, the branch, the
+//! context ring, dictation, and Send.
 
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
 use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, Spinner};
 
 use super::icons;
 use super::widgets::tile;
-use crate::companion::app::{Catalog, ChatPage, Config, Pick, Sheet, SkillList, State, Upload};
-use crate::companion::data::{Checkout, Skill, levels_of};
+use crate::companion::app::{
+    Catalog, ChatPage, Config, LEVELS_KEPT, Pick, Sheet, SkillList, State, Upload,
+};
+use crate::companion::data::{Skill, levels_of};
 use crate::companion::labels::{harness_name, reasoning_name, short_model};
 use crate::companion::message::skill_query;
 
@@ -16,6 +18,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let working = page.is_working();
     let typed = !page.composer.text.trim().is_empty() || !page.attached.is_empty();
     let stop = !typed && working;
+    let dictating = page.dictating.is_some() || page.polishing;
     let field = text_input(&page.composer, k.ty.ui.lh(19.0))
         .key("composer")
         .w_full()
@@ -47,7 +50,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
             IconButtonVariant::Submit
         })
         .label(if stop { "Stop" } else { "Send" })
-        .disabled(creating || !(stop || typed && ready))
+        .disabled(creating || dictating || !(stop || typed && ready))
         .on_press_tx(move |s: &mut State, tx: &mut Tx| if stop { s.stop() } else { s.send(tx) })
         .build(k)
         // Round: a regular icon button is 24 points square.
@@ -64,6 +67,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         } else {
             "Dictate"
         })
+        .disabled(page.polishing)
         .on_press(State::dictate)
         .build(k)
         .preserve_focus_on_press(true);
@@ -89,20 +93,17 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     if !page.attached.is_empty() {
         field_box = field_box.child(attachments(page, k));
     }
-    field_box = field_box.child(auto_grow(field, 1, 8)).child(tools);
+    field_box = field_box
+        .child(match recorder(page, k) {
+            Some(recorder) => recorder,
+            None => auto_grow(field, 1, 8),
+        })
+        .child(tools);
     let mut dock = col().key("dock").w_full().px(10.0).pb(6.0).gap(6.0);
     if let Some(menu) = skill_menu(page, k) {
         dock = dock.child(menu);
     }
     dock = dock.child(field_box);
-    if typed && working {
-        dock = dock.child(
-            text("Your message joins the current turn.")
-                .font(k.ty.text_xsmall)
-                .color(k.c.text_faint)
-                .pl(6.0),
-        );
-    }
     let footer = row()
         .w_full()
         .gap(12.0)
@@ -113,6 +114,50 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(context(page, k));
     sheets(s, page, k, layer);
     dock.child(footer)
+}
+
+/// While dictating, what stands in for the text, as in Codex: a waveform of
+/// the microphone's loudness and the time, then a spinner while the words are
+/// cleaned up. The raw words never show.
+fn recorder(page: &ChatPage, k: &Kit) -> Option<El> {
+    let line = row().key("recorder").w_full().h(19.0).gap(10.0).center_y();
+    if page.polishing {
+        return Some(
+            line.child(Spinner::new().size(12.0).build(k)).child(
+                text("Cleaning up…")
+                    .font(k.ty.text_small)
+                    .color(k.c.text_muted),
+            ),
+        );
+    }
+    let d = page.dictating.as_ref()?;
+    let bars = d.levels.iter().map(|level| {
+        rune::el()
+            .size(2.0, (2.0 + level * 17.0).round())
+            .radius(1.0)
+            .fill(k.c.text_accent)
+    });
+    let secs = d.started.elapsed().as_secs();
+    Some(
+        line.child(
+            // Newest on the right, the oldest fading out on the left. As wide
+            // as the readings kept, which fits the narrowest window.
+            row()
+                .w(LEVELS_KEPT as f32 * 4.0 - 2.0)
+                .h(19.0)
+                .gap(2.0)
+                .center_y()
+                .justify_end()
+                .clip_fade_linear(24.0, 0.0, 0.0, 0.0)
+                .children(bars),
+        )
+        .child(rune::spacer())
+        .child(
+            text(format!("{}:{:02}", secs / 60, secs % 60))
+                .font(k.ty.text_small)
+                .color(k.c.text_faint),
+        ),
+    )
 }
 
 /// The composer's images: a spinner while one saves, red when it didn't.
@@ -403,32 +448,23 @@ fn meta(page: &ChatPage, k: &Kit) -> El {
         );
     }
     let Some(info) = &page.info else { return out };
-    // Like the desktop footer: checkout and branch only show in a git project.
-    let Some(checkout) = info.checkout else {
+    // A set checkout means a git project, the only place the branch shows.
+    if info.checkout.is_none() {
         return out;
-    };
-    let faint = |glyph: &'static rune::Icon, label: String| {
+    }
+    out.child(
         row()
             .gap(5.0)
             .center_y()
             .min_w(0.0)
-            .child(icon(glyph, 12.0).color(k.c.icon_faint))
+            .child(icon(&icons::BRANCH, 12.0).color(k.c.icon_faint))
             .child(
-                text(label)
+                text(info.branch.clone().unwrap_or_else(|| "No ref".into()))
                     .font(k.ty.small)
                     .color(k.c.text_faint)
                     .truncate(),
-            )
-    };
-    let checkout = match checkout {
-        Checkout::Worktree => "Worktree",
-        Checkout::Local => "Local checkout",
-    };
-    out.child(faint(&icons::FOLDER, checkout.to_owned()))
-        .child(faint(
-            &icons::BRANCH,
-            info.branch.clone().unwrap_or_else(|| "No ref".into()),
-        ))
+            ),
+    )
 }
 
 /// How full the context window is, as a ring toned as the desktop tones it.

@@ -496,7 +496,18 @@ a { color: inherit; text-decoration: none; }
 /* Listening: a soft pulse until it stops. */
 .mic.on { color: var(--danger); background: rgb(from var(--danger) r g b / .14); animation: listen 1.4s ease-in-out infinite; }
 @keyframes listen { 50% { background: rgb(from var(--danger) r g b / .26); } }
-.steer { text-align: center; font-size: 12.5px; color: var(--tertiary); }
+/* Dictating, as in Codex: a waveform stands in for the text until the
+   cleaned-up words arrive, so the raw transcript never shows. */
+.recorder { display: none; align-items: center; gap: 10px; height: 30px; padding: 0 9px 0 2px; color: var(--secondary); font-size: 14px; }
+.composer.recording textarea, .composer.polishing textarea { display: none; }
+.composer.recording .recorder, .composer.polishing .recorder { display: flex; }
+.wave { flex: 1; min-width: 0; height: 22px; display: flex; align-items: center; gap: 3px; overflow: hidden; }
+.wave i { flex: none; width: 3px; height: 100%; border-radius: 2px; background: var(--accent); transform: scaleY(.15); animation: wave var(--d) ease-in-out var(--o) infinite alternate; }
+@keyframes wave { to { transform: scaleY(var(--h)); } }
+.rec-time { font-variant-numeric: tabular-nums; color: var(--tertiary); }
+.rec-busy { display: none; align-items: center; gap: 8px; }
+.composer.polishing .wave, .composer.polishing .rec-time { display: none; }
+.composer.polishing .rec-busy { display: inline-flex; }
 /* The `$` menu: a glass card over the composer, one line per skill. */
 .skill-menu {
   max-width: 760px; width: 100%; margin: 0 auto; padding: 5px;

@@ -120,6 +120,8 @@ struct CompanionArgs {
     #[arg(long)]
     show: bool,
     #[command(flatten)]
+    model: ModelOpts,
+    #[command(flatten)]
     agent: AgentFlag,
 }
 
@@ -153,11 +155,8 @@ struct ConnectOpts {
     /// Don't archive old chats
     #[arg(long)]
     no_archive: bool,
-    /// Don't title chats Zeron couldn't
-    #[arg(long)]
-    no_rename: bool,
     #[command(flatten)]
-    pi: PiOpts,
+    model: ModelOpts,
 }
 
 impl ConnectOpts {
@@ -171,14 +170,9 @@ impl ConnectOpts {
 
     /// Resolve the upkeep's settings, with its memory in `data_dir`.
     fn upkeep(self, data_dir: &Path) -> Result<Upkeep> {
-        let pi = if self.no_rename {
-            None
-        } else {
-            Some(self.pi.resolve()?)
-        };
         Ok(Upkeep {
             keep: (!self.no_archive).then_some(self.keep),
-            pi,
+            pi: self.model.resolve()?,
             memory: data_dir.join("zeron-tools-archived.json"),
         })
     }
@@ -192,7 +186,26 @@ struct CompanionOpts {
     shortcut: String,
 }
 
-/// The model that writes titles.
+/// The model that titles chats and cleans up dictation.
+#[derive(Args)]
+struct ModelOpts {
+    /// Don't title chats Zeron couldn't, nor clean up dictation
+    #[arg(long)]
+    no_rename: bool,
+    #[command(flatten)]
+    pi: PiOpts,
+}
+
+impl ModelOpts {
+    /// The model, unless it's off.
+    fn resolve(self) -> Result<Option<Pi>> {
+        if self.no_rename {
+            return Ok(None);
+        }
+        self.pi.resolve().map(Some)
+    }
+}
+
 #[derive(Args)]
 struct PiOpts {
     /// Title model id from `pi --list-models`; pi finds the provider. Prefix
@@ -263,7 +276,7 @@ async fn install(global: &Global, args: InstallArgs) -> Result<()> {
     }
     let connect_log = CONNECT.install(&agent_args(global, notify, &upkeep))?;
     let shortcut = args.companion.shortcut;
-    let companion_log = COMPANION.install(&companion_args(global, &shortcut))?;
+    let companion_log = COMPANION.install(&companion_args(global, &shortcut, &upkeep))?;
     println!(
         "zeron-tools now runs in the background and starts at login; {shortcut} shows the chats window"
     );
@@ -319,7 +332,13 @@ async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
 
 /// Run `companion`: show the window on the shortcut until it quits.
 fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
+    // Without pi the window still works; dictation stays as heard.
+    let pi = args.model.resolve().unwrap_or_else(|e| {
+        eprintln!("{e:#}");
+        None
+    });
     companion::run(companion::Opts {
+        pi,
         data_dir: &global.data_dir(),
         ipc_port: global.ipc_port,
         shortcut: &args.opts.shortcut,
@@ -329,10 +348,11 @@ fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
 }
 
 /// `companion`'s launch agent arguments.
-fn companion_args(global: &Global, shortcut: &str) -> Vec<String> {
+fn companion_args(global: &Global, shortcut: &str, upkeep: &Upkeep) -> Vec<String> {
     let mut args = global_args(global);
     args.extend(["companion".into(), "--agent".into()]);
     args.extend(["--shortcut".into(), shortcut.to_owned()]);
+    args.extend(model_args(upkeep.pi.as_ref()));
     args
 }
 
@@ -348,18 +368,23 @@ fn agent_args(global: &Global, notify: NotifyWhen, upkeep: &Upkeep) -> Vec<Strin
         Some(keep) => args.extend(["--keep".into(), keep.to_string()]),
         None => args.push("--no-archive".into()),
     }
-    match &upkeep.pi {
-        Some(pi) => args.extend([
+    args.extend(model_args(upkeep.pi.as_ref()));
+    args
+}
+
+/// The model options a launch agent repeats.
+fn model_args(pi: Option<&Pi>) -> Vec<String> {
+    match pi {
+        Some(pi) => vec![
             "--pi".into(),
             pi.binary.to_string_lossy().into_owned(),
             "--title-model".into(),
             pi.model.clone(),
             "--title-thinking".into(),
             pi.thinking.clone(),
-        ]),
-        None => args.push("--no-rename".into()),
+        ],
+        None => vec!["--no-rename".into()],
     }
-    args
 }
 
 /// The global options a launch agent repeats.
@@ -394,6 +419,10 @@ mod tests {
         assert_eq!(
             agent_args(&global, NotifyWhen::Always, &upkeep).join(" "),
             "--ipc-port 1 connect --agent --notify-always --keep 5 --pi /bin/pi --title-model m --title-thinking low"
+        );
+        assert_eq!(
+            companion_args(&global, "cmd+k", &upkeep).join(" "),
+            "--ipc-port 1 companion --agent --shortcut cmd+k --pi /bin/pi --title-model m --title-thinking low"
         );
         let off = Upkeep {
             keep: None,

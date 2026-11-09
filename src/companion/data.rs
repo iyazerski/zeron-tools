@@ -174,6 +174,12 @@ pub struct Question {
 }
 
 /// `composer_info`: what the composer shows under the text.
+/// `polish_dictation`'s answer: what dictation heard, cleaned up.
+#[derive(Debug, Deserialize)]
+pub struct Polished {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerInfo {
