@@ -13,10 +13,10 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use webauthn_rs::prelude::{AuthenticationResult, Passkey};
+use zeron_json_file as json_file;
 
 /// How long a sign-in lasts.
 pub const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
@@ -80,7 +80,7 @@ impl Store {
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join("state.json");
-        let mut data: Data = read_json(&path)?.unwrap_or_default();
+        let mut data: Data = json_file::load(&path)?.unwrap_or_default();
         let fresh = data.user.is_none();
         let user = *data.user.get_or_insert_with(Uuid::new_v4);
         let store = Self {
@@ -219,8 +219,7 @@ impl Store {
     }
 
     fn save(&self, data: &Data) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(data)?;
-        blocking(|| write_private(&self.path, &bytes))
+        blocking(|| json_file::save(&self.path, data))
     }
 }
 
@@ -245,40 +244,6 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-/// Read and parse the JSON file at `path`; `None` if there is none.
-pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .with_context(|| format!("parsing {}", path.display())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
-}
-
-/// Write `bytes` to `path` atomically, readable only by this user.
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = path.with_extension("tmp");
-    // A fresh file, so the mode applies: a leftover one keeps its own.
-    match std::fs::remove_file(&tmp) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).with_context(|| format!("removing {}", tmp.display()));
-        }
-        _ => {}
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&tmp)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]

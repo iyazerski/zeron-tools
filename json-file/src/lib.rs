@@ -1,5 +1,5 @@
-//! Small JSON files this tool keeps next to Zeron's data: read whole, and
-//! replaced whole and atomically.
+//! Small JSON state files, read whole and replaced whole and atomically:
+//! the files `zeron-tools` keeps next to Zeron's data and the relay's state.
 
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -23,6 +23,11 @@ pub fn load<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 /// Write `value` to `path` atomically, readable only by the user (some of
 /// these files hold secrets).
 pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    save_bytes(path, &serde_json::to_vec_pretty(value)?)
+}
+
+/// Write `bytes` to `path` atomically, readable only by the user.
+pub fn save_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     // Per process, so two runs (say, `--install` and the agent) can't share it.
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     // A fresh file, so the mode applies: a leftover one keeps its own.
@@ -38,7 +43,7 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         .mode(0o600)
         .open(&tmp)
         .with_context(|| format!("writing {}", tmp.display()))?;
-    file.write_all(&serde_json::to_vec_pretty(value)?)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }

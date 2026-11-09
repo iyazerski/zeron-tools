@@ -38,6 +38,7 @@ rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "39301f
 # Shrinks image thumbnails before Rune keeps them; matches Rune's own image build.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+zeron-json-file = { path = "json-file" }
 zeron-relay-proto = { path = "relay-proto" }
 
 [dev-dependencies]
@@ -47,7 +48,7 @@ tempfile = "3"
 workspace = true
 
 [workspace]
-members = [".", "relay", "relay-proto"]
+members = [".", "json-file", "relay", "relay-proto"]
 
 # A panic exits the process, so launchd or Kubernetes restarts it, rather
 # than leaving it running with a poisoned lock and failing every call.

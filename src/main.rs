@@ -7,7 +7,6 @@
 mod archive;
 mod companion;
 mod connect;
-mod json_file;
 mod paths;
 mod pi;
 mod rename;
@@ -20,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use zeron_json_file as json_file;
 
 use crate::connect::{Link, NotifyWhen, Upkeep};
 use crate::pi::Pi;

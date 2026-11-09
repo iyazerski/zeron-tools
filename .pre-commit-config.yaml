@@ -22,4 +22,4 @@ repos:
         entry: cargo clippy --workspace --all-targets --locked -- -D warnings
         language: system
         pass_filenames: false
-        files: ^(src/|tests/|relay/|relay-proto/|Cargo\.(toml|lock)|.*/Cargo\.toml)
+        files: ^(src/|tests/|relay/|relay-proto/|json-file/|Cargo\.(toml|lock)|.*/Cargo\.toml)

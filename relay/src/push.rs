@@ -21,7 +21,9 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use zeron_relay_proto::NoticeKind;
 
-use crate::store::{blocking, read_json, write_private};
+use zeron_json_file as json_file;
+
+use crate::store::blocking;
 
 /// Push services keep an undelivered notification this long.
 const TTL_SECS: u64 = 24 * 3600;
@@ -110,7 +112,7 @@ impl Push {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let doc = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
                     .map_err(|_| anyhow!("generating the VAPID key"))?;
-                write_private(&key_file, doc.as_ref())?;
+                json_file::save_bytes(&key_file, doc.as_ref())?;
                 doc.as_ref().to_vec()
             }
             Err(e) => return Err(e).with_context(|| format!("reading {}", key_file.display())),
@@ -118,7 +120,7 @@ impl Push {
         let vapid = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &pkcs8, &rng)
             .map_err(|e| anyhow!("bad VAPID key in {}: {e}", key_file.display()))?;
         let store = dir.join("subscriptions.json");
-        let subscriptions = read_json(&store)?.unwrap_or_default();
+        let subscriptions = json_file::load(&store)?.unwrap_or_default();
         let http = reqwest::Client::builder().timeout(PUSH_TIMEOUT).build()?;
         Ok(Self {
             vapid,
@@ -233,8 +235,7 @@ impl Push {
     }
 
     fn save(&self, subs: &[Subscription]) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(subs)?;
-        blocking(|| write_private(&self.store, &bytes))
+        blocking(|| json_file::save(&self.store, &subs))
     }
 }
 

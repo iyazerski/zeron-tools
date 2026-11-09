@@ -271,7 +271,11 @@ impl Once {
 
     /// Run the callback, if it hasn't run yet.
     fn call(&self, allowed: Allowed) {
-        let f = self.0.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let f = self
+            .0
+            .lock()
+            .expect("the dictation callback lock is poisoned")
+            .take();
         if let Some(f) = f {
             f(allowed);
         }

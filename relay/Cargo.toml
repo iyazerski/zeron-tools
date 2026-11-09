@@ -6,6 +6,7 @@ publish = false
 description = "A tiny relay between a phone browser and the Zeron apps on your Macs"
 
 [dependencies]
+zeron-json-file = { path = "../json-file" }
 zeron-relay-proto = { path = "../relay-proto" }
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }

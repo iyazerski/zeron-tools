@@ -1,0 +1,17 @@
+[package]
+name = "zeron-json-file"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Small JSON state files, read whole and replaced atomically"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = "1"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
