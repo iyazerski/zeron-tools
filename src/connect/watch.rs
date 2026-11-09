@@ -79,13 +79,13 @@ async fn watch_once(
 ) -> Result<()> {
     let mut stream = zeron.subscribe(methods::WATCH_SESSIONS, json!({})).await?;
     // The first snapshot is the baseline: nothing has changed yet.
-    let mut known: Option<HashMap<String, Session>> = None;
+    let mut known: Option<Sessions> = None;
     while let Some(item) = stream.next().await? {
         let sessions: Vec<Session> =
             serde_json::from_value(item).context("WatchSessions: bad snapshot")?;
-        let current: HashMap<String, Session> = sessions
+        let current: Sessions = sessions
             .into_iter()
-            .map(|s| (format!("{}/{}", s.chat_id, s.device_id), s))
+            .map(|s| ((s.chat_id.clone(), s.device_id.clone()), s))
             .collect();
         if let Some(previous) = &known {
             for (chat, kind) in changes(previous, &current) {
@@ -97,12 +97,12 @@ async fn watch_once(
     bail!("the engine closed the session stream")
 }
 
-/// The notices the move from `previous` to `current` sessions (by
-/// `chat/device`) deserves, as chat ids and kinds.
-fn changes(
-    previous: &HashMap<String, Session>,
-    current: &HashMap<String, Session>,
-) -> Vec<(String, NoticeKind)> {
+/// Sessions by chat and device id.
+type Sessions = HashMap<(String, String), Session>;
+
+/// The notices the move from `previous` to `current` sessions deserves, as
+/// chat ids and kinds.
+fn changes(previous: &Sessions, current: &Sessions) -> Vec<(String, NoticeKind)> {
     current
         .iter()
         .filter_map(|(key, now)| {

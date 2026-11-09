@@ -8,10 +8,11 @@
 //! background, after Zeron had its chance, and titles both kinds. It never
 //! replaces any other title.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
 use crate::pi::Pi;
@@ -28,6 +29,9 @@ const MAX_PER_RUN: usize = 40;
 
 /// Chats per model call: small enough for short, reliable JSON answers.
 const BATCH: usize = 20;
+/// Transcripts read at once; enough to overlap round trips, few enough not
+/// to crowd out the engine's other callers.
+const READS_AT_ONCE: usize = 4;
 /// Per-field cap on transcript excerpts sent to the model.
 const EXCERPT_CHARS: usize = 600;
 /// The most characters in Zeron's fallback title.
@@ -173,11 +177,20 @@ pub type Tried = HashMap<String, DateTime<Utc>>;
 pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     let (chats, spaces, sessions) =
         tokio::try_join!(zeron.chats(), zeron.spaces(), zeron.sessions())?;
+    // Forget deleted chats, so the map doesn't grow forever.
+    let ids: HashSet<&str> = chats.iter().map(|c| c.id.as_str()).collect();
+    tried.retain(|id, _| ids.contains(id.as_str()));
     let candidates = candidates(&chats, &sessions, tried, Utc::now());
+    // Built up front: a lazy `map` here trips the compiler's `Send` check.
+    let reads: Vec<_> = candidates
+        .iter()
+        .map(|&chat| async move { (chat, zeron.transcript(chat).await) })
+        .collect();
+    let transcripts: Vec<_> = stream::iter(reads).buffered(READS_AT_ONCE).collect().await;
     let mut excerpts = vec![];
-    for chat in &candidates {
+    for (chat, transcript) in transcripts {
         let project = space_of(chat, &spaces).map(|s| s.display_name().to_owned());
-        let entries = match zeron.transcript(chat).await {
+        let entries = match transcript {
             Ok(entries) => entries,
             Err(e) => {
                 eprintln!("can't read {} to title it: {e:#}", short_id(&chat.id));

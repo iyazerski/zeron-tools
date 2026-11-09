@@ -143,7 +143,9 @@ impl Ipc {
         if let Some(conn) = slot.as_ref().filter(|c| !c.out.is_closed()) {
             return Ok(conn.clone());
         }
-        let conn = Conn::dial(&self.url, &self.token).await?;
+        // Boxed: the handshake's state machine is large, and every call's
+        // future would otherwise carry it.
+        let conn = Box::pin(Conn::dial(&self.url, &self.token)).await?;
         *slot = Some(conn.clone());
         Ok(conn)
     }

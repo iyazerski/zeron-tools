@@ -9,6 +9,8 @@
 //! becomes one capped line. A part that doesn't parse (a new kind, or a
 //! changed one) is skipped rather than failing the transcript.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
@@ -139,16 +141,15 @@ impl PendingInput {
 /// continues (one whose parent isn't rendered yet stands alone).
 pub fn render(entries: &[Entry]) -> Vec<Rendered> {
     let mut rendered: Vec<Rendered> = Vec::with_capacity(entries.len());
+    // Where each rendered message sits, by its entry's id.
+    let mut at: HashMap<&str, usize> = HashMap::with_capacity(entries.len());
     for entry in entries {
         let message = render_one(entry);
-        if let Some(parent) = entry
-            .continuation_of
-            .as_ref()
-            .and_then(|id| rendered.iter_mut().find(|m| &m.id == id))
-        {
-            fold_into(parent, message);
+        if let Some(&parent) = entry.continuation_of.as_deref().and_then(|id| at.get(id)) {
+            fold_into(&mut rendered[parent], message);
             continue;
         }
+        at.entry(&entry.id).or_insert(rendered.len());
         rendered.push(message);
     }
     rendered

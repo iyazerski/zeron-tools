@@ -208,30 +208,33 @@ unsafe fn level(buffer: &AVAudioPCMBuffer) -> Option<f32> {
 struct Transcript {
     /// Everything before the current transcription.
     said: String,
-    /// The transcription kept at the last pause, until another starts.
-    kept: Option<String>,
+    /// The words of `said`, kept so each result doesn't split it again.
+    said_words: Vec<String>,
+    /// The words of the transcription kept at the last pause, until another
+    /// starts.
+    kept: Option<Vec<String>>,
 }
 
 impl Transcript {
     /// Take a result's transcription, `pause` when it's the last before a
     /// pause, and return everything heard.
     fn take(&mut self, current: &str, pause: bool) -> String {
-        if self
-            .kept
-            .as_deref()
-            .is_some_and(|kept| words(kept) == words(current))
-        {
+        let current_words = words(current);
+        if self.kept.as_ref() == Some(&current_words) {
             return self.said.clone();
         }
-        if !self.said.is_empty() && words(current).starts_with(&words(&self.said)) {
+        if !self.said.is_empty() && current_words.starts_with(&self.said_words) {
             return current.to_owned();
         }
-        let words = join(&self.said, current);
-        self.kept = pause.then(|| current.to_owned());
+        let heard = join(&self.said, current);
         if pause {
-            self.said = words.clone();
+            self.said = heard.clone();
+            self.said_words.extend_from_slice(&current_words);
+            self.kept = Some(current_words);
+        } else {
+            self.kept = None;
         }
-        words
+        heard
     }
 }
 
