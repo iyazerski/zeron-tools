@@ -33,7 +33,7 @@ zeron-tools install --shortcut cmd+shift+k       # another shortcut for the chat
 ```
 
 - The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
-- Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call.
+- Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call. The same model, with thinking off, cleans up the phone's dictation when it stops; with `--no-rename` the words stay as heard.
 
 ## Chats window
 

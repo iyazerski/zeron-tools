@@ -524,6 +524,9 @@ async function copyText(text) {
 
 // ---- toasts and sheets ---------------------------------------------------------
 
+/** How long dictation cleanup may take before the words stay as heard. */
+const POLISH_TIMEOUT = 20000;
+
 const TOAST_GLYPH = {
   done: ["check", "var(--tone-done)"], finished: ["check", "var(--tone-done)"], input: ["dot", "var(--tone-input)"],
   error: ["dot", "var(--tone-failed)"], failed: ["dot", "var(--tone-failed)"], info: ["dot", "var(--tertiary)"], test: ["dot", "var(--accent)"],
@@ -1067,9 +1070,20 @@ function chatView(machine, id, fromList) {
     rec.interimResults = true;
     const typed = textarea.value;
     const lead = typed && !/\s$/.test(typed) ? " " : "";
+    let heard = "";
     rec.onresult = e => {
       // Every phrase so far, final or not; browsers differ on the spaces between them.
-      const heard = Array.from(e.results, r => r[0].transcript.trim()).filter(Boolean).join(" ");
+      // Chrome on Android adds each update of a phrase as a new result, so a
+      // result that continues the one before it replaces it.
+      const phrases = [];
+      for (const r of e.results) {
+        const said = r[0].transcript.trim();
+        if (!said) continue;
+        const last = phrases.length - 1;
+        if (last >= 0 && words(said).startsWith(words(phrases[last]))) phrases[last] = said;
+        else phrases.push(said);
+      }
+      heard = phrases.join(" ");
       textarea.value = typed + (heard ? lead + heard : "");
       textarea.dispatchEvent(new Event("input"));
     };
@@ -1080,12 +1094,44 @@ function chatView(machine, id, fromList) {
     rec.onend = () => {
       if (dictation === rec) dictation = null;
       micBtn.classList.remove("on");
+      if (!rec.cancelled && heard) polish(typed + lead, heard);
     };
     try { rec.start(); } catch (e) { toast({ title: "Couldn't start dictation", body: e.message, kind: "error" }); return; }
     dictation = rec;
     micBtn.classList.add("on");
   }
-  const stopDictation = () => dictation?.abort();
+  const stopDictation = () => { if (dictation) { dictation.cancelled = true; dictation.abort(); } };
+
+  /** Like Codex: once dictation stops, the Mac's model turns what it heard
+   * into a clean message, which replaces it after `before` unless the text
+   * changed meanwhile. A failed cleanup leaves the words as heard. */
+  async function polish(before, heard) {
+    const raw = textarea.value;
+    textarea.readOnly = true;
+    micBtn.disabled = true;
+    micBtn.replaceChildren(glyph("spin"));
+    try {
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("The Mac didn't answer in time.")), POLISH_TIMEOUT));
+      const { text } = await Promise.race([call(machine, "polish_dictation", { text: heard }), timeout]);
+      if (textarea.value !== raw) return;
+      const fixed = before + text;
+      textarea.value = fixed;
+      textarea.dispatchEvent(new Event("input"));
+      if (fixed !== raw) toast({ title: "Dictation cleaned up", body: "Tap to undo.", onclick: () => {
+        if (textarea.value !== fixed) return;
+        textarea.value = raw;
+        textarea.dispatchEvent(new Event("input"));
+      } });
+    } catch (e) {
+      toast({ title: "Couldn't clean up dictation", body: e.message, kind: "error" });
+    } finally {
+      textarea.readOnly = false;
+      micBtn.disabled = false;
+      micBtn.replaceChildren(icon("mic"));
+    }
+  }
+  /** A phrase's words, for comparing two updates of it: no case or punctuation. */
+  const words = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 
   textarea.value = drafts[draftKey] || "";
   sendBtn.addEventListener("click", () => (sendBtn.classList.contains("stop") ? stop() : send()));

@@ -11,7 +11,8 @@ use tokio::sync::watch;
 use zeron_relay_proto::Engine;
 
 use crate::archive::{self, Memory};
-use crate::rename::{self, Pi, Tried};
+use crate::pi::Pi;
+use crate::rename::{self, Tried};
 use crate::zeron::Zeron;
 
 /// How long after Zeron opens the first run waits: it may still be syncing.

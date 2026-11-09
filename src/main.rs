@@ -9,6 +9,7 @@ mod companion;
 mod connect;
 mod json_file;
 mod paths;
+mod pi;
 mod rename;
 mod service;
 mod text;
@@ -21,7 +22,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
 use crate::connect::{Link, NotifyWhen, Upkeep};
-use crate::rename::Pi;
+use crate::pi::Pi;
 use crate::service::{COMPANION, CONNECT, RunMode};
 use crate::zeron::Zeron;
 

@@ -49,7 +49,7 @@ impl Tools {
         args: Value,
     ) -> Result<T, String> {
         let state = self.engine.borrow().clone();
-        let value = call_tool(&self.zeron, &state, tool, args).await?;
+        let value = call_tool(&self.zeron, None, &state, tool, args).await?;
         serde_json::from_value(value).map_err(|e| format!("unexpected {tool} answer: {e}"))
     }
 }

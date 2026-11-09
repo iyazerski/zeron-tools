@@ -16,6 +16,7 @@
 
 mod chat;
 mod composer;
+mod dictation;
 mod engine;
 mod maintain;
 mod power;
@@ -44,6 +45,7 @@ use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Engine, Notice, PROTOCOL, U
 
 use self::tools::{Tool, Unavailable, parse_args};
 use crate::json_file;
+use crate::pi::Pi;
 use crate::service::RunMode;
 use crate::zeron::Zeron;
 
@@ -114,12 +116,14 @@ pub struct Opts {
 pub async fn run(opts: Opts) -> Result<()> {
     let zeron = Arc::new(opts.zeron);
     let engine = engine::spawn(zeron.clone());
+    let pi = opts.upkeep.pi.clone();
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.clone(), opts.upkeep));
     if let Some(link) = opts.relay {
         let relay = Relay {
             link,
             notify: opts.notify,
             mode: opts.mode,
+            pi,
         };
         relay.run(zeron, engine).await?;
     }
@@ -134,6 +138,8 @@ struct Relay {
     link: Link,
     notify: NotifyWhen,
     mode: RunMode,
+    /// The title model, which also cleans up dictation.
+    pi: Option<Pi>,
 }
 
 impl Relay {
@@ -143,6 +149,7 @@ impl Relay {
         let url = socket_url(&self.link.relay)?;
         let mac = Arc::new(Mac {
             zeron: zeron.clone(),
+            pi: self.pi,
             slots: Semaphore::new(MAX_CALLS),
         });
         // Notices wait here while the relay is unreachable.
@@ -241,7 +248,9 @@ async fn serve(
 fn spawn_call(mac: Arc<Mac>, engine: Engine, call: Call, replies: mpsc::Sender<Up>) {
     tokio::spawn(async move {
         let result = match mac.slots.acquire().await {
-            Ok(_slot) => call_tool(&mac.zeron, &engine, &call.tool, call.args).await,
+            Ok(_slot) => {
+                call_tool(&mac.zeron, mac.pi.as_ref(), &engine, &call.tool, call.args).await
+            }
             Err(_) => Err("connect is stopping".into()),
         };
         // The connection may be gone by now; the relay times the call out.
@@ -293,6 +302,7 @@ fn hello() -> Up {
 /// This Mac's Zeron, as the relay's calls reach it.
 struct Mac {
     zeron: Arc<Zeron>,
+    pi: Option<Pi>,
     /// Limits the tool calls running at once ([`MAX_CALLS`]).
     slots: Semaphore,
 }
@@ -312,6 +322,8 @@ enum Request {
     SetChatModel,
     /// The composer's `$` menu ([`composer::skills`]).
     ListSkills,
+    /// Clean up what dictation heard ([`dictation::polish`]).
+    PolishDictation,
     /// One of Zeron's own tools ([`tools`]).
     Tool(Tool),
 }
@@ -319,7 +331,10 @@ enum Request {
 impl Request {
     /// Whether it needs a Zeron that is open and readable.
     fn needs_zeron(self) -> bool {
-        !matches!(self, Self::OpenZeron | Self::RestartZeron)
+        !matches!(
+            self,
+            Self::OpenZeron | Self::RestartZeron | Self::PolishDictation
+        )
     }
 }
 
@@ -334,17 +349,19 @@ impl FromStr for Request {
             "composer_info" => Self::ComposerInfo,
             "set_chat_model" => Self::SetChatModel,
             "list_skills" => Self::ListSkills,
+            "polish_dictation" => Self::PolishDictation,
             other => Self::Tool(other.parse()?),
         })
     }
 }
 
 /// Run one of the phone's tools by name and return its result, or why it
-/// can't run in Zeron's `engine` state, within [`TOOL_TIMEOUT`]. Clients on
-/// this Mac (the companion window) call it directly; the relay's calls come
-/// through here too.
+/// can't run in Zeron's `engine` state, within [`TOOL_TIMEOUT`]; `pi` is the
+/// model for the calls that need one. Clients on this Mac (the companion
+/// window) call it directly; the relay's calls come through here too.
 pub async fn call_tool(
     zeron: &Zeron,
+    pi: Option<&Pi>,
     engine: &Engine,
     tool: &str,
     args: Value,
@@ -355,14 +372,14 @@ pub async fn call_tool(
     {
         return Err(why);
     }
-    match tokio::time::timeout(TOOL_TIMEOUT, dispatch(zeron, request, args)).await {
+    match tokio::time::timeout(TOOL_TIMEOUT, dispatch(zeron, pi, request, args)).await {
         Ok(result) => result.map_err(|e| format!("{e:#}")),
         Err(_) => Err("Zeron didn't answer in time".into()),
     }
 }
 
 /// Run `request` with its JSON `args`.
-async fn dispatch(zeron: &Zeron, request: Request, args: Value) -> Result<Value> {
+async fn dispatch(zeron: &Zeron, pi: Option<&Pi>, request: Request, args: Value) -> Result<Value> {
     match request {
         Request::OpenZeron => engine::open().await.map(|()| opening()),
         Request::RestartZeron => engine::restart().await.map(|()| opening()),
@@ -370,6 +387,7 @@ async fn dispatch(zeron: &Zeron, request: Request, args: Value) -> Result<Value>
         Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
         Request::SetChatModel => composer::set_model(zeron, parse_args(args)?).await,
         Request::ListSkills => composer::skills(zeron, parse_args(args)?).await,
+        Request::PolishDictation => dictation::polish(pi, parse_args(args)?).await,
         Request::Tool(tool) => tools::call(zeron, tool, args).await,
     }
 }
@@ -416,12 +434,43 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn dictation_is_cleaned_up_by_the_model_even_while_zeron_is_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        // A stand-in for pi that tidies whatever it reads.
+        let binary = dir.path().join("pi");
+        std::fs::write(&binary, "#!/bin/sh\necho \"  Tidy: $(cat)  \"\n").unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let pi = Pi {
+            binary,
+            model: "m".into(),
+            thinking: "low".into(),
+        };
+        let zeron = Zeron::new(9, Path::new("/nonexistent"));
+        let args = || json!({ "text": "um hello there" });
+        let polished = call_tool(
+            &zeron,
+            Some(&pi),
+            &Engine::Closed,
+            "polish_dictation",
+            args(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(polished, json!({ "text": "Tidy: um hello there" }));
+        let without = call_tool(&zeron, None, &Engine::Closed, "polish_dictation", args())
+            .await
+            .unwrap_err();
+        assert!(without.contains("--no-rename"), "{without}");
+    }
+
+    #[tokio::test]
     async fn calls_wait_for_a_readable_zeron() {
         // Nothing listens here: a call that got through would fail differently.
         let zeron = Zeron::new(9, Path::new("/nonexistent"));
         let call = |engine: Engine, tool: &'static str| {
             let zeron = &zeron;
-            async move { call_tool(zeron, &engine, tool, json!({})).await }
+            async move { call_tool(zeron, None, &engine, tool, json!({})).await }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
         assert_eq!(closed, "Zeron isn't open on this Mac");
