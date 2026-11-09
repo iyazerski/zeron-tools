@@ -8,8 +8,9 @@ use rune_kit::{IconButton, IconButtonVariant, Kit, Spinner, TextInput};
 use super::icons;
 use super::widgets::{dot, engine_note, faint, hide_button, tile, tones};
 use crate::companion::app::State;
-use crate::companion::data::{Chat, Status};
+use crate::companion::data::Chat;
 use crate::companion::labels::{ago, harness_name};
+use crate::connect::ChatStatus;
 
 /// The search field's height; its ends are fully round, as on the phone.
 const SEARCH_HEIGHT: f32 = 32.0;
@@ -212,23 +213,28 @@ fn section(k: &Kit, key: &str, items: &[&Chat], collapsed: bool) -> El {
 fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
     let t = tones(k);
     let status = c.status;
-    let unseen = status == Status::Idle && s.prefs.unseen(c);
+    let idle = matches!(status, ChatStatus::Idle | ChatStatus::Unknown);
+    let unseen = idle && s.prefs.unseen(c);
     let corner = match status {
-        Status::Working { stale } => row()
+        ChatStatus::Working | ChatStatus::StaleWorking => row()
             .gap(5.0)
             .center_y()
             .child(Spinner::new().size(10.0).build(k))
             .child(
-                text(if stale { "Offline?" } else { "Working" })
-                    .font(k.ty.small)
-                    .color(t.working),
+                text(if status == ChatStatus::StaleWorking {
+                    "Offline?"
+                } else {
+                    "Working"
+                })
+                .font(k.ty.small)
+                .color(t.working),
             ),
-        Status::Input => labelled(k, dot(t.input), "Input", t.input),
-        Status::Failed => labelled(k, dot(t.failed), "Failed", t.failed),
-        Status::Idle if unseen => {
+        ChatStatus::AwaitingInput => labelled(k, dot(t.input), "Input", t.input),
+        ChatStatus::Errored => labelled(k, dot(t.failed), "Failed", t.failed),
+        ChatStatus::Idle | ChatStatus::Unknown if unseen => {
             labelled(k, icon(&icons::CHECK, 12.0).color(t.done), "Done", t.done)
         }
-        Status::Idle => row().child(
+        ChatStatus::Idle | ChatStatus::Unknown => row().child(
             text(ago(c.active_at(), Utc::now()))
                 .font(k.ty.small)
                 .color(k.c.text_muted),

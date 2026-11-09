@@ -4,6 +4,8 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::connect::ChatStatus;
+
 /// A chat as `list_chats` and `chat_view` summarize it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,7 +13,7 @@ pub struct Chat {
     pub id: String,
     pub title: Option<String>,
     #[serde(default)]
-    pub status: Status,
+    pub status: ChatStatus,
     pub harness: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<String>,
@@ -30,36 +32,9 @@ pub struct Project {
     pub path: String,
 }
 
-/// A chat's status, read from Zeron's label (like `working` or
-/// `working (stale — …)`) as the app groups it: by its first word.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(from = "String")]
-pub enum Status {
-    #[default]
-    Idle,
-    Working {
-        stale: bool,
-    },
-    Input,
-    Failed,
-}
-
-impl From<String> for Status {
-    fn from(label: String) -> Self {
-        match label.split(' ').next().unwrap_or_default() {
-            "working" => Self::Working {
-                stale: label.contains("stale"),
-            },
-            "awaitingInput" => Self::Input,
-            "errored" => Self::Failed,
-            _ => Self::Idle,
-        }
-    }
-}
-
 impl Chat {
     pub fn is_working(&self) -> bool {
-        matches!(self.status, Status::Working { .. })
+        self.status.is_working()
     }
 
     pub fn title(&self) -> &str {
@@ -285,16 +260,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn statuses_group_by_their_first_word() {
+    fn statuses_read_back_from_their_labels() {
         let cases = [
-            ("working", Status::Working { stale: false }),
-            ("working (stale — 5m)", Status::Working { stale: true }),
-            ("awaitingInput", Status::Input),
-            ("errored", Status::Failed),
-            ("idle", Status::Idle),
+            ("working", ChatStatus::Working),
+            (
+                "working (stale — host may be offline)",
+                ChatStatus::StaleWorking,
+            ),
+            ("awaitingInput", ChatStatus::AwaitingInput),
+            ("errored", ChatStatus::Errored),
+            ("idle", ChatStatus::Idle),
+            ("something new", ChatStatus::Unknown),
         ];
         for (label, want) in cases {
-            let got: Status = serde_json::from_value(serde_json::json!(label)).unwrap();
+            let got: ChatStatus = serde_json::from_value(serde_json::json!(label)).unwrap();
             assert_eq!(got, want, "{label}");
         }
     }

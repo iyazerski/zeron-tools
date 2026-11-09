@@ -25,6 +25,7 @@ mod watch;
 
 pub use engine::{EngineWatch, spawn as watch_engine};
 pub use maintain::Upkeep;
+pub use tools::ChatStatus;
 pub use watch::NotifyWhen;
 
 use std::fmt;

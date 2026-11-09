@@ -495,9 +495,12 @@ pub(super) fn summary(chat: &Chat, spaces: &[Space], sessions: &[Session]) -> Va
     })
 }
 
-/// A chat's status as the app shows it, from its session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ChatStatus {
+/// A chat's status as the app shows it, from its session. On the wire it's
+/// its [`label`](Self::label).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(from = "String")]
+pub enum ChatStatus {
+    #[default]
     Idle,
     Working,
     /// Working, but not updated for [`STALE_AFTER`]: its host may be gone.
@@ -524,9 +527,18 @@ impl ChatStatus {
     }
 
     /// Whether a turn runs (or may still run, on a host that went quiet).
-    pub(super) fn is_working(self) -> bool {
+    pub fn is_working(self) -> bool {
         matches!(self, Self::Working | Self::StaleWorking)
     }
+
+    const ALL: [Self; 6] = [
+        Self::Idle,
+        Self::Working,
+        Self::StaleWorking,
+        Self::AwaitingInput,
+        Self::Errored,
+        Self::Unknown,
+    ];
 
     /// The label, worded as Zeron's MCP `status_of`.
     pub(super) fn label(self) -> &'static str {
@@ -538,6 +550,15 @@ impl ChatStatus {
             Self::Errored => "errored",
             Self::Unknown => "unknown",
         }
+    }
+}
+
+impl From<String> for ChatStatus {
+    fn from(label: String) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|s| s.label() == label)
+            .unwrap_or(Self::Unknown)
     }
 }
 
