@@ -22,7 +22,7 @@ use webauthn_rs::prelude::{AuthenticationResult, Passkey};
 pub const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 
 /// The saved file's contents.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
     /// The WebAuthn user handle; one user, made on first start.
     user: Option<Uuid>,
@@ -35,7 +35,7 @@ struct Data {
 }
 
 /// A sign-in session, by its token's hash.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct SessionRecord {
     hash: String,
     /// Unix seconds.
@@ -43,7 +43,7 @@ struct SessionRecord {
 }
 
 /// A Mac, with its connection token's hash.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct MachineRecord {
     id: String,
     name: String,
@@ -107,33 +107,32 @@ impl Store {
 
     /// Save `passkey`, replacing an older one with its credential id.
     pub fn add_passkey(&self, passkey: Passkey) -> Result<()> {
-        let mut data = self.lock();
-        data.passkeys.retain(|p| p.cred_id() != passkey.cred_id());
-        data.passkeys.push(passkey);
-        self.save(&data)
+        self.update(|data| {
+            data.passkeys.retain(|p| p.cred_id() != passkey.cred_id());
+            data.passkeys.push(passkey);
+        })
     }
 
     /// Record a sign-in's new signature counter and backup state.
     pub fn update_passkeys(&self, result: &AuthenticationResult) -> Result<()> {
-        let mut data = self.lock();
-        let mut changed = false;
-        for passkey in &mut data.passkeys {
-            changed |= passkey.update_credential(result).unwrap_or(false);
-        }
-        if changed { self.save(&data) } else { Ok(()) }
+        self.update(|data| {
+            for passkey in &mut data.passkeys {
+                passkey.update_credential(result);
+            }
+        })
     }
 
     /// Start a session and return its cookie value.
     pub fn new_session(&self) -> Result<String> {
         let token = self.token()?;
-        let mut data = self.lock();
         let now = now();
-        data.sessions.retain(|s| s.expires > now);
-        data.sessions.push(SessionRecord {
-            hash: hash(&token),
-            expires: now + SESSION_TTL.as_secs(),
-        });
-        self.save(&data)?;
+        self.update(|data| {
+            data.sessions.retain(|s| s.expires > now);
+            data.sessions.push(SessionRecord {
+                hash: hash(&token),
+                expires: now + SESSION_TTL.as_secs(),
+            });
+        })?;
         Ok(token)
     }
 
@@ -150,9 +149,7 @@ impl Store {
     /// End the session with this cookie value.
     pub fn end_session(&self, token: &str) -> Result<()> {
         let hash = hash(token);
-        let mut data = self.lock();
-        data.sessions.retain(|s| s.hash != hash);
-        self.save(&data)
+        self.update(|data| data.sessions.retain(|s| s.hash != hash))
     }
 
     /// The added Macs.
@@ -167,21 +164,24 @@ impl Store {
             id: Uuid::new_v4().to_string(),
             name: name.to_owned(),
         };
-        let mut data = self.lock();
-        data.machines.push(MachineRecord {
-            id: machine.id.clone(),
-            name: machine.name.clone(),
-            token_hash: hash(&token),
-        });
-        self.save(&data)?;
+        self.update(|data| {
+            data.machines.push(MachineRecord {
+                id: machine.id.clone(),
+                name: machine.name.clone(),
+                token_hash: hash(&token),
+            });
+        })?;
         Ok((machine, token))
     }
 
     /// Forget the Mac `id`; its token stops working.
     pub fn remove_machine(&self, id: &str) -> Result<()> {
-        let mut data = self.lock();
-        data.machines.retain(|m| m.id != id);
-        self.save(&data)
+        self.update(|data| data.machines.retain(|m| m.id != id))
+    }
+
+    /// Whether the Mac `id` is still added.
+    pub fn has_machine(&self, id: &str) -> bool {
+        self.lock().machines.iter().any(|m| m.id == id)
     }
 
     /// The Mac a connection token belongs to.
@@ -207,14 +207,36 @@ impl Store {
         self.data.lock().expect("the store lock is poisoned")
     }
 
+    /// Apply `change` to a copy of the state, save it, and only then make it
+    /// current, so a failed save leaves the state as the file has it.
+    fn update<R>(&self, change: impl FnOnce(&mut Data) -> R) -> Result<R> {
+        let mut data = self.lock();
+        let mut next = data.clone();
+        let result = change(&mut next);
+        self.save(&next)?;
+        *data = next;
+        Ok(result)
+    }
+
     fn save(&self, data: &Data) -> Result<()> {
-        write_private(&self.path, &serde_json::to_vec_pretty(data)?)
+        let bytes = serde_json::to_vec_pretty(data)?;
+        blocking(|| write_private(&self.path, &bytes))
     }
 }
 
 /// A token's SHA-256, base64url: what the file keeps instead of the token.
 fn hash(token: &str) -> String {
     B64.encode(digest(&SHA256, token.as_bytes()))
+}
+
+/// Run blocking file work without stalling the runtime's other tasks: on a
+/// multi-threaded runtime, this worker hands its tasks to another first.
+pub fn blocking<R>(work: impl FnOnce() -> R) -> R {
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current().map(|h| h.runtime_flavor()) {
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(work),
+        _ => work(),
+    }
 }
 
 /// Now, in Unix seconds.
@@ -286,5 +308,19 @@ mod tests {
         assert!(!store.session_valid(&session));
         store.remove_machine(&mac.id).unwrap();
         assert_eq!(store.machine_for_token(&token), None);
+    }
+
+    #[test]
+    fn a_change_that_isnt_saved_doesnt_apply() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (mac, _) = store.add_machine("Work Mac").unwrap();
+        let read_only = std::fs::Permissions::from_mode(0o500);
+        std::fs::set_permissions(dir.path(), read_only).unwrap();
+        assert!(store.remove_machine(&mac.id).is_err());
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Still added, as the file says.
+        assert!(store.has_machine(&mac.id));
     }
 }

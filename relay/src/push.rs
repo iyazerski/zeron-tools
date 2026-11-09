@@ -21,7 +21,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use zeron_relay_proto::NoticeKind;
 
-use crate::store::{read_json, write_private};
+use crate::store::{blocking, read_json, write_private};
 
 /// Push services keep an undelivered notification this long.
 const TTL_SECS: u64 = 24 * 3600;
@@ -138,17 +138,28 @@ impl Push {
     pub async fn subscribe(&self, subscription: Subscription) -> Result<()> {
         // Reject keys that can't be used now, not at the first notification.
         decode_keys(&subscription.keys)?;
-        let mut subs = self.subscriptions.lock().await;
-        subs.retain(|s| s.endpoint != subscription.endpoint);
-        subs.push(subscription);
-        self.save(&subs)
+        self.update(|subs| {
+            subs.retain(|s| s.endpoint != subscription.endpoint);
+            subs.push(subscription);
+        })
+        .await
     }
 
     /// Forget the subscription for `endpoint`.
     pub async fn unsubscribe(&self, endpoint: &str) -> Result<()> {
+        self.update(|subs| subs.retain(|s| s.endpoint != endpoint))
+            .await
+    }
+
+    /// Apply `change` to a copy of the subscriptions, save it, and only then
+    /// make it current, so a failed save leaves them as the file has them.
+    async fn update(&self, change: impl FnOnce(&mut Vec<Subscription>)) -> Result<()> {
         let mut subs = self.subscriptions.lock().await;
-        subs.retain(|s| s.endpoint != endpoint);
-        self.save(&subs)
+        let mut next = subs.clone();
+        change(&mut next);
+        self.save(&next)?;
+        *subs = next;
+        Ok(())
     }
 
     /// Send `payload` to the subscription for `endpoint`.
@@ -222,7 +233,8 @@ impl Push {
     }
 
     fn save(&self, subs: &[Subscription]) -> Result<()> {
-        write_private(&self.store, &serde_json::to_vec_pretty(subs)?)
+        let bytes = serde_json::to_vec_pretty(subs)?;
+        blocking(|| write_private(&self.store, &bytes))
     }
 }
 

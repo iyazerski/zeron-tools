@@ -396,7 +396,11 @@ async fn connect(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrad
     };
     let (hub, push, store) = (app.hub.clone(), app.push.clone(), app.store.clone());
     ws.on_upgrade(move |socket| {
-        hub.serve(machine, socket, move |machine, notice| {
+        let known = {
+            let store = store.clone();
+            move |id: &str| store.has_machine(id)
+        };
+        hub.serve(machine, socket, known, move |machine, notice| {
             let payload = payload(machine, notice, store.machines().len() > 1);
             let push = push.clone();
             tokio::spawn(async move { push.broadcast(&payload).await });

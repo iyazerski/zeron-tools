@@ -116,14 +116,17 @@ impl Hub {
         self.lock().remove(machine);
     }
 
-    /// Serve one Mac's connection until it ends, passing its notices to `notify`.
+    /// Serve one Mac's connection until it ends, passing its notices to
+    /// `notify`. `known` says whether the Mac is still added: it may be
+    /// removed while it says hello, after its token was checked.
     pub async fn serve(
         self: Arc<Self>,
         machine: Machine,
         socket: WebSocket,
+        known: impl Fn(&str) -> bool + Send,
         notify: impl Fn(&Machine, Notice) + Send,
     ) {
-        if let Err(e) = self.serve_inner(&machine, socket, notify).await {
+        if let Err(e) = self.serve_inner(&machine, socket, known, notify).await {
             eprintln!("{}: {e:#}", machine.name);
         }
     }
@@ -132,6 +135,7 @@ impl Hub {
         &self,
         machine: &Machine,
         socket: WebSocket,
+        known: impl Fn(&str) -> bool + Send,
         notify: impl Fn(&Machine, Notice) + Send,
     ) -> Result<()> {
         let (mut sink, mut stream) = socket.split();
@@ -139,17 +143,27 @@ impl Hub {
         let conn = self.next.fetch_add(1, Ordering::Relaxed);
         let (calls_tx, mut calls) = mpsc::channel::<Call>(CALL_QUEUE);
         let pending = Pending::default();
-        self.lock().insert(
-            machine.id.clone(),
-            Link {
-                conn,
-                calls: calls_tx,
-                pending: pending.clone(),
-                version: version.clone(),
-                engine: None,
-                battery: None,
-            },
-        );
+        {
+            // Checked under the hub's lock: a removal either happens first and
+            // is seen here, or its `drop_machine` runs after this insert.
+            let mut links = self.lock();
+            if !known(&machine.id) {
+                drop(links);
+                let _ = sink.send(close("this Mac was removed")).await;
+                bail!("removed while connecting");
+            }
+            links.insert(
+                machine.id.clone(),
+                Link {
+                    conn,
+                    calls: calls_tx,
+                    pending: pending.clone(),
+                    version: version.clone(),
+                    engine: None,
+                    battery: None,
+                },
+            );
+        }
         eprintln!("{} connected (zeron-tools {version})", machine.name);
         let result = async {
             // Outgoing calls must not postpone this, so it's a fixed deadline
@@ -290,10 +304,13 @@ mod tests {
     use serde_json::json;
     use tokio_tungstenite::tungstenite::Message as Frame;
 
-    /// A call waiting on a Mac fails as soon as its connection drops.
-    #[tokio::test]
-    async fn calls_fail_at_once_when_the_mac_disconnects() {
-        let hub = Arc::new(Hub::default());
+    type MacSocket = tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >;
+
+    /// Serve Mac `m` on a local relay whose store says `known`, connect it,
+    /// and say hello.
+    async fn connect(hub: &Arc<Hub>, known: bool) -> MacSocket {
         let mac = Machine {
             id: "m".into(),
             name: "Mac".into(),
@@ -303,7 +320,9 @@ mod tests {
             "/connect",
             axum::routing::get(move |ws: WebSocketUpgrade| {
                 let (hub, mac) = (serve.clone(), mac.clone());
-                async move { ws.on_upgrade(move |socket| hub.serve(mac, socket, |_, _| {})) }
+                async move {
+                    ws.on_upgrade(move |socket| hub.serve(mac, socket, move |_| known, |_, _| {}))
+                }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -321,6 +340,14 @@ mod tests {
             .send(Frame::text(serde_json::to_string(&hello).unwrap()))
             .await
             .unwrap();
+        socket
+    }
+
+    /// A call waiting on a Mac fails as soon as its connection drops.
+    #[tokio::test]
+    async fn calls_fail_at_once_when_the_mac_disconnects() {
+        let hub = Arc::new(Hub::default());
+        let mut socket = connect(&hub, true).await;
         while !hub.status("m").online {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -341,6 +368,21 @@ mod tests {
             .expect("the call waited for its timeout")
             .unwrap();
         assert_eq!(result, Err("this Mac went offline".into()));
+        assert!(!hub.status("m").online);
+    }
+
+    /// A Mac removed after its token was checked doesn't come online.
+    #[tokio::test]
+    async fn a_mac_removed_while_connecting_is_turned_away() {
+        let hub = Arc::new(Hub::default());
+        let mut socket = connect(&hub, false).await;
+        let closed = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("the relay kept the removed Mac");
+        assert!(
+            matches!(closed, Some(Ok(Frame::Close(_))) | None),
+            "{closed:?}"
+        );
         assert!(!hub.status("m").online);
     }
 }
