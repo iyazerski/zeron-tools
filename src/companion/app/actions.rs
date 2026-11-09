@@ -163,9 +163,7 @@ impl State {
             args,
             move |s, result: Result<Value, String>, _| {
                 let Err(e) = result else {
-                    if let Some(chat) = s.existing_at(nav) {
-                        chat.reload();
-                    }
+                    s.reload_at(nav);
                     return;
                 };
                 if let Some(page) = s.page_at(nav) {
@@ -212,12 +210,10 @@ impl State {
                     }
                 }
                 Ok(_) => {
-                    if let Some(chat) = s.existing_at(nav) {
-                        chat.reload();
-                        if let Some(q) = &mut chat.question {
-                            q.sending = false;
-                        }
+                    if let Some(q) = s.existing_at(nav).and_then(|c| c.question.as_mut()) {
+                        q.sending = false;
                     }
+                    s.reload_at(nav);
                 }
                 Err(e) => {
                     if let Some(q) = s.existing_at(nav).and_then(|c| c.question.as_mut()) {

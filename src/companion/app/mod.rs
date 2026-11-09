@@ -200,6 +200,7 @@ impl State {
                 chat.poll.expire();
             }
         }
+        self.load_due();
     }
 
     pub fn engine_changed(&mut self, engine: Engine) {
@@ -210,11 +211,15 @@ impl State {
             return;
         }
         self.list.poll.expire();
-        let Some(page) = self.chat_mut() else { return };
-        match &mut page.target {
-            Target::Existing(chat) => chat.poll.expire(),
-            Target::New(draft) if !draft.loaded => self.load_draft(),
-            Target::New(_) => {}
+        if let Some(page) = self.chat_mut() {
+            match &mut page.target {
+                Target::Existing(chat) => chat.poll.expire(),
+                Target::New(draft) if !draft.loaded => self.load_draft(),
+                Target::New(_) => {}
+            }
+        }
+        if self.api.app().is_visible() {
+            self.load_due();
         }
     }
 
@@ -232,6 +237,21 @@ impl State {
         if !self.api.app().is_visible() || !matches!(self.engine, Engine::Running { .. }) {
             return changed;
         }
+        // The working clock counts seconds; nothing else moves.
+        changed |= self
+            .chat()
+            .and_then(ChatPage::existing)
+            .is_some_and(Existing::shows_clock);
+        self.load_due();
+        changed
+    }
+
+    /// Start the shown page's load if it's due. Navigation calls this at once,
+    /// so a page it opens or expires doesn't wait for the next tick.
+    fn load_due(&mut self) {
+        if !matches!(self.engine, Engine::Running { .. }) {
+            return;
+        }
         match &self.page {
             Page::List => {
                 if self.list.poll.due(LIST_EVERY) {
@@ -239,22 +259,25 @@ impl State {
                 }
             }
             Page::Chat(page) => {
-                let Some(chat) = page.existing() else {
-                    return changed;
-                };
+                let Some(chat) = page.existing() else { return };
                 let every = if page.is_working() {
                     CHAT_WORKING_EVERY
                 } else {
                     CHAT_IDLE_EVERY
                 };
-                // The working clock counts seconds; nothing else moves.
-                changed |= chat.shows_clock();
                 if chat.poll.due(every) {
                     self.refresh_chat();
                 }
             }
         }
-        changed
+    }
+
+    /// Load the transcript of the chat `nav` named whole, now.
+    fn reload_at(&mut self, nav: u64) {
+        if let Some(chat) = self.existing_at(nav) {
+            chat.reload();
+            self.load_due();
+        }
     }
 
     fn load_chats(&mut self) {
@@ -288,6 +311,7 @@ impl State {
             .find(|c| c.id == id)
             .cloned();
         self.show(Target::Existing(Existing::new(id, chat)));
+        self.load_due();
     }
 
     pub fn new_chat(&mut self) {
@@ -299,6 +323,7 @@ impl State {
         self.leave_page();
         self.page = Page::List;
         self.list.poll.expire();
+        self.load_due();
     }
 
     /// Show `target`'s page, with the text left unsent there before.
