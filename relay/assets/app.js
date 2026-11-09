@@ -181,18 +181,25 @@ function setOnline(online) {
 
 class ApiError extends Error {}
 
+/** How long a request may take. The relay answers within 30 s, so only a
+ * stalled connection (say, after a network switch) runs out; without a
+ * deadline it would hold up its poller for good. */
+const REQUEST_TIMEOUT = 40000;
+
 async function post(path, body = {}) {
   let res;
   try {
-    res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(REQUEST_TIMEOUT) });
   } catch {
     setOnline(false);
     throw new Error("Can't reach the relay");
   }
   setOnline(true);
-  const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  // Null when the body didn't arrive whole, also when the deadline cut it off.
+  const data = await res.json().catch(() => null);
   if (res.status === 401 && !path.startsWith("/auth/")) { showSignIn(); throw new ApiError("Sign in first"); }
-  if (!res.ok) throw new ApiError(data.error || `HTTP ${res.status}`);
+  if (!res.ok) throw new ApiError(data?.error || `HTTP ${res.status}`);
+  if (data == null) throw new Error("Can't reach the relay");
   return data;
 }
 /** Run a Zeron tool on one Mac. */
