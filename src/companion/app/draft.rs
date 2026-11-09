@@ -208,10 +208,18 @@ impl State {
                         return;
                     }
                 };
-                // Sent, so there's no text to keep for the next new chat.
+                // The chat exists, so there's no text to keep for the next new chat.
+                let typed = page.composer.text.clone();
                 page.composer.clear();
                 s.prefs.new_chat = pick;
                 s.save_prefs();
+                if let Some(why) = made.send_error {
+                    // Open it with the message back in its composer.
+                    s.drafts.insert(made.chat_id.clone(), typed);
+                    s.open_chat(made.chat_id);
+                    s.fail("Chat started, but the message wasn't sent", why);
+                    return;
+                }
                 s.open_chat(made.chat_id);
                 if let Some(chat) = s.chat_mut().and_then(|p| p.existing_mut()) {
                     chat.pending.push(text);

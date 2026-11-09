@@ -1538,7 +1538,13 @@ function chatView(machine, id, fromList) {
       const made = await call(target, "create_chat", args);
       prefs.set(picks);
       delete drafts[draftKey];
-      handoff = { chat: made.chatId, text };
+      if (made.sendError) {
+        // The chat exists: open it with the message back in its composer.
+        drafts[made.chatId] = typed;
+        toast({ title: "Chat started, but the message wasn't sent", body: made.sendError, kind: "error" });
+      } else {
+        handoff = { chat: made.chatId, text };
+      }
       location.replace(chatHash(target, made.chatId));
     } catch (e) {
       toast({ title: "Couldn't start the chat", body: e.message, kind: "error" });

@@ -199,7 +199,8 @@ struct CreateChatArgs {
 }
 
 /// Create a standalone chat on this Mac, in a project or not, and send it
-/// the first prompt.
+/// the first prompt. If the chat was created but the prompt didn't go,
+/// `sendError` says why.
 async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
     let space = match args.project.as_deref() {
         Some(key) => Some(find_space(&zeron.spaces().await?, key)?.clone()),
@@ -256,7 +257,12 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         .filter(|p| !p.is_empty())
     {
         // The new row may not be in WatchChats yet: use what was just written.
-        result["sent"] = deliver(zeron, &chat, space.as_ref(), &harnesses, None, prompt).await?;
+        // The chat exists either way, so a failed send is part of the answer:
+        // retrying the whole call would create a second chat.
+        match deliver(zeron, &chat, space.as_ref(), &harnesses, None, prompt).await {
+            Ok(sent) => result["sent"] = sent,
+            Err(e) => result["sendError"] = json!(format!("{e:#}")),
+        }
     }
     Ok(result)
 }

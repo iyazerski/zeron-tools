@@ -258,6 +258,9 @@ pub struct Skills {
 #[serde(rename_all = "camelCase")]
 pub struct Created {
     pub chat_id: String,
+    /// Why the first message didn't go, though the chat was created.
+    #[serde(default)]
+    pub send_error: Option<String>,
 }
 
 /// A model and reasoning pick, as `set_chat_model` saves it.
