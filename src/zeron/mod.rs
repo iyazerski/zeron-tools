@@ -40,8 +40,10 @@ pub mod methods {
     pub const UPLOAD_COMMIT: &str = "UploadCommit";
 }
 
-/// The bytes of one `UploadChunk`, before base64.
-const UPLOAD_CHUNK_BYTES: usize = 256 * 1024;
+/// The bytes of one `UploadChunk`, before base64. A multiple of 3, so no
+/// chunk but the last ends in `=` padding: Zeron joins the chunks' base64
+/// before it decodes them.
+const UPLOAD_CHUNK_BYTES: usize = 192 * 1024;
 
 /// How long a snapshot or transcript may take. The engine answers in
 /// milliseconds unless it's still starting.
