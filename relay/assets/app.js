@@ -1079,14 +1079,54 @@ function chatView(machine, id, fromList) {
   function dictate() {
     if (dictation) { dictation.stop(); return; }
     haptic(5);
-    const rec = new Speech();
-    rec.lang = navigator.language;
-    rec.continuous = true;
-    rec.interimResults = true;
     const typed = textarea.value;
     const lead = typed && !/\s$/.test(typed) ? " " : "";
-    let heard = "";
-    rec.onresult = e => {
+    // What the ended sessions heard, and what the current one has so far.
+    let earlier = "", heard = "", failed = false, rec = null;
+    const session = {
+      stopped: false, cancelled: false,
+      stop() { this.stopped = true; rec.stop(); },
+      abort() { this.stopped = this.cancelled = true; rec.abort(); },
+    };
+    if (!listen()) return;
+    dictation = session;
+    micBtn.classList.add("on");
+    const started = Date.now();
+    const tick = () => {
+      const s = Math.floor((Date.now() - started) / 1000);
+      recTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    tick();
+    const clock = setInterval(tick, 500);
+    showRecorder("recording");
+
+    /** Start a recognition session; false if the browser refused. */
+    function listen() {
+      rec = new Speech();
+      rec.lang = navigator.language;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.onresult = onresult;
+      rec.onerror = e => {
+        if (e.error === "aborted" || e.error === "no-speech") return;
+        failed = true;
+        toast({ title: "Dictation stopped", body: e.error === "not-allowed" ? "Microphone access is off for this app." : e.message || e.error, kind: "error" });
+      };
+      rec.onend = () => {
+        earlier = [earlier, heard].filter(Boolean).join(" ");
+        heard = "";
+        // Chrome on Android ends a session at every pause, even a continuous
+        // one; keep listening until the user stops.
+        if (!session.stopped && !failed && listen()) return;
+        if (dictation === session) dictation = null;
+        clearInterval(clock);
+        micBtn.classList.remove("on");
+        if (!session.cancelled && earlier.trim()) polish(typed + lead, earlier);
+        else showRecorder("");
+      };
+      try { rec.start(); return true; } catch (e) { toast({ title: "Couldn't start dictation", body: e.message, kind: "error" }); return false; }
+    }
+    function onresult(e) {
       // Every phrase so far, final or not; browsers differ on the spaces between them.
       // Chrome on Android adds each update of a phrase as a new result, so a
       // result that continues the one before it replaces it.
@@ -1099,29 +1139,7 @@ function chatView(machine, id, fromList) {
         else phrases.push(said);
       }
       heard = phrases.join(" ");
-    };
-    rec.onerror = e => {
-      if (e.error === "aborted" || e.error === "no-speech") return;
-      toast({ title: "Dictation stopped", body: e.error === "not-allowed" ? "Microphone access is off for this app." : e.message || e.error, kind: "error" });
-    };
-    rec.onend = () => {
-      if (dictation === rec) dictation = null;
-      clearInterval(clock);
-      micBtn.classList.remove("on");
-      if (!rec.cancelled && heard.trim()) polish(typed + lead, heard);
-      else showRecorder("");
-    };
-    try { rec.start(); } catch (e) { toast({ title: "Couldn't start dictation", body: e.message, kind: "error" }); return; }
-    dictation = rec;
-    micBtn.classList.add("on");
-    const started = Date.now();
-    const tick = () => {
-      const s = Math.floor((Date.now() - started) / 1000);
-      recTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-    };
-    tick();
-    const clock = setInterval(tick, 500);
-    showRecorder("recording");
+    }
   }
   /** Show the waveform ("recording"), the cleanup spinner ("polishing"), or the text (""). */
   function showRecorder(state) {
@@ -1129,7 +1147,7 @@ function chatView(machine, id, fromList) {
     composerBox.classList.toggle("polishing", state === "polishing");
     updateComposer();
   }
-  const stopDictation = () => { if (dictation) { dictation.cancelled = true; dictation.abort(); } };
+  const stopDictation = () => dictation?.abort();
 
   /** Have the Mac's model turn what dictation heard into a clean message, put
    * after `before`. A failed cleanup puts the words in as heard. */
@@ -1147,8 +1165,9 @@ function chatView(machine, id, fromList) {
     polishing = false;
     micBtn.disabled = false;
     textarea.value = before + text;
-    textarea.dispatchEvent(new Event("input"));
+    // Visible first: a hidden textarea measures no height to grow to.
     showRecorder("");
+    textarea.dispatchEvent(new Event("input"));
   }
   /** A phrase's words, for comparing two updates of it: no case or punctuation. */
   const words = s => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
