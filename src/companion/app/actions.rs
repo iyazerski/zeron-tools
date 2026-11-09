@@ -8,7 +8,7 @@ use std::time::Instant;
 use rune::{TextEdit, Tx};
 use serde_json::{Value, json};
 
-use super::page::{Dictating, LEVELS_KEPT, SkillList, SkillMenu};
+use super::page::{Dictating, LEVELS_KEPT, SkillList, SkillMenu, Voice};
 use super::{QuestionForm, State, Target, attach};
 use crate::companion::data::{ChatView, ComposerInfo, Polished, Role, Skills};
 use crate::companion::dictation::{self, Heard, Listening};
@@ -72,7 +72,7 @@ impl State {
                         }
                     }
                     chat.read = Some(read);
-                    chat.version = view.version;
+                    chat.version = Some(view.version);
                     s.load_thumbs();
                 }
                 if s.prefs.mark_seen(&view.chat) {
@@ -157,7 +157,9 @@ impl State {
         };
         let id = chat.id.clone();
         chat.pending.push(text.clone());
-        page.dictating = None;
+        if matches!(page.voice, Voice::Listening(_)) {
+            page.voice = Voice::Idle;
+        }
         page.composer.clear();
         page.attached.clear();
         self.load_thumbs();
@@ -242,25 +244,29 @@ impl State {
     pub fn dictate(&mut self) {
         let Some(page) = self.chat_mut() else { return };
         page.composer.focused = true;
-        if page.polishing {
-            return;
-        }
-        if page.dictating.is_some() {
-            return self.stop_dictating();
+        match page.voice {
+            Voice::Authorizing | Voice::Polishing => return,
+            Voice::Listening(_) => return self.stop_dictating(),
+            Voice::Idle => page.voice = Voice::Authorizing,
         }
         let nav = page.nav;
         let app = self.api.app().clone();
         dictation::authorize(move |allowed| {
             app.update(move |s, _| match allowed {
                 Ok(()) => s.listen(nav),
-                Err(why) => s.fail("Can't dictate", why),
+                Err(why) => {
+                    if let Some(page) = s.page_at(nav) {
+                        page.voice = Voice::Idle;
+                    }
+                    s.fail("Can't dictate", why);
+                }
             });
         });
     }
 
     /// Stop listening; what was heard goes on to be cleaned up.
     pub fn stop_dictating(&mut self) {
-        if let Some(d) = self.chat_mut().and_then(|p| p.dictating.as_ref()) {
+        if let Some(d) = self.chat_mut().and_then(|p| p.voice.listening()) {
             d.session.stop();
         }
     }
@@ -270,7 +276,7 @@ impl State {
         let Some(page) = self.page_at(nav) else {
             return;
         };
-        if page.dictating.is_some() {
+        if !matches!(page.voice, Voice::Authorizing) {
             return;
         }
         let id = page.next_dictation;
@@ -278,7 +284,7 @@ impl State {
         let heard = move |heard: Heard| app.update(move |s, _| s.heard(nav, id, heard));
         match Listening::start(heard) {
             Ok(session) => {
-                page.dictating = Some(Dictating {
+                page.voice = Voice::Listening(Dictating {
                     id,
                     session,
                     started: Instant::now(),
@@ -286,7 +292,10 @@ impl State {
                     levels: VecDeque::new(),
                 });
             }
-            Err(why) => self.fail("Couldn't start dictation", why),
+            Err(why) => {
+                page.voice = Voice::Idle;
+                self.fail("Couldn't start dictation", why);
+            }
         }
     }
 
@@ -295,9 +304,12 @@ impl State {
         let Some(page) = self.page_at(nav) else {
             return;
         };
-        let Some(d) = page.dictating.as_mut().filter(|d| d.id == id) else {
+        let Voice::Listening(d) = &mut page.voice else {
             return;
         };
+        if d.id != id {
+            return;
+        }
         match heard {
             Heard::Words(words) => d.heard = words,
             Heard::Level(level) => {
@@ -307,7 +319,7 @@ impl State {
                 d.levels.push_back(level);
             }
             Heard::Done => {
-                let Some(d) = page.dictating.take() else {
+                let Voice::Listening(d) = std::mem::replace(&mut page.voice, Voice::Idle) else {
                     return;
                 };
                 if !d.heard.trim().is_empty() {
@@ -315,7 +327,7 @@ impl State {
                 }
             }
             Heard::Failed(why) => {
-                page.dictating = None;
+                page.voice = Voice::Idle;
                 self.fail("Dictation stopped", why);
             }
         }
@@ -327,7 +339,7 @@ impl State {
         let Some(page) = self.page_at(nav) else {
             return;
         };
-        page.polishing = true;
+        page.voice = Voice::Polishing;
         self.api.call(
             "polish_dictation",
             json!({ "text": heard }),
@@ -343,7 +355,7 @@ impl State {
                     }
                 };
                 let Some(page) = s.page_at(nav) else { return };
-                page.polishing = false;
+                page.voice = Voice::Idle;
                 let text = dictation::join(&page.composer.text, &words);
                 page.composer.replace_text(text);
                 page.composer.focused = true;

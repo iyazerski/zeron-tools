@@ -12,7 +12,7 @@ mod widgets;
 use rune::{ClipboardContent, Cx, El, Key, KeyEvent, SystemMaterial, Tx, col};
 use rune_kit::{Kit, Toast, ToastRegion};
 
-use super::app::{Page, State, ToastKind};
+use super::app::{Overlay, Page, State, ToastKind};
 use super::data::{Message, Part};
 
 /// The window's corner radius.
@@ -115,8 +115,7 @@ pub fn on_key(s: &mut State, key: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
     match s.chat_mut() {
-        Some(page) if page.sheet.is_some() => page.sheet = None,
-        Some(page) if page.menu => page.menu = false,
+        Some(page) if page.overlay != Overlay::Closed => page.overlay = Overlay::Closed,
         _ => s.hide(),
     }
     true

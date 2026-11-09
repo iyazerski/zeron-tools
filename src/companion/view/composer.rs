@@ -8,7 +8,7 @@ use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit
 use super::icons;
 use super::widgets::tile;
 use crate::companion::app::{
-    Catalog, ChatPage, Config, LEVELS_KEPT, Pick, Sheet, SkillList, State, Upload,
+    Catalog, ChatPage, Config, LEVELS_KEPT, Overlay, Pick, Sheet, SkillList, State, Upload, Voice,
 };
 use crate::companion::data::{Skill, levels_of};
 use crate::companion::labels::{harness_name, reasoning_name, short_model};
@@ -18,7 +18,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let working = page.is_working();
     let typed = !page.composer.text.trim().is_empty() || !page.attached.is_empty();
     let stop = !typed && working;
-    let dictating = page.dictating.is_some() || page.polishing;
+    let dictating = !matches!(page.voice, Voice::Idle);
     let field = text_input(&page.composer, k.ty.ui.lh(19.0))
         .key("composer")
         .w_full()
@@ -55,7 +55,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .build(k)
         // Round: a regular icon button is 24 points square.
         .radius(12.0);
-    let listening = page.dictating.is_some();
+    let listening = page.voice.listening().is_some();
     let dictate = IconButton::new(&icons::MIC)
         .variant(if listening {
             IconButtonVariant::Contrast
@@ -67,7 +67,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         } else {
             "Dictate"
         })
-        .disabled(page.polishing)
+        .disabled(matches!(page.voice, Voice::Authorizing | Voice::Polishing))
         .on_press(State::dictate)
         .build(k)
         .preserve_focus_on_press(true);
@@ -121,7 +121,7 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
 /// cleaned up. The raw words never show.
 fn recorder(page: &ChatPage, k: &Kit) -> Option<El> {
     let line = row().key("recorder").w_full().h(19.0).gap(10.0).center_y();
-    if page.polishing {
+    if matches!(page.voice, Voice::Polishing) {
         return Some(
             line.child(Spinner::new().size(12.0).build(k)).child(
                 text("Cleaning up…")
@@ -130,7 +130,7 @@ fn recorder(page: &ChatPage, k: &Kit) -> Option<El> {
             ),
         );
     }
-    let d = page.dictating.as_ref()?;
+    let d = page.voice.listening()?;
     let bars = d.levels.iter().map(|level| {
         rune::el()
             .size(2.0, (2.0 + level * 17.0).round())
@@ -416,7 +416,7 @@ fn model_chip(s: &State, k: &Kit) -> El {
 
 fn open_sheet(s: &mut State, sheet: Sheet) {
     if let Some(page) = s.chat_mut() {
-        page.sheet = Some(sheet);
+        page.overlay = Overlay::Sheet(sheet);
     }
 }
 
@@ -517,11 +517,11 @@ fn context(page: &ChatPage, k: &Kit) -> El {
 fn sheets(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) {
     let close = |s: &mut State| {
         if let Some(p) = s.chat_mut() {
-            p.sheet = None;
+            p.overlay = Overlay::Closed;
         }
     };
-    match page.sheet {
-        Some(Sheet::Model) => {
+    match page.overlay {
+        Overlay::Sheet(Sheet::Model) => {
             let title = s.config().harness.map_or("Model", harness_name).to_owned();
             Dialog::new("model-sheet", title)
                 .width(360.0)
@@ -530,7 +530,7 @@ fn sheets(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) {
                 .child(model_body(s, page, k))
                 .build(k, layer);
         }
-        Some(Sheet::Project) => {
+        Overlay::Sheet(Sheet::Project) => {
             Dialog::new("project-sheet", "Project")
                 .width(360.0)
                 .open(true)
@@ -538,7 +538,7 @@ fn sheets(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) {
                 .child(project_body(page, k))
                 .build(k, layer);
         }
-        None => {}
+        Overlay::Closed | Overlay::Menu => {}
     }
 }
 
@@ -709,7 +709,7 @@ fn project_body(page: &ChatPage, k: &Kit) -> El {
         move |s: &mut State| {
             s.pick_project(project.clone());
             if let Some(p) = s.chat_mut() {
-                p.sheet = None;
+                p.overlay = Overlay::Closed;
             }
         }
     };

@@ -11,7 +11,7 @@ use rune_kit::{
 use super::{code, copy, icons};
 
 use super::widgets::{dot, engine_note, hide_button, tones};
-use crate::companion::app::{ChatPage, Existing, QuestionForm, State, Target};
+use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
 use crate::companion::data::{Message, MessageStatus, Part, Role};
 use crate::companion::labels::{harness_name, short_model, tool_summary, tool_verb};
 use crate::companion::message::{ToolState, parse_tool, references, split_from, split_images};
@@ -137,16 +137,19 @@ fn more_menu(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let trigger = IconButton::new(&icons::MORE)
         .variant(IconButtonVariant::Ghost)
         .label("More")
-        .expanded(page.menu)
+        .expanded(page.overlay == Overlay::Menu)
         .on_press(|s: &mut State| {
             if let Some(p) = s.chat_mut() {
-                p.menu = !p.menu;
+                p.overlay = match p.overlay {
+                    Overlay::Menu => Overlay::Closed,
+                    Overlay::Closed | Overlay::Sheet(_) => Overlay::Menu,
+                };
             }
         })
         .build(k);
     let mut menu = Menu::new("chat-menu")
         .trigger(trigger)
-        .open(page.menu)
+        .open(page.overlay == Overlay::Menu)
         .on_close(close_menu);
     if page.is_working() {
         menu = menu.item(
@@ -181,8 +184,8 @@ fn more_menu(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 fn close_menu(s: &mut State) {
-    if let Some(p) = s.chat_mut() {
-        p.menu = false;
+    if let Some(p) = s.chat_mut().filter(|p| p.overlay == Overlay::Menu) {
+        p.overlay = Overlay::Closed;
     }
 }
 

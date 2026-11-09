@@ -19,8 +19,10 @@ use super::data::{Chat, Chats};
 use super::prefs::Prefs;
 
 pub use self::attach::Upload;
-pub use self::draft::{Catalog, Config, Draft, Pick};
-pub use self::page::{ChatPage, Existing, LEVELS_KEPT, QuestionForm, Sheet, SkillList, Target};
+pub use self::draft::{Catalog, Config, Draft, Load, Pick};
+pub use self::page::{
+    ChatPage, Existing, LEVELS_KEPT, Overlay, QuestionForm, Sheet, SkillList, Target, Voice,
+};
 
 /// How often the list refreshes while shown, as on the phone.
 const LIST_EVERY: Duration = Duration::from_secs(4);
@@ -218,7 +220,7 @@ impl State {
         if let Some(page) = self.chat_mut() {
             match &mut page.target {
                 Target::Existing(chat) => chat.poll.expire(),
-                Target::New(draft) if !draft.loaded => self.load_draft(),
+                Target::New(draft) if draft.load == Load::Failed => self.load_draft(),
                 Target::New(_) => {}
             }
         }

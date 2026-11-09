@@ -22,15 +22,12 @@ pub struct ChatPage {
     pub target: Target,
     pub composer: TextEdit,
     pub info: Option<ComposerInfo>,
-    pub menu: bool,
-    pub sheet: Option<Sheet>,
+    pub overlay: Overlay,
     pub skills: SkillMenu,
     /// Images in the composer, saved as they're attached.
     pub attached: Vec<Attached>,
     pub far_from_bottom: bool,
-    pub dictating: Option<Dictating>,
-    /// What dictation heard is being cleaned up.
-    pub polishing: bool,
+    pub voice: Voice,
     /// Edits aimed at a field that's gone (an answered question) land here.
     pub(super) scratch: TextEdit,
     /// The next attached image's id; ids are never reused, so a late upload
@@ -42,6 +39,26 @@ pub struct ChatPage {
 
 /// How many recent loudness readings the waveform shows.
 pub const LEVELS_KEPT: usize = 60;
+
+/// Where dictation into the composer is.
+pub enum Voice {
+    Idle,
+    /// Asking for the microphone and speech recognition.
+    Authorizing,
+    Listening(Dictating),
+    /// What dictation heard is being cleaned up.
+    Polishing,
+}
+
+impl Voice {
+    /// The dictation listening now, if one is.
+    pub fn listening(&self) -> Option<&Dictating> {
+        match self {
+            Self::Listening(d) => Some(d),
+            Self::Idle | Self::Authorizing | Self::Polishing => None,
+        }
+    }
+}
 
 /// Dictation into the composer.
 pub struct Dictating {
@@ -78,13 +95,22 @@ pub struct Existing {
     /// The transcript's images by path, decoded once.
     pub thumbs: HashMap<String, Option<Image>>,
     pub(super) limit: usize,
-    /// The transcript version shown; empty to load it whole.
-    pub(super) version: String,
+    /// The transcript version shown; `None` to load it whole.
+    pub(super) version: Option<String>,
     pub(super) poll: Poll,
     /// Counts chat refreshes, so an older one that answers late is dropped.
     pub(super) refresh: u64,
-    info_for: String,
+    info_for: Option<String>,
     pub(super) info_at: Option<Instant>,
+}
+
+/// What's open over the page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    Closed,
+    /// The chat's menu.
+    Menu,
+    Sheet(Sheet),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -137,13 +163,11 @@ impl ChatPage {
             target,
             composer,
             info: None,
-            menu: false,
-            sheet: None,
+            overlay: Overlay::Closed,
             skills: SkillMenu::default(),
             attached: Vec::new(),
             far_from_bottom: false,
-            dictating: None,
-            polishing: false,
+            voice: Voice::Idle,
             scratch: TextEdit::default(),
             next_attached: 0,
             next_dictation: 0,
@@ -231,17 +255,17 @@ impl Existing {
             question: None,
             thumbs: HashMap::new(),
             limit: PAGE,
-            version: String::new(),
+            version: None,
             poll: Poll::default(),
             refresh: 0,
-            info_for: String::new(),
+            info_for: None,
             info_at: None,
         }
     }
 
     /// Load the transcript whole at the next tick.
     pub(super) fn reload(&mut self) {
-        self.version.clear();
+        self.version = None;
         self.poll.expire();
     }
 
@@ -254,10 +278,10 @@ impl Existing {
     /// Whether the composer's info may have changed with the transcript at
     /// `version`, and is due; notes `version` if so.
     pub(super) fn info_due(&mut self, version: &str) -> bool {
-        let due =
-            version != self.info_for && self.info_at.is_none_or(|t| t.elapsed() >= INFO_EVERY);
+        let due = self.info_for.as_deref() != Some(version)
+            && self.info_at.is_none_or(|t| t.elapsed() >= INFO_EVERY);
         if due {
-            version.clone_into(&mut self.info_for);
+            self.info_for = Some(version.to_owned());
         }
         due
     }

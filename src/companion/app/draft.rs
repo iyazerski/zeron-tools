@@ -17,10 +17,19 @@ pub struct Draft {
     pub harness: Option<String>,
     pub model: Option<String>,
     pub reasoning: Option<String>,
-    pub loaded: bool,
+    pub load: Load,
     /// The first message is creating the chat.
     pub creating: bool,
     saved_project: ProjectPick,
+}
+
+/// Where loading a draft's projects and agents is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Load {
+    Loading,
+    Ready,
+    /// A load failed; it runs again when Zeron next opens.
+    Failed,
 }
 
 /// The harness, model and reasoning the composer shows.
@@ -69,7 +78,7 @@ impl Draft {
             harness,
             model,
             reasoning,
-            loaded: false,
+            load: Load::Loading,
             creating: false,
             saved_project: project,
         }
@@ -90,6 +99,9 @@ impl State {
     pub(super) fn load_draft(&mut self) {
         let Some(page) = self.chat_mut() else { return };
         let nav = page.nav;
+        if let Some(draft) = page.draft_mut() {
+            draft.load = Load::Loading;
+        }
         self.api.call(
             "list_projects",
             json!({}),
@@ -114,7 +126,10 @@ impl State {
                         }
                         s.load_info();
                     }
-                    Err(e) => s.fail("Couldn't load the projects", e),
+                    Err(e) => {
+                        draft.load = Load::Failed;
+                        s.fail("Couldn't load the projects", e);
+                    }
                 }
             },
         );
@@ -150,12 +165,17 @@ impl State {
                             draft.model = None;
                             draft.reasoning = None;
                         }
-                        draft.loaded = true;
+                        if draft.load == Load::Loading {
+                            draft.load = Load::Ready;
+                        }
                         if let Some(h) = draft.harness.clone() {
                             s.catalog(&h);
                         }
                     }
-                    Err(e) => s.fail("Couldn't load the agents", e),
+                    Err(e) => {
+                        draft.load = Load::Failed;
+                        s.fail("Couldn't load the agents", e);
+                    }
                 }
             },
         );
