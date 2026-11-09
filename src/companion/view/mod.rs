@@ -9,8 +9,8 @@ mod icons;
 mod list;
 mod widgets;
 
-use rune::{ClipboardContent, Cx, El, Key, KeyEvent, SystemMaterial, Tx, col};
-use rune_kit::{Kit, Toast, ToastRegion};
+use rune::{ClipboardContent, Color, Cx, El, Key, KeyEvent, SystemMaterial, Tx, col};
+use rune_kit::{Toast, ToastRegion};
 
 use super::app::{Overlay, Page, State, ToastKind};
 use super::data::{Message, Part};
@@ -44,21 +44,29 @@ pub fn view(s: &State, cx: &mut Cx<State>) -> El {
                 .build(k),
         );
     }
+    let (tint, edge) = if k.dark {
+        // macOS draws dark windows' rims itself; a light line on top reads as a seam.
+        (k.c.bg_base.alpha(0.72), Color::TRANSPARENT)
+    } else {
+        (Color::WHITE.alpha(0.8), k.c.border_base.alpha(0.6))
+    };
+    // Rune drops the fill of an element that hosts a native material, so the tint goes on a child.
     let body = col()
         .key("window")
         .w_full()
         .h_full()
         .radius(CORNER)
         .system_material(SystemMaterial::Popover)
-        .fill(surface(k))
-        .border(1.0, k.c.border_base)
-        .child(page);
+        .child(
+            col()
+                .w_full()
+                .h_full()
+                .radius(CORNER)
+                .fill(tint)
+                .border(1.0, edge)
+                .child(page),
+        );
     rune_kit::root(body, layer)
-}
-
-/// The window's tint over the blur: slightly see-through.
-fn surface(k: &Kit) -> rune::Color {
-    k.c.bg_base.alpha(0.92)
 }
 
 /// Copy the transcript's selection with its formatting; false when it has
