@@ -9,8 +9,9 @@
 //! replaces any other title.
 
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,9 @@ const MAX_PER_RUN: usize = 40;
 
 /// Chats per model call: small enough for short, reliable JSON answers.
 const BATCH: usize = 20;
+/// How long one model call may take: pi retries a flaky provider on its
+/// own, and a call that never ends would stall the whole upkeep.
+const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 /// Transcripts read at once; enough to overlap round trips, few enough not
 /// to crowd out the engine's other callers.
 const READS_AT_ONCE: usize = 4;
@@ -82,30 +86,43 @@ pub struct Title {
     pub title: String,
 }
 
+/// The model's titles, and the chats of batches that failed, which get
+/// another try on the next run.
+#[derive(Debug, Default)]
+struct Titled {
+    titles: Vec<Title>,
+    failed: HashSet<String>,
+}
+
 /// Ask the model for one title per excerpt, `BATCH` chats per call. A failed
 /// batch is reported and skipped; fails only if every batch did.
-async fn titles(pi: &Pi, chats: &[Excerpt]) -> Result<Vec<Title>> {
-    let mut titles = vec![];
+async fn titles(pi: &Pi, chats: &[Excerpt]) -> Result<Titled> {
+    let mut titled = Titled::default();
     let mut last_error = None;
     for batch in chats.chunks(BATCH) {
-        let answer = pi
-            .ask(
-                &pi.thinking,
-                INSTRUCTIONS,
-                &serde_json::to_string_pretty(batch)?,
-            )
-            .await;
+        let input = serde_json::to_string_pretty(batch)?;
+        let answer =
+            match tokio::time::timeout(ASK_TIMEOUT, pi.ask(&pi.thinking, INSTRUCTIONS, &input))
+                .await
+            {
+                Ok(answer) => answer,
+                Err(_) => Err(anyhow!(
+                    "the model didn't answer in {}s",
+                    ASK_TIMEOUT.as_secs()
+                )),
+            };
         match answer.and_then(|raw| parse(&raw, batch)) {
-            Ok(mut t) => titles.append(&mut t),
+            Ok(mut t) => titled.titles.append(&mut t),
             Err(e) => {
                 eprintln!("a batch of {} titles failed: {e:#}", batch.len());
+                titled.failed.extend(batch.iter().map(|c| c.id.clone()));
                 last_error = Some(e);
             }
         }
     }
-    match (titles.is_empty(), last_error) {
+    match (titled.titles.is_empty(), last_error) {
         (true, Some(e)) => Err(e),
-        _ => Ok(titles),
+        _ => Ok(titled),
     }
 }
 
@@ -207,7 +224,7 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     if excerpts.is_empty() {
         return Ok(0);
     }
-    let titles = titles(pi, &excerpts).await?;
+    let answers = titles(pi, &excerpts).await?;
     // The model took a while: skip chats someone retitled meanwhile.
     let current = zeron.chats().await?;
     let mut titled = 0;
@@ -215,8 +232,10 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
         let Some(chat) = candidates.iter().find(|c| c.id == excerpt.id) else {
             continue;
         };
-        let Some(title) = titles.iter().find(|t| t.id == excerpt.id) else {
-            tried.insert(chat.id.clone(), chat.last_activity());
+        let Some(title) = answers.titles.iter().find(|t| t.id == excerpt.id) else {
+            if !answers.failed.contains(&chat.id) {
+                tried.insert(chat.id.clone(), chat.last_activity());
+            }
             continue;
         };
         if current
@@ -368,5 +387,36 @@ mod tests {
     fn excerpts_are_char_safe() {
         let long = "ж".repeat(EXCERPT_CHARS + 5);
         assert_eq!(clip_excerpt(&long).chars().count(), EXCERPT_CHARS + 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_batch_is_kept_apart_from_chats_the_model_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        // A stand-in for pi that fails on the batch with `bad` chats and
+        // titles only `ok0` in the other.
+        let binary = dir.path().join("pi");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\ncase \"$(cat)\" in *bad*) exit 1;; esac\necho '{\"titles\":[{\"id\":\"ok0\",\"title\":\"Fine\"}]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let pi = Pi {
+            binary,
+            model: "m".into(),
+            thinking: "low".into(),
+        };
+        let chats: Vec<Excerpt> = (0..BATCH)
+            .map(|n| excerpt(&format!("ok{n}")))
+            .chain((0..3).map(|n| excerpt(&format!("bad{n}"))))
+            .collect();
+        let titled = titles(&pi, &chats).await.unwrap();
+        let ids: Vec<&str> = titled.titles.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["ok0"]);
+        assert_eq!(
+            titled.failed,
+            HashSet::from(["bad0".into(), "bad1".into(), "bad2".into()])
+        );
     }
 }
