@@ -126,10 +126,10 @@ static MARK_OPENCODE: Icon = icon(
     r#"<path fill="currentColor" fill-rule="evenodd" d="M27 0H3V30H27V0ZM21 6H9V24H21V6Z"/><path fill="currentColor" fill-opacity="0.45" d="M21 12H9V24H21V12Z"/>"#,
 );
 
-pub static PAPERCLIP: Icon = icon(
-    "paperclip",
+pub static MIC: Icon = icon(
+    "mic",
     24.0,
-    r#"<path d="M19.5 11.25 12.1 18.65a4.5 4.5 0 0 1-6.36-6.36l7.78-7.78a3 3 0 0 1 4.24 4.24l-7.78 7.78a1.5 1.5 0 0 1-2.12-2.12l7.07-7.07" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>"#,
+    r#"<rect x="8.75" y="2.75" width="6.5" height="11.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.75"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.75" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>"#,
 );
 pub static FOLDER: Icon = icon(
     "folder",

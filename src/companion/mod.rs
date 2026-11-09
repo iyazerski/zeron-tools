@@ -6,6 +6,7 @@
 mod api;
 mod app;
 mod data;
+mod dictation;
 mod labels;
 mod message;
 mod prefs;

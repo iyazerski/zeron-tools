@@ -1,11 +1,11 @@
-//! Images in the composer, pasted or picked. Each one is saved in Zeron's
+//! Images pasted in the composer. Each one is saved in Zeron's
 //! uploads as soon as it's attached, as Zeron's composer does, so sending
 //! only has to cite the saved paths.
 
 use std::path::{Path, PathBuf};
 
 use image::imageops::FilterType;
-use rune::{ClipboardContent, FileDialogOptions, Image, Tx};
+use rune::{ClipboardContent, Image, Tx};
 
 use super::page::Existing;
 use super::{ChatPage, State};
@@ -55,20 +55,6 @@ impl State {
             }
             _ => false,
         }
-    }
-
-    /// Pick an image file to attach.
-    pub fn pick_image(_: &mut State, tx: &mut Tx) {
-        let options = FileDialogOptions {
-            title: "Attach an image".into(),
-            ..Default::default()
-        }
-        .filter("Images", &EXTENSIONS);
-        tx.open_file(options, |s: &mut State, picked, _| match picked {
-            Ok(Some(path)) => s.attach(Payload::File(path)),
-            Ok(None) => {}
-            Err(e) => s.fail("Couldn't open the image", e.to_string()),
-        });
     }
 
     fn attach(&mut self, image: Payload) {

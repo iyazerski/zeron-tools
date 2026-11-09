@@ -58,6 +58,11 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/app.js"),
     ),
     (
+        "/hljs.js",
+        "text/javascript; charset=utf-8",
+        include_bytes!("../assets/hljs.js"),
+    ),
+    (
         "/sw.js",
         "text/javascript; charset=utf-8",
         include_bytes!("../assets/sw.js"),

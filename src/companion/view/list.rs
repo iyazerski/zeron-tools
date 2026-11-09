@@ -11,6 +11,9 @@ use crate::companion::app::State;
 use crate::companion::data::{Chat, Status};
 use crate::companion::labels::{ago, harness_name};
 
+/// The search field's height; its ends are fully round, as on the phone.
+const SEARCH_HEIGHT: f32 = 32.0;
+
 pub fn view(s: &State, k: &Kit) -> El {
     let header = row()
         .key("list-head")
@@ -39,6 +42,8 @@ pub fn view(s: &State, k: &Kit) -> El {
         )
         .child(hide_button(k));
     let search = TextInput::new(&s.list.query)
+        .width(None)
+        .height(SEARCH_HEIGHT)
         .placeholder("Search")
         .leading_icon(&icons::SEARCH)
         .clear_button()
@@ -56,6 +61,8 @@ pub fn view(s: &State, k: &Kit) -> El {
             true
         })
         .build(k)
+        .radius(SEARCH_HEIGHT / 2.0)
+        .pl(4.0)
         .key("search");
     let mut body = col().key("rows").w_full().px(8.0).pb(12.0).gap(1.0);
     if let Some(note) = engine_note(s, k) {
@@ -117,7 +124,6 @@ fn matches(c: &Chat, q: &str) -> bool {
         c.title(),
         project,
         c.last_message_preview.as_deref().unwrap_or_default(),
-        c.branch.as_deref().unwrap_or_default(),
     ];
     hay.iter().any(|h| h.to_lowercase().contains(q))
 }
@@ -250,31 +256,19 @@ fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
         .child(corner);
     let mut item = rune::col().w_full().gap(3.0);
     item = item.child(top);
-    if with_project || c.branch.is_some() {
-        let mut meta = row().w_full().gap(10.0).pl(22.0).center_y();
-        if with_project {
-            meta = meta.child(
-                row()
-                    .gap(5.0)
-                    .center_y()
-                    .child(tile(k, c.project.as_ref(), 12.0))
-                    .child(faint(
-                        k,
-                        c.project.as_ref().map_or("No project", |p| p.name.as_str()),
-                    )),
-            );
-        }
-        if let Some(branch) = &c.branch {
-            meta = meta.child(
-                row()
-                    .gap(4.0)
-                    .center_y()
-                    .min_w(0.0)
-                    .child(icon(&icons::BRANCH, 11.0).color(k.c.icon_faint))
-                    .child(faint(k, branch.as_str())),
-            );
-        }
-        item = item.child(meta);
+    if with_project {
+        item = item.child(
+            row()
+                .w_full()
+                .gap(5.0)
+                .pl(22.0)
+                .center_y()
+                .child(tile(k, c.project.as_ref(), 12.0))
+                .child(faint(
+                    k,
+                    c.project.as_ref().map_or("No project", |p| p.name.as_str()),
+                )),
+        );
     }
     let id = c.id.clone();
     k.interactive(

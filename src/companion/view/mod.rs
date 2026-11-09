@@ -2,6 +2,7 @@
 //! under the toast.
 
 mod chat;
+mod code;
 mod composer;
 mod icons;
 mod list;

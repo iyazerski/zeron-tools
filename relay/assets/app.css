@@ -19,7 +19,13 @@
   --code-bg: #0b0b0d;
   --code-border: #1f1f23;
   --chip: #1c1c20;
-  --inline-code: #1a1a1e;
+  --tk-keyword: #c678dd;
+  --tk-string: #98c379;
+  --tk-number: #d19a66;
+  --tk-comment: #7f848e;
+  --tk-type: #e5c07b;
+  --tk-function: #61afef;
+  --tk-property: #e06c75;
   --rail: rgb(255 255 255 / .12);
   --subline: rgb(169 169 174 / .5);
   --solid: #e8e8ea;
@@ -61,7 +67,13 @@
     --code-bg: #fafafb;
     --code-border: #e4e4e8;
     --chip: #e7e7eb;
-    --inline-code: #e9e9ed;
+    --tk-keyword: #a626a4;
+    --tk-string: #50a14f;
+    --tk-number: #986801;
+    --tk-comment: #a0a1a7;
+    --tk-type: #c18401;
+    --tk-function: #4078f2;
+    --tk-property: #e45649;
     --rail: rgb(0 0 0 / .162);
     --subline: rgb(98 98 106 / .5);
     --solid: #27272c;
@@ -216,8 +228,6 @@ a { color: inherit; text-decoration: none; }
 .row .corner { grid-row: 1; display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 500; color: var(--tone-time); }
 .row .meta { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--secondary); white-space: nowrap; overflow: hidden; min-width: 0; }
 .row .meta > span { display: inline-flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
-.row .meta .branch { color: var(--subline); font-size: 12.5px; gap: 4px; }
-.row .meta .branch .i { width: 12px; height: 12px; }
 
 /* The desktop's project monogram: tone @ 0.08 fill, letter @ 0.85. */
 .tile {
@@ -340,21 +350,30 @@ a { color: inherit; text-decoration: none; }
 .md strong { font-weight: 600; }
 .md hr { border: 0; border-top: 1px solid var(--hairline); margin: 1em 0; }
 .md blockquote { margin: 0 0 .7em; padding: 0 0 0 12px; border-left: 2px solid rgb(from var(--accent) r g b / .45); color: var(--secondary); }
-.md code { font: .86em var(--mono); background: var(--inline-code); padding: .1em .35em; border-radius: 5px; }
+.md code { font: .86em var(--mono); color: var(--tk-keyword); overflow-wrap: anywhere; }
 .code { margin: 0 0 .8em; border: 1px solid var(--code-border); background: var(--code-bg); border-radius: 12px; overflow: hidden; }
 .code .head { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 0 12px; font: 12px var(--mono); color: var(--tertiary); }
 .code .copy { display: flex; align-items: center; gap: 4px; font: 12px var(--sans); color: var(--tertiary); padding: 4px 6px; border-radius: 8px; }
 .code .copy .i { width: 14px; height: 14px; }
 .code pre { margin: 0; padding: 8px 12px 12px; overflow-x: auto; font: 13px/1.5 var(--mono); }
-.code pre code { background: none; padding: 0; font: inherit; }
+.code pre code { font: inherit; color: inherit; overflow-wrap: normal; }
 .table { overflow-x: auto; margin: 0 0 .8em; border: 1px solid var(--code-border); border-radius: 12px; }
 .table table { border-collapse: collapse; font-size: 14px; min-width: 100%; }
 .table th, .table td { padding: 7px 10px; border-bottom: 1px solid var(--code-border); text-align: left; vertical-align: top; }
 .table th { font-weight: 600; background: var(--code-bg); }
 .table tr:last-child td { border-bottom: 0; }
-.tk-k { color: var(--accent); } .tk-s { color: var(--success); } .tk-c { color: var(--tertiary); font-style: italic; }
-.tk-n { color: var(--warning); } .tk-f { color: #60a5fa; }
-@media (prefers-color-scheme: light) { .tk-f { color: #2563eb; } }
+/* highlight.js tokens in One Dark and One Light, as the companion colours them. */
+.hljs-comment, .hljs-quote { color: var(--tk-comment); font-style: italic; }
+.hljs-keyword, .hljs-doctag, .hljs-formula, .hljs-selector-tag { color: var(--tk-keyword); }
+.hljs-string, .hljs-regexp, .hljs-char.escape_, .hljs-meta .hljs-string { color: var(--tk-string); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-variable.constant_ { color: var(--tk-number); }
+.hljs-type, .hljs-built_in, .hljs-class .hljs-title, .hljs-title.class_, .hljs-selector-class, .hljs-selector-id { color: var(--tk-type); }
+.hljs-title, .hljs-title.function_, .hljs-section, .hljs-meta { color: var(--tk-function); }
+.hljs-attr, .hljs-attribute, .hljs-property, .hljs-name, .hljs-tag, .hljs-variable, .hljs-template-variable, .hljs-selector-attr, .hljs-selector-pseudo { color: var(--tk-property); }
+.hljs-addition { color: var(--success); }
+.hljs-deletion { color: var(--danger); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
 .caret { display: inline-block; width: 7px; height: 1.05em; vertical-align: -2px; margin-left: 2px; border-radius: 2px; background: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -456,6 +475,16 @@ a { color: inherit; text-decoration: none; }
 .send:disabled { opacity: .3; }
 .send .i { width: 19px; height: 19px; }
 .send.stop .i { width: 12px; height: 12px; }
+.mic {
+  width: 34px; height: 34px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; color: var(--secondary);
+  transition: background .15s, color .15s, transform .2s var(--ease);
+}
+.mic:active { transform: scale(.9); }
+.mic .i { width: 19px; height: 19px; }
+/* Listening: a soft pulse until it stops. */
+.mic.on { color: var(--danger); background: rgb(from var(--danger) r g b / .14); animation: listen 1.4s ease-in-out infinite; }
+@keyframes listen { 50% { background: rgb(from var(--danger) r g b / .26); } }
 .steer { text-align: center; font-size: 12.5px; color: var(--tertiary); }
 /* The `$` menu: a glass card over the composer, one line per skill. */
 .skill-menu {

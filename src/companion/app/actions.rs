@@ -1,6 +1,6 @@
 //! What a chat's page does, with the phone app's tool calls: refresh the
-//! transcript, send, answer the agent, stop, archive, and load what the
-//! composer shows.
+//! transcript, send, answer the agent, stop, archive, dictate, and load what
+//! the composer shows.
 
 use rune::{TextEdit, Tx};
 use serde_json::{Value, json};
@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use super::page::{SkillList, SkillMenu};
 use super::{QuestionForm, State, Target, attach};
 use crate::companion::data::{ChatView, ComposerInfo, Role, Skills};
+use crate::companion::dictation;
 use crate::companion::message::{split_from, with_images, with_skill_refs};
 
 /// A call on the open chat that refreshes it after.
@@ -231,6 +232,15 @@ impl State {
 
     pub fn archive(&mut self) {
         self.chat_action(ChatAction::Archive);
+    }
+
+    /// Dictate into the composer: macOS listens and types what it hears.
+    pub fn dictate(&mut self) {
+        let Some(page) = self.chat_mut() else { return };
+        page.composer.focused = true;
+        if !dictation::start() {
+            self.fail("Couldn't start dictation", "macOS didn't take the request");
+        }
     }
 
     /// Answer the agent's questions with the picked options and typed text.

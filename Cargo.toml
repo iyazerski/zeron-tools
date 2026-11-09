@@ -12,6 +12,11 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
 libc = "0.2"
+# Starts macOS dictation from the composer's button.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder"] }
+# Finds inline code in the transcript's Markdown, to colour it.
+pulldown-cmark = { version = "0.13", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "net", "process", "sync", "time"] }

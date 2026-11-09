@@ -2,12 +2,14 @@
 //! tool groups and errors, the agent's questions, and the composer under them.
 
 use rune::{El, ScrollSpec, Span, TextStyle, Tx, col, icon, rich, row, text};
+use rune_kit::markdown::MarkdownStyle;
 use rune_kit::{
     Button, ButtonVariant, IconButton, IconButtonVariant, Kit, Markdown, Menu, MenuItem, Spinner,
     TextInput,
 };
 
-use super::icons;
+use super::{code, icons};
+
 use super::widgets::{dot, engine_note, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, QuestionForm, State, Target};
 use crate::companion::data::{Message, MessageStatus, Part, Role};
@@ -224,6 +226,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
         ];
     };
     let working = page.chat.as_ref().is_some_and(|c| c.is_working());
+    let style = code::markdown_style(k);
     let mut out = Vec::new();
     if read.older_remaining > 0 {
         out.push(
@@ -244,7 +247,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
             Role::Assistant => {
                 let streaming = m.status == Some(MessageStatus::Streaming)
                     || (Some(m.id.as_str()) == last && working);
-                out.push(assistant(page, k, m, streaming).key(format!("m-{}", m.id)));
+                out.push(assistant(page, k, &style, m, streaming).key(format!("m-{}", m.id)));
             }
             Role::System => {}
         }
@@ -337,11 +340,13 @@ fn user_bubble(k: &Kit, page: &Existing, text_in: &str, pending: bool) -> El {
 }
 
 /// Prose, tool groups and errors in transcript order, as on the desktop.
-fn assistant(page: &Existing, k: &Kit, m: &Message, streaming: bool) -> El {
+fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, streaming: bool) -> El {
     let mut out = col().w_full().gap(10.0);
     for (i, part) in m.parts.iter().enumerate() {
         out = out.child(match part {
             Part::Text { text } => Markdown::new(text.clone())
+                .style(style.clone())
+                .highlights(code::inline_code_marks(k, text))
                 .streaming(streaming && i + 1 == m.parts.len())
                 .selectable(true)
                 .build(k)

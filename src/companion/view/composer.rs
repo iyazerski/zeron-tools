@@ -1,6 +1,6 @@
 //! The composer under a chat: the text and its images, its `$` skill menu,
 //! the model chip with its picker, a new chat's project, the checkout and
-//! branch, the context ring, and Send.
+//! branch, the context ring, dictation, and Send.
 
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
 use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, Spinner};
@@ -49,19 +49,22 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .label(if stop { "Stop" } else { "Send" })
         .disabled(creating || !(stop || typed && ready))
         .on_press_tx(move |s: &mut State, tx: &mut Tx| if stop { s.stop() } else { s.send(tx) })
-        .build(k);
-    let attach = IconButton::new(&icons::PAPERCLIP)
+        .build(k)
+        // Round: a regular icon button is 24 points square.
+        .radius(12.0);
+    let dictate = IconButton::new(&icons::MIC)
         .variant(IconButtonVariant::GhostMuted)
-        .label("Attach an image")
-        .on_press_tx(State::pick_image)
-        .build(k);
+        .label("Dictate")
+        .on_press(State::dictate)
+        .build(k)
+        .preserve_focus_on_press(true);
     let tools = row()
         .w_full()
         .gap(8.0)
         .center_y()
-        .child(attach)
         .child(rune::spacer())
         .child(model_chip(s, k))
+        .child(dictate)
         .child(send);
     let mut field_box = col()
         .key("composer-box")

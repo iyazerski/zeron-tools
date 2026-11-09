@@ -16,7 +16,6 @@ pub struct Chat {
     pub model: Option<String>,
     pub reasoning: Option<String>,
     pub project: Option<Project>,
-    pub branch: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]

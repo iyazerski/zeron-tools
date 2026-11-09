@@ -13,6 +13,7 @@ const ICONS = {
   "more": ["0 0 24 24", "fill=\"none\"", "<g fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"3.75\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"20.25\" cy=\"12\" r=\"1\"/></g>"],
   "send": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M12 20V4m0 0l6 6m-6-6l-6 6\"/>"],
   "stop": ["0 0 10 10", "", "<rect x=\"1\" y=\"1\" width=\"8\" height=\"8\" rx=\"2\" fill=\"currentColor\"/>"],
+  "mic": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\"", "<rect x=\"8.75\" y=\"2.75\" width=\"6.5\" height=\"11.5\" rx=\"3.25\"/><path d=\"M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5v3.75\"/>"],
   "search": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"11.5\" cy=\"11.5\" r=\"9.5\"/><path stroke-linecap=\"round\" d=\"M18.5 18.5L22 22\"/></g>"],
   "bell": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M18.75 9.71v-.705C18.75 5.136 15.726 2 12 2S5.25 5.136 5.25 9.005v.705a4.4 4.4 0 0 1-.692 2.375L3.45 13.81c-1.011 1.574-.239 3.716 1.52 4.214a25.8 25.8 0 0 0 14.06 0c1.759-.498 2.531-2.64 1.52-4.214l-1.108-1.725a4.4 4.4 0 0 1-.692-2.375Z\"/><path stroke-linecap=\"round\" d=\"M7.5 19c.655 1.748 2.422 3 4.5 3s3.845-1.252 4.5-3\"/></g>"],
   "copy": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M6.6 11.4c0-2.263 0-3.394.703-4.097C8.006 6.6 9.137 6.6 11.4 6.6h4.8c2.263 0 3.394 0 4.097.703c.703.703.703 1.834.703 4.097v4.8c0 2.263 0 3.394-.703 4.097c-.703.703-1.834.703-4.097.703h-4.8c-2.263 0-3.394 0-4.097-.703C6.6 19.594 6.6 18.463 6.6 16.2z\"/><path d=\"M17.396 6.6c-.005-1.774-.05-2.707-.657-3.314C16.036 2.583 14.905 2.583 12.642 2.583h-3.6c-2.263 0-3.394 0-4.097.703c-.703.703-.703 1.834-.703 4.097v3.6c0 2.263 0 3.394.703 4.097c.433.433.996.587 1.655.635\"/></g>"],
@@ -382,37 +383,11 @@ async function signInWithPasskey() {
 
 // ---- markdown ------------------------------------------------------------------
 
-const KEYWORDS = new Set(("as async await break case catch class const continue crate def default defer del do elif else enum " +
-  "export extends false fn for from func function go if impl import in interface is let loop match mod module mut new nil None " +
-  "not null of or package pass pub raise return self Self static struct super switch this throw trait True False true try type " +
-  "typeof undefined use var void where while with yield echo fi then done esac local select insert update delete into values " +
-  "create table join on group by order limit and SELECT FROM WHERE INSERT UPDATE DELETE INTO VALUES CREATE TABLE JOIN ON GROUP BY ORDER LIMIT AND OR NOT NULL AS").split(" "));
-const HASH_COMMENTS = /^(py|python|sh|bash|zsh|shell|console|yaml|yml|toml|rb|ruby|r|make|makefile|dockerfile|conf|ini|nix|elixir|ex)$/i;
-
-/** Light syntax highlighting: comments, strings, numbers, keywords, calls. */
+/** Syntax highlighting by highlight.js (`hljs.js`); languages it doesn't know stay plain. */
 function highlight(code, lang) {
   lang = (lang || "").toLowerCase();
-  if (!lang || lang === "text" || lang === "txt" || lang === "plain") return esc(code);
-  if (lang === "diff" || lang === "patch") {
-    return code.split("\n").map(line => {
-      const cls = line.startsWith("+") ? "tk-s" : line.startsWith("-") ? "tk-k" : line.startsWith("@@") ? "tk-f" : "";
-      return cls ? `<span class="${cls}">${esc(line)}</span>` : esc(line);
-    }).join("\n");
-  }
-  const comment = HASH_COMMENTS.test(lang) ? "#[^\\n]*" : lang === "sql" ? "--[^\\n]*" : "\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/";
-  const re = new RegExp(`(${comment})|("(?:\\\\.|[^"\\\\\\n])*"|'(?:\\\\.|[^'\\\\\\n])*'|\`(?:\\\\.|[^\`\\\\])*\`)|\\b(0x[\\da-fA-F]+|\\d[\\d_]*(?:\\.\\d+)?)\\b|\\b([A-Za-z_]\\w*)(?=\\s*\\()|\\b([A-Za-z_]\\w*)\\b`, "g");
-  let out = "", last = 0;
-  for (const m of code.matchAll(re)) {
-    out += esc(code.slice(last, m.index));
-    const [all, com, str, num, fn, word] = m;
-    if (com) out += `<span class="tk-c">${esc(com)}</span>`;
-    else if (str) out += `<span class="tk-s">${esc(str)}</span>`;
-    else if (num) out += `<span class="tk-n">${esc(num)}</span>`;
-    else if (fn) out += `<span class="${KEYWORDS.has(fn) ? "tk-k" : "tk-f"}">${esc(fn)}</span>`;
-    else out += KEYWORDS.has(word) ? `<span class="tk-k">${esc(word)}</span>` : esc(word);
-    last = m.index + all.length;
-  }
-  return out + esc(code.slice(last));
+  if (!lang || !window.hljs?.getLanguage(lang)) return esc(code);
+  return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
 }
 
 function inline(text) {
@@ -731,7 +706,7 @@ function listView() {
   // results also name the project.
   function row(c, withProject) {
     const s = statusOf(c), unseen = s === "idle" && seen.unseen(c);
-    const sig = JSON.stringify([c.title, s, isStale(c), unseen, ago(c.lastMessageAt || c.createdAt), c.harness, c.project?.id, c.branch, withProject]);
+    const sig = JSON.stringify([c.title, s, isStale(c), unseen, ago(c.lastMessageAt || c.createdAt), c.harness, c.project?.id, withProject]);
     const old = known.get(c.machine + c.id);
     if (old?.sig === sig) return old.el;
     const corner = s === "working" ? [glyph("spin"), h("span", { style: { color: "var(--tone-working)" } }, isStale(c) ? "Offline?" : "Working")]
@@ -743,9 +718,7 @@ function listView() {
       h("span", { class: "mark" }, mark(c.harness)),
       h("span", { class: "title" }, c.title || "Untitled chat"),
       h("span", { class: "corner" }, corner),
-      (withProject || c.branch) && h("span", { class: "meta" },
-        withProject && h("span", {}, tile(c.project), c.project?.name || "No project"),
-        c.branch && h("span", { class: "branch" }, icon("branch"), c.branch)));
+      withProject && h("span", { class: "meta" }, h("span", {}, tile(c.project), c.project?.name || "No project")));
     el.addEventListener("click", () => haptic(5));
     known.set(c.machine + c.id, { sig, el });
     return el;
@@ -800,7 +773,7 @@ function listView() {
     if (note) nodes.push(note);
     const q = listState.query.trim().toLowerCase();
     if (q) {
-      const hits = chats.filter(c => `${c.title} ${c.project?.name || ""} ${c.lastMessagePreview || ""} ${c.branch || ""}`.toLowerCase().includes(q));
+      const hits = chats.filter(c => `${c.title} ${c.project?.name || ""} ${c.lastMessagePreview || ""}`.toLowerCase().includes(q));
       nodes.push(...hits.map(c => row(c, true)));
       if (!hits.length) nodes.push(h("div", { class: "empty" }, "No chats match your search"));
     } else {
@@ -940,6 +913,9 @@ function chatView(machine, id, fromList) {
   const scroll = h("div", { class: "scroll" }, msgs);
   const textarea = h("textarea", { rows: 1, placeholder: isDraft ? "Describe the task" : "Message" });
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
+  // The browser's speech recognition, where it has one (Safari, Chrome).
+  const Speech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const micBtn = Speech && h("button", { class: "mic", "aria-label": "Dictate", onclick: () => dictate() }, icon("mic"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
   // Inside the box: the model chip with the project and branch under it, then
@@ -951,7 +927,7 @@ function chatView(machine, id, fromList) {
   const skillMenu = h("div", { class: "skill-menu glass hide", role: "listbox" });
   const dock = h("div", { class: "dock" }, jump, skillMenu,
     h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" },
-      h("div", { class: "composer-left" }, modelChip, meta), ctxSlot, sendBtn)), hint);
+      h("div", { class: "composer-left" }, modelChip, meta), ctxSlot, micBtn, sendBtn)), hint);
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
@@ -1079,10 +1055,42 @@ function chatView(machine, id, fromList) {
     const refs = new Map((skills || []).map(s => [s.name, s.ref]));
     return refs.size ? text.replace(/(^|\s)\$([\w-]+(?::[\w-]+)*)/g, (all, lead, name) => (refs.has(name) ? lead + refs.get(name) : all)) : text;
   }
+  /** Start or stop dictation: what's heard goes after the typed text, live. */
+  let dictation = null;
+  function dictate() {
+    if (dictation) { dictation.stop(); return; }
+    haptic(5);
+    const rec = new Speech();
+    rec.lang = navigator.language;
+    rec.continuous = true;
+    rec.interimResults = true;
+    const typed = textarea.value;
+    const lead = typed && !/\s$/.test(typed) ? " " : "";
+    rec.onresult = e => {
+      // Every phrase so far, final or not; browsers differ on the spaces between them.
+      const heard = Array.from(e.results, r => r[0].transcript.trim()).filter(Boolean).join(" ");
+      textarea.value = typed + (heard ? lead + heard : "");
+      textarea.dispatchEvent(new Event("input"));
+    };
+    rec.onerror = e => {
+      if (e.error === "aborted" || e.error === "no-speech") return;
+      toast({ title: "Dictation stopped", body: e.error === "not-allowed" ? "Microphone access is off for this app." : e.message || e.error, kind: "error" });
+    };
+    rec.onend = () => {
+      if (dictation === rec) dictation = null;
+      micBtn.classList.remove("on");
+    };
+    try { rec.start(); } catch (e) { toast({ title: "Couldn't start dictation", body: e.message, kind: "error" }); return; }
+    dictation = rec;
+    micBtn.classList.add("on");
+  }
+  const stopDictation = () => dictation?.abort();
+
   textarea.value = drafts[draftKey] || "";
   sendBtn.addEventListener("click", () => (sendBtn.classList.contains("stop") ? stop() : send()));
 
   async function send() {
+    stopDictation();
     if (isDraft) return create();
     const typed = textarea.value.trim();
     if (!typed) return;
@@ -1529,7 +1537,7 @@ function chatView(machine, id, fromList) {
       updateComposer();
       if (isDraft && machine) textarea.focus();
     },
-    destroy() { poll?.stop(); offline.stop(); dockSize.disconnect(); clearInterval(clock); },
+    destroy() { poll?.stop(); offline.stop(); dockSize.disconnect(); clearInterval(clock); stopDictation(); },
   };
 }
 
