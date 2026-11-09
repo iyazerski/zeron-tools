@@ -918,16 +918,17 @@ function chatView(machine, id, fromList) {
   const micBtn = Speech && h("button", { class: "mic", "aria-label": "Dictate", onclick: () => dictate() }, icon("mic"));
   const jump = h("button", { class: "jump glass", "aria-label": "Scroll to bottom", onclick: () => toBottom(true) }, icon("back"));
   const hint = h("div", { class: "steer hide" }, "Your message joins the current turn.");
-  // Inside the box: the model chip with the project and branch under it, then
-  // the context ring beside Send.
+  // As on the desktop: the box holds the text, the model chip, dictation and Send;
+  // under it, the project and branch, and the context ring.
   const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
-  const meta = h("div", { class: "composer-meta hide" });
+  const meta = h("div", { class: "composer-meta" });
   const ctxSlot = h("div", { class: "ctx-slot" });
+  const footer = h("div", { class: "composer-foot glass hide" }, meta, ctxSlot);
   // The desktop's `$` menu: the agent's skills, filtered by what follows the `$`.
   const skillMenu = h("div", { class: "skill-menu glass hide", role: "listbox" });
   const dock = h("div", { class: "dock" }, jump, skillMenu,
-    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" },
-      h("div", { class: "composer-left" }, modelChip, meta), ctxSlot, micBtn, sendBtn)), hint);
+    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, micBtn, sendBtn)),
+    hint, footer);
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);
@@ -1313,8 +1314,8 @@ function chatView(machine, id, fromList) {
       tile(project || null), h("span", { class: "txt" }, project?.name || "No project"));
     if (!info) {
       meta.replaceChildren(projectChip || "");
-      meta.classList.toggle("hide", !projectChip);
       ctxSlot.replaceChildren();
+      footer.classList.toggle("hide", !projectChip);
       return;
     }
     const usage = info.contextUsage;
@@ -1327,8 +1328,8 @@ function chatView(machine, id, fromList) {
       "aria-label": "Context window", onclick: () => toast({ title: "Context window", body: contextDetails(usage), kind: "info", timeout: 4000 }) },
       ring(fraction || 0, tone), fraction == null ? "—" : `${Math.round(fraction * 100)}%`);
     meta.replaceChildren(projectChip || "", left || "");
-    meta.classList.toggle("hide", !projectChip && !left);
     ctxSlot.replaceChildren(right || "");
+    footer.classList.toggle("hide", !projectChip && !left && !right);
   }
 
   /** Pick the model and reasoning for the next turns, like the desktop's picker. */

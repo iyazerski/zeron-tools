@@ -10,6 +10,7 @@ use super::Poll;
 use super::attach::Attached;
 use super::draft::Draft;
 use crate::companion::data::{Chat, ComposerInfo, Part, PendingInput, Read, Role, Skill};
+use crate::companion::dictation::Listening;
 
 /// Messages per page, and how many more "Load earlier messages" adds.
 const PAGE: usize = 40;
@@ -27,11 +28,22 @@ pub struct ChatPage {
     /// Images in the composer, saved as they're attached.
     pub attached: Vec<Attached>,
     pub far_from_bottom: bool,
+    pub dictating: Option<Dictating>,
     /// Edits aimed at a field that's gone (an answered question) land here.
     pub(super) scratch: TextEdit,
     /// The next attached image's id; ids are never reused, so a late upload
     /// can't land on a newer image.
     next_attached: u64,
+    /// The next dictation's id, so a session that ended can't write.
+    pub(super) next_dictation: u64,
+}
+
+/// Dictation into the composer.
+pub struct Dictating {
+    pub id: u64,
+    pub session: Listening,
+    /// The composer's text when it started; what's heard follows it.
+    pub base: String,
 }
 
 /// What the page shows above the composer.
@@ -122,8 +134,10 @@ impl ChatPage {
             skills: SkillMenu::default(),
             attached: Vec::new(),
             far_from_bottom: false,
+            dictating: None,
             scratch: TextEdit::default(),
             next_attached: 0,
+            next_dictation: 0,
         }
     }
 

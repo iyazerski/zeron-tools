@@ -5,10 +5,10 @@
 use rune::{TextEdit, Tx};
 use serde_json::{Value, json};
 
-use super::page::{SkillList, SkillMenu};
+use super::page::{Dictating, SkillList, SkillMenu};
 use super::{QuestionForm, State, Target, attach};
 use crate::companion::data::{ChatView, ComposerInfo, Role, Skills};
-use crate::companion::dictation;
+use crate::companion::dictation::{self, Heard, Listening};
 use crate::companion::message::{split_from, with_images, with_skill_refs};
 
 /// A call on the open chat that refreshes it after.
@@ -154,6 +154,7 @@ impl State {
         };
         let id = chat.id.clone();
         chat.pending.push(text.clone());
+        page.dictating = None;
         page.composer.clear();
         page.attached.clear();
         self.load_thumbs();
@@ -234,12 +235,72 @@ impl State {
         self.chat_action(ChatAction::Archive);
     }
 
-    /// Dictate into the composer: macOS listens and types what it hears.
+    /// Start dictating into the composer, or stop.
     pub fn dictate(&mut self) {
         let Some(page) = self.chat_mut() else { return };
         page.composer.focused = true;
-        if !dictation::start() {
-            self.fail("Couldn't start dictation", "macOS didn't take the request");
+        if page.dictating.is_some() {
+            return self.stop_dictating();
+        }
+        let nav = page.nav;
+        let app = self.api.app().clone();
+        dictation::authorize(move |allowed| {
+            app.update(move |s, _| match allowed {
+                Ok(()) => s.listen(nav),
+                Err(why) => s.fail("Can't dictate", why),
+            });
+        });
+    }
+
+    /// Stop listening; the words heard so far stay in the composer.
+    pub fn stop_dictating(&mut self) {
+        if let Some(d) = self.chat_mut().and_then(|p| p.dictating.as_ref()) {
+            d.session.stop();
+        }
+    }
+
+    fn listen(&mut self, nav: u64) {
+        let app = self.api.app().clone();
+        let Some(page) = self.page_at(nav) else {
+            return;
+        };
+        if page.dictating.is_some() {
+            return;
+        }
+        let id = page.next_dictation;
+        page.next_dictation += 1;
+        let heard = move |heard: Heard| app.update(move |s, _| s.heard(nav, id, heard));
+        match Listening::start(heard) {
+            Ok(session) => {
+                page.dictating = Some(Dictating {
+                    id,
+                    session,
+                    base: page.composer.text.clone(),
+                });
+            }
+            Err(why) => self.fail("Couldn't start dictation", why),
+        }
+    }
+
+    /// Put what dictation `id` heard after the text it started from.
+    fn heard(&mut self, nav: u64, id: u64, heard: Heard) {
+        let Some(page) = self.page_at(nav) else {
+            return;
+        };
+        let Some(d) = page.dictating.as_ref().filter(|d| d.id == id) else {
+            return;
+        };
+        match heard {
+            Heard::Words(words) => {
+                page.composer = TextEdit::new(dictation::join(&d.base, &words));
+                page.composer.set_caret(page.composer.text.len());
+                page.composer.focused = true;
+            }
+            Heard::Done => page.dictating = None,
+            Heard::Failed(why) => {
+                page.dictating = None;
+                self.fail("Dictation stopped", why);
+            }
         }
     }
 

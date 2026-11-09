@@ -37,7 +37,7 @@ zeron-tools install --shortcut cmd+shift+k       # another shortcut for the chat
 
 ## Chats window
 
-Ctrl+Option+Space (or `--shortcut`) shows shows a floating, slightly transparent window with the phone app's chat list. Pick a chat to follow it, send messages, paste images, dictate with macOS dictation, answer the agent's questions, switch the model, or stop and archive it. ⌘N starts a new chat, ⌘[ goes back, and Esc or ⌘W hides the window. Drag it by its header; it reopens where you left it. It goes through the same tools as the phone, so it always shows what Zeron shows. Quitting it with ⌘Q stops it until the next login or `install`.
+Ctrl+Option+Space (or `--shortcut`) shows a floating, slightly transparent window with the phone app's chat list. Pick a chat to follow it, send messages, paste images, dictate with the mic button, copy replies with their formatting, answer the agent's questions, switch the model, or stop and archive it. ⌘N starts a new chat, ⌘[ goes back, and Esc or ⌘W hides the window. Drag it by its header; it reopens where you left it. It goes through the same tools as the phone, so it always shows what Zeron shows. Quitting it with ⌘Q stops it until the next login or `install`. The first dictation asks for speech recognition and microphone access; macOS asks again after each update, since the binary isn't signed with a developer ID.
 
 ## Phone
 

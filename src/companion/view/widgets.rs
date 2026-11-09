@@ -27,7 +27,7 @@ pub fn hide_button(k: &Kit) -> El {
         .variant(IconButtonVariant::GhostMuted)
         .label("Hide")
         .help("Hide (Esc)")
-        .on_press(|s: &mut State| s.api.app().hide())
+        .on_press(State::hide)
         .build(k)
 }
 

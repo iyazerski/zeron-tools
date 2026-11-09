@@ -423,8 +423,8 @@ a { color: inherit; text-decoration: none; }
   pointer-events: none;
 }
 .dock > * { pointer-events: auto; }
-/* A card, like the iOS app's active composer: the text, then a row with the
-   model chip (the project and branch under it), the context ring, and Send. */
+/* A card, as on the desktop: the text, then a row with the model chip,
+   dictation and Send. The project, checkout, branch and context sit under it. */
 .composer {
   display: flex; flex-direction: column; gap: 2px;
   padding: 9px 7px 7px 16px; border-radius: 24px;
@@ -434,31 +434,31 @@ a { color: inherit; text-decoration: none; }
   width: 100%; border: 0; outline: 0; background: none; resize: none;
   font-size: 16px; line-height: 22px; padding: 4px 9px 4px 2px; max-height: 40vh;
 }
-.composer-tools { display: flex; align-items: center; gap: 8px; }
-.composer-left { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; }
+.composer-tools { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .model-chip {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;
-  height: 32px; padding: 0 10px; margin-left: -8px; border-radius: 16px;
+  height: 32px; padding: 0 10px; border-radius: 16px;
   font-size: 14px; color: var(--text); transition: background .15s;
 }
 .model-chip:active { background: var(--control); }
 .model-chip .i { width: 15px; height: 15px; flex: none; }
 .model-chip .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .model-chip .lvl { color: var(--tertiary); white-space: nowrap; }
-/* With a line under it, the chip shrinks so the row barely grows. */
-.composer-left:has(.composer-meta:not(.hide)) .model-chip { height: 26px; }
-.composer-meta {
-  display: flex; align-self: stretch; align-items: center; gap: 12px; min-height: 20px;
-  padding: 0 0 2px 2px; font-size: 12.5px; color: var(--tertiary);
+/* Glass like the box, so the transcript scrolling under it can't show through. */
+.composer-foot {
+  display: flex; align-items: center; gap: 12px; min-height: 28px;
+  max-width: 760px; width: 100%; margin: 0 auto; padding: 0 10px 0 14px; border-radius: 14px;
+  font-size: 12.5px; color: var(--tertiary);
 }
+.composer-meta { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .composer-meta > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; min-width: 0; }
-.composer-meta .branch-ref .txt { overflow: hidden; text-overflow: ellipsis; }
+.composer-meta .txt { overflow: hidden; text-overflow: ellipsis; }
 .composer-meta .i { width: 13px; height: 13px; flex: none; }
 .project-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 60%; margin-left: -4px; padding: 1px 4px; border-radius: 8px; color: var(--secondary); }
 .project-chip:active { background: var(--control); }
 .project-chip .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-slot { flex: none; }
-.ctx { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 4px; font-size: 12.5px; }
+.ctx { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 4px; font-size: 12.5px; }
 .ring { width: 16px; height: 16px; flex: none; }
 .group-label { font-size: 13px; color: var(--tertiary); margin: 0 6px 8px; }
 .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }

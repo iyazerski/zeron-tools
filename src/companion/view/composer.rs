@@ -52,9 +52,18 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .build(k)
         // Round: a regular icon button is 24 points square.
         .radius(12.0);
+    let listening = page.dictating.is_some();
     let dictate = IconButton::new(&icons::MIC)
-        .variant(IconButtonVariant::GhostMuted)
-        .label("Dictate")
+        .variant(if listening {
+            IconButtonVariant::Contrast
+        } else {
+            IconButtonVariant::GhostMuted
+        })
+        .label(if listening {
+            "Stop dictating"
+        } else {
+            "Dictate"
+        })
         .on_press(State::dictate)
         .build(k)
         .preserve_focus_on_press(true);

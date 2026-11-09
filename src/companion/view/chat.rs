@@ -8,7 +8,7 @@ use rune_kit::{
     TextInput,
 };
 
-use super::{code, icons};
+use super::{code, copy, icons};
 
 use super::widgets::{dot, engine_note, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, QuestionForm, State, Target};
@@ -347,6 +347,7 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
             Part::Text { text } => Markdown::new(text.clone())
                 .style(style.clone())
                 .highlights(code::inline_code_marks(k, text))
+                .block_keys(copy::block_keys(text))
                 .streaming(streaming && i + 1 == m.parts.len())
                 .selectable(true)
                 .build(k)

@@ -187,12 +187,10 @@ impl State {
 
     /// Show or hide the window; it opens where it was left.
     pub fn toggle_window(&mut self) {
-        let app = self.api.app();
-        if app.is_visible() {
-            app.hide();
-            return;
+        if self.api.app().is_visible() {
+            return self.hide();
         }
-        app.open();
+        self.api.app().open();
         self.list.poll.expire();
         if let Some(page) = self.chat_mut() {
             page.composer.focused = true;
@@ -201,6 +199,12 @@ impl State {
             }
         }
         self.load_due();
+    }
+
+    /// Hide the window, and stop listening for dictation.
+    pub fn hide(&mut self) {
+        self.stop_dictating();
+        self.api.app().hide();
     }
 
     pub fn engine_changed(&mut self, engine: Engine) {
