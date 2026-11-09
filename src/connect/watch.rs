@@ -88,11 +88,8 @@ async fn watch_once(
             .map(|s| (format!("{}/{}", s.chat_id, s.device_id), s))
             .collect();
         if let Some(previous) = &known {
-            let changes = changes(previous, &current);
-            if !changes.is_empty() && notify.allows_now().await {
-                for (chat, kind) in changes {
-                    spawn_notice(zeron.clone(), notices.clone(), chat, kind);
-                }
+            for (chat, kind) in changes(previous, &current) {
+                spawn_notice(zeron.clone(), notices.clone(), notify, chat, kind);
             }
         }
         known = Some(current);
@@ -115,12 +112,22 @@ fn changes(
         .collect()
 }
 
-/// Build and queue the notice for `chat` in its own task.
-fn spawn_notice(zeron: Arc<Zeron>, notices: mpsc::Sender<Notice>, chat: String, kind: NoticeKind) {
-    // Read the chat off the stream's path: the engine's status watch keeps
-    // only its latest value, so a slow read there would make it skip
-    // transitions.
+/// Build and queue the notice for `chat` in its own task, if `notify`
+/// allows one now.
+fn spawn_notice(
+    zeron: Arc<Zeron>,
+    notices: mpsc::Sender<Notice>,
+    notify: NotifyWhen,
+    chat: String,
+    kind: NoticeKind,
+) {
+    // Check idleness and read the chat off the stream's path: the engine's
+    // status watch keeps only its latest value, so a slow step there would
+    // make it skip transitions.
     tokio::spawn(async move {
+        if !notify.allows_now().await {
+            return;
+        }
         match tokio::time::timeout(NOTICE_TIMEOUT, notice(&zeron, &chat, kind)).await {
             // A full queue means the relay has been away for long; drop it.
             Ok(Ok(notice)) => _ = notices.try_send(notice),
