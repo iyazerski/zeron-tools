@@ -923,12 +923,12 @@ function chatView(machine, id, fromList) {
   const modelChip = h("button", { class: "model-chip", "aria-label": "Model", onclick: () => modelSheet() });
   const meta = h("div", { class: "composer-meta" });
   const ctxSlot = h("div", { class: "ctx-slot" });
-  const footer = h("div", { class: "composer-foot glass hide" }, meta, ctxSlot);
+  const footer = h("div", { class: "composer-foot hide" }, meta, ctxSlot);
   // The desktop's `$` menu: the agent's skills, filtered by what follows the `$`.
   const skillMenu = h("div", { class: "skill-menu glass hide", role: "listbox" });
-  const dock = h("div", { class: "dock" }, jump, skillMenu,
-    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, micBtn, sendBtn)),
-    hint, footer);
+  const dock = h("div", { class: "dock" }, jump, skillMenu, h("div", { class: "dock-base" },
+    h("div", { class: "composer glass" }, textarea, h("div", { class: "composer-tools" }, modelChip, h("span", { class: "spacer" }), micBtn, sendBtn)),
+    hint, footer));
   const offline = offlineBanner();
   const macOffline = h("div", { class: "offline glass hide" });
   const el = h("div", { class: "view" }, scroll, bar, offline.el, macOffline, dock);

@@ -71,8 +71,8 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         .w_full()
         .gap(8.0)
         .center_y()
-        .child(rune::spacer())
         .child(model_chip(s, k))
+        .child(rune::spacer())
         .child(dictate)
         .child(send);
     let mut field_box = col()
