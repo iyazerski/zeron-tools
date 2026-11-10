@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, bail};
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, close_code};
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
@@ -28,8 +28,6 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(70);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// Calls queued for one Mac before callers wait.
 const CALL_QUEUE: usize = 64;
-/// The WebSocket close code for a connection this relay won't serve.
-const POLICY_VIOLATION: u16 = 1008;
 
 /// Calls waiting for a Mac's reply, by call id.
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
@@ -292,7 +290,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// A close frame that tells the Mac why it's turned away.
 fn close(reason: &str) -> Message {
     Message::Close(Some(CloseFrame {
-        code: POLICY_VIOLATION,
+        code: close_code::POLICY,
         reason: reason.into(),
     }))
 }

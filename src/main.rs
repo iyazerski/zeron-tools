@@ -224,7 +224,7 @@ impl PiOpts {
     /// Resolve the pi binary to an absolute path now: launchd starts the
     /// agent with a bare `PATH`.
     fn resolve(self) -> Result<Pi> {
-        let binary = paths::which(&self.pi).with_context(|| {
+        let binary = which::which(&self.pi).with_context(|| {
             format!(
                 "{} isn't on PATH; pass --pi, or --no-rename to skip titling",
                 self.pi.display()

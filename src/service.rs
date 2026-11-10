@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
 pub const CONNECT: Service = Service("connect");
 pub const COMPANION: Service = Service("companion");
@@ -51,43 +52,22 @@ impl Service {
         for dir in [plist.parent(), log.parent()].into_iter().flatten() {
             std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         }
-        let program = std::iter::once(exe.to_string_lossy().into_owned())
-            .chain(args.iter().cloned())
-            .map(|arg| format!("    <string>{}</string>\n", xml_escape(&arg)))
-            .collect::<String>();
-        let label = self.label();
-        let log_xml = xml_escape(&log.to_string_lossy());
-        // KeepAlive restarts it after a crash, but not after a clean exit (a
-        // rejected token, quitting the companion), which the user asked for.
-        let body = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>{label}</string>
-  <key>ProgramArguments</key>
-  <array>
-{program}  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-  </dict>
-  <key>ThrottleInterval</key>
-  <integer>30</integer>
-  <key>StandardOutPath</key>
-  <string>{log_xml}</string>
-  <key>StandardErrorPath</key>
-  <string>{log_xml}</string>
-</dict>
-</plist>
-"#
-        );
+        let agent = LaunchAgent {
+            label: self.label(),
+            program_arguments: std::iter::once(exe.to_string_lossy().into_owned())
+                .chain(args.iter().cloned())
+                .collect(),
+            run_at_load: true,
+            keep_alive: KeepAlive {
+                successful_exit: false,
+            },
+            throttle_interval: 30,
+            standard_out_path: log.clone(),
+            standard_error_path: log.clone(),
+        };
         self.unload()?;
-        std::fs::write(&plist, body).with_context(|| format!("writing {}", plist.display()))?;
+        plist::to_file_xml(&plist, &agent)
+            .with_context(|| format!("writing {}", plist.display()))?;
         launchctl(&["bootstrap", &domain(), &plist.to_string_lossy()])?;
         Ok(log)
     }
@@ -170,6 +150,27 @@ impl Service {
     }
 }
 
+/// The launch agent's job description, as launchd reads it from the plist.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct LaunchAgent {
+    label: String,
+    program_arguments: Vec<String>,
+    run_at_load: bool,
+    keep_alive: KeepAlive,
+    throttle_interval: u32,
+    standard_out_path: PathBuf,
+    standard_error_path: PathBuf,
+}
+
+/// Restart after a crash, but not after a clean exit (a rejected token,
+/// quitting the companion), which the user asked for.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct KeepAlive {
+    successful_exit: bool,
+}
+
 /// The launchd domain of the logged-in user's GUI session.
 fn domain() -> String {
     // SAFETY: getuid has no preconditions and can't fail.
@@ -189,10 +190,4 @@ fn launchctl(args: &[&str]) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn xml_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }

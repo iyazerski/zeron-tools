@@ -10,21 +10,27 @@ zeron-json-file = { path = "../json-file" }
 zeron-relay-proto = { path = "../relay-proto" }
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
-base64 = "0.22"
+# The session cookie and a Mac's Bearer token.
+axum-extra = { version = "0.12", default-features = false, features = ["cookie", "typed-header"] }
+base64 = "0.23"
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
-# Web Push: rustls on ring, which also does the push encryption and signing.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# Web Push: rustls on ring, which also signs the VAPID tokens.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 ring = "0.17"
+# Web Push encryption (RFC 8291).
+web-push-native = { version = "0.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The session cookie's Max-Age, as the cookie crate takes it.
+time = { version = "0.3", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
-webauthn-rs = "0.5"
-# webauthn-rs verifies passkeys with OpenSSL; build it in, so the binary is
-# static (scratch image) and local builds need no system OpenSSL.
-openssl = { version = "0.10", features = ["vendored"] }
+webauthn-rs = "0.6"
+# reqwest's TLS for Web Push: the ring provider and bundled roots (see `Push::open`).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-root-certs = "1"
 
 [lints]
 workspace = true
@@ -32,4 +38,4 @@ workspace = true
 [dev-dependencies]
 tempfile = "3"
 # A Mac's end of the link, in tests; the version axum uses.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"

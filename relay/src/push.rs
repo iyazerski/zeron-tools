@@ -3,9 +3,9 @@
 //!
 //! The browser subscribes with the relay's VAPID key and hands back an
 //! endpoint on its push service (FCM for Chrome). Notifications are encrypted
-//! for the subscription (RFC 8291, `aes128gcm`) and signed with the VAPID key
-//! (RFC 8292), both with `ring`. The key and the subscriptions live in the
-//! data dir.
+//! for the subscription (RFC 8291, `aes128gcm`, by `web-push-native`) and
+//! signed with the VAPID key (RFC 8292, with `ring`). The key and the
+//! subscriptions live in the data dir.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,12 +13,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
-use ring::{aead, agreement, hkdf};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
+use web_push_native::Auth;
+use web_push_native::p256::PublicKey;
 use zeron_relay_proto::NoticeKind;
 
 use zeron_json_file as json_file;
@@ -33,17 +34,8 @@ const CONTACT: &str = "https://github.com/iyazerski/zeron-tools";
 const VAPID_LIFETIME_SECS: u64 = 12 * 3600;
 /// How long one request to a push service may take.
 const PUSH_TIMEOUT: Duration = Duration::from_secs(15);
-/// The `aes128gcm` record size in the body header; one record holds any
-/// notification this sends.
-const RECORD_SIZE: u32 = 4096;
-/// Ends the plaintext of the last (here, the only) record (RFC 8188).
-const LAST_RECORD: u8 = 2;
-/// An uncompressed P-256 public key's length.
-const PUBLIC_KEY_LEN: usize = 65;
 /// The subscription's authentication secret's length.
 const AUTH_SECRET_LEN: usize = 16;
-/// The salt's length in the body header.
-const SALT_LEN: usize = 16;
 
 /// A browser's push subscription, as `PushSubscription.toJSON()` gives it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,7 +113,18 @@ impl Push {
             .map_err(|e| anyhow!("bad VAPID key in {}: {e}", key_file.display()))?;
         let store = dir.join("subscriptions.json");
         let subscriptions = json_file::load(&store)?.unwrap_or_default();
-        let http = reqwest::Client::builder().timeout(PUSH_TIMEOUT).build()?;
+        // reqwest leaves the crypto provider to the app, and the scratch
+        // image has no system roots: use ring and Mozilla's bundled roots.
+        // An error only means a provider is already installed.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .map(|cert| reqwest::Certificate::from_der(cert))
+            .collect::<reqwest::Result<Vec<_>>>()?;
+        let http = reqwest::Client::builder()
+            .timeout(PUSH_TIMEOUT)
+            .tls_certs_only(roots)
+            .build()?;
         Ok(Self {
             vapid,
             rng,
@@ -188,7 +191,8 @@ impl Push {
     }
 
     async fn deliver(&self, sub: &Subscription, payload: &Payload) -> Result<()> {
-        let body = encrypt(&self.rng, &sub.keys, &serde_json::to_vec(payload)?)?;
+        let (ua_public, auth) = decode_keys(&sub.keys)?;
+        let body = web_push_native::encrypt(serde_json::to_vec(payload)?, &ua_public, &auth)?;
         let url = reqwest::Url::parse(&sub.endpoint).context("bad push endpoint")?;
         let auth = self.vapid_header(&url.origin().ascii_serialization())?;
         let response = self
@@ -239,112 +243,25 @@ impl Push {
     }
 }
 
-/// Encrypt `payload` for a subscription as one `aes128gcm` record (RFC 8291).
-fn encrypt(rng: &SystemRandom, keys: &SubscriptionKeys, payload: &[u8]) -> Result<Vec<u8>> {
-    let (ua_public, auth) = decode_keys(keys)?;
-    let ephemeral = agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, rng)
-        .map_err(|_| anyhow!("generating a push key"))?;
-    let as_public = ephemeral
-        .compute_public_key()
-        .map_err(|_| anyhow!("computing the push key"))?;
-    let ecdh = agreement::agree_ephemeral(
-        ephemeral,
-        &agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, &ua_public),
-        |secret| secret.to_vec(),
-    )
-    .map_err(|_| anyhow!("the browser's push key is invalid"))?;
-    let mut salt = [0u8; SALT_LEN];
-    rng.fill(&mut salt)
-        .map_err(|_| anyhow!("generating a salt"))?;
-    let (cek, nonce) = content_keys(&ecdh, &auth, &ua_public, as_public.as_ref(), &salt)?;
-    seal(&salt, as_public.as_ref(), cek, nonce, payload)
-}
-
-/// Build the `aes128gcm` body: the header, then `payload` as one encrypted record.
-fn seal(
-    salt: &[u8],
-    as_public: &[u8],
-    cek: [u8; 16],
-    nonce: [u8; 12],
-    payload: &[u8],
-) -> Result<Vec<u8>> {
-    let mut record = payload.to_vec();
-    record.push(LAST_RECORD);
-    let key = aead::LessSafeKey::new(
-        aead::UnboundKey::new(&aead::AES_128_GCM, &cek).map_err(|_| anyhow!("AES key"))?,
-    );
-    key.seal_in_place_append_tag(
-        aead::Nonce::assume_unique_for_key(nonce),
-        aead::Aad::empty(),
-        &mut record,
-    )
-    .map_err(|_| anyhow!("encrypting the notification"))?;
-    // Header: salt, record size, key id length, key id (our public key).
-    let key_id_len = u8::try_from(as_public.len()).context("the push key is too long")?;
-    let mut body = Vec::with_capacity(salt.len() + 5 + as_public.len() + record.len());
-    body.extend_from_slice(salt);
-    body.extend_from_slice(&RECORD_SIZE.to_be_bytes());
-    body.push(key_id_len);
-    body.extend_from_slice(as_public);
-    body.extend_from_slice(&record);
-    Ok(body)
-}
-
-/// Derive the content key and nonce from the ECDH secret (RFC 8291 section 3.4).
-fn content_keys(
-    ecdh: &[u8],
-    auth: &[u8],
-    ua_public: &[u8],
-    as_public: &[u8],
-    salt: &[u8],
-) -> Result<([u8; 16], [u8; 12])> {
-    let key_info = [b"WebPush: info\0".as_slice(), ua_public, as_public].concat();
-    let mut ikm = [0u8; 32];
-    expand(
-        &hkdf::Salt::new(hkdf::HKDF_SHA256, auth).extract(ecdh),
-        &key_info,
-        &mut ikm,
-    )?;
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt).extract(&ikm);
-    let mut cek = [0u8; 16];
-    let mut nonce = [0u8; 12];
-    expand(&prk, b"Content-Encoding: aes128gcm\0", &mut cek)?;
-    expand(&prk, b"Content-Encoding: nonce\0", &mut nonce)?;
-    Ok((cek, nonce))
-}
-
-/// HKDF-Expand `prk` with `info` into `out`.
-fn expand(prk: &hkdf::Prk, info: &[u8], out: &mut [u8]) -> Result<()> {
-    struct Len(usize);
-    impl hkdf::KeyType for Len {
-        fn len(&self) -> usize {
-            self.0
-        }
-    }
-    prk.expand(&[info], Len(out.len()))
-        .and_then(|okm| okm.fill(out))
-        .map_err(|_| anyhow!("HKDF"))
-}
-
-/// Decode a subscription's public key (65 bytes) and auth secret (16 bytes).
-fn decode_keys(keys: &SubscriptionKeys) -> Result<(Vec<u8>, Vec<u8>)> {
+/// Decode a subscription's P-256 public key and auth secret.
+fn decode_keys(keys: &SubscriptionKeys) -> Result<(PublicKey, Auth)> {
     // Browsers send unpadded base64url; tolerate padding anyway.
     let decode = |s: &str| B64.decode(s.trim_end_matches('='));
-    let public = decode(&keys.p256dh).context("bad p256dh key")?;
+    let public = PublicKey::from_sec1_bytes(&decode(&keys.p256dh).context("bad p256dh key")?)
+        .context("bad p256dh key")?;
     let auth = decode(&keys.auth).context("bad auth secret")?;
-    if public.len() != PUBLIC_KEY_LEN || auth.len() != AUTH_SECRET_LEN {
-        bail!("unexpected push key sizes");
+    if auth.len() != AUTH_SECRET_LEN {
+        bail!("the auth secret isn't {AUTH_SECRET_LEN} bytes");
     }
-    Ok((public, auth))
+    Ok((public, Auth::clone_from_slice(&auth)))
 }
 
 /// The push service's host, for log lines (the full endpoint is a secret).
-fn short_endpoint(endpoint: &str) -> &str {
-    endpoint
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("push service")
+fn short_endpoint(endpoint: &str) -> String {
+    reqwest::Url::parse(endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "push service".into())
 }
 
 #[cfg(test)]
@@ -352,68 +269,29 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    /// RFC 8291 appendix A: the example's keys give its CEK, nonce, and body.
-    #[test]
-    fn encryption_matches_the_rfc_example() {
-        let b = |s: &str| B64.decode(s.replace(' ', "")).unwrap();
-        let as_public = b(
-            "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
-        );
-        let ua_public = b(
-            "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
-        );
-        let salt = b("DGv6ra1nlYgDCS1FRnbzlw");
-        let auth = b("BTBZMqHH6r4Tts7J_aSIgg");
-        let ecdh = b("kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs");
-        let (cek, nonce) = content_keys(&ecdh, &auth, &ua_public, &as_public, &salt).unwrap();
-        assert_eq!(cek.to_vec(), b("oIhVW04MRdy2XN9CiKLxTg"));
-        assert_eq!(nonce.to_vec(), b("4h_95klXJ5E_qnoN"));
-        let plaintext = b("V2hlbiBJIGdyb3cgdXAsIEkgd2FudCB0byBiZSBhIHdhdGVybWVsb24");
-        let body = seal(&salt, &as_public, cek, nonce, &plaintext).unwrap();
-        let want = [
-            b("DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8"),
-            b("8pfeW0KbunFT06SuDKoJH9Ql87S1QUrdirN6GcG7sFz1y1sqLgVi1VhjVkHsUoEsbI_0LpXMuGvnzQ"),
-        ]
-        .concat();
-        assert_eq!(body, want);
-    }
-
-    /// Decrypt a body from [`encrypt`] as the browser would, with its private key.
-    #[test]
-    fn encrypted_notifications_decrypt_with_the_browser_key() {
-        let rng = SystemRandom::new();
-        let browser =
-            agreement::EphemeralPrivateKey::generate(&agreement::ECDH_P256, &rng).unwrap();
-        let browser_public = browser.compute_public_key().unwrap().as_ref().to_vec();
-        let auth = [7u8; 16];
-        let keys = SubscriptionKeys {
-            p256dh: B64.encode(&browser_public),
-            auth: B64.encode(auth),
+    /// Subscriptions whose keys can't encrypt are refused up front.
+    #[tokio::test]
+    async fn subscribing_checks_the_browser_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let push = Push::open(dir.path()).unwrap();
+        // RFC 8291 appendix A's browser keys.
+        let p256dh = "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
+        let sub = |p256dh: &str, auth: &str| Subscription {
+            endpoint: "https://push.example/abc".into(),
+            keys: SubscriptionKeys {
+                p256dh: p256dh.into(),
+                auth: auth.into(),
+            },
         };
-        let body = encrypt(&rng, &keys, b"{\"title\":\"hi\"}").unwrap();
-
-        let (salt, rest) = body.split_at(16);
-        assert_eq!(&rest[..4], &RECORD_SIZE.to_be_bytes());
-        let id_len = usize::from(rest[4]);
-        let (server_public, ciphertext) = rest[5..].split_at(id_len);
-        let ecdh = agreement::agree_ephemeral(
-            browser,
-            &agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, server_public),
-            |s| s.to_vec(),
-        )
-        .unwrap();
-        let (cek, nonce) =
-            content_keys(&ecdh, &auth, &browser_public, server_public, salt).unwrap();
-        let key = aead::LessSafeKey::new(aead::UnboundKey::new(&aead::AES_128_GCM, &cek).unwrap());
-        let mut record = ciphertext.to_vec();
-        let plain = key
-            .open_in_place(
-                aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::empty(),
-                &mut record,
-            )
+        push.subscribe(sub(p256dh, "BTBZMqHH6r4Tts7J_aSIgg=="))
+            .await
             .unwrap();
-        assert_eq!(plain, b"{\"title\":\"hi\"}\x02");
+        for (p256dh, auth) in [
+            (&p256dh[..40], "BTBZMqHH6r4Tts7J_aSIgg"),
+            (p256dh, "BTBZMqHH6r4T"),
+        ] {
+            assert!(push.subscribe(sub(p256dh, auth)).await.is_err());
+        }
     }
 
     #[test]

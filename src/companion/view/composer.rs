@@ -3,7 +3,10 @@
 //! context ring, dictation, and Send.
 
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
-use rune_kit::{Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, Spinner};
+use rune_kit::{
+    Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, PopupItem, PopupList,
+    Spinner,
+};
 
 use super::icons;
 use super::widgets::tile;
@@ -13,6 +16,9 @@ use crate::companion::app::{
 use crate::companion::data::{Skill, levels_of};
 use crate::companion::labels::{harness_name, reasoning_name, short_model};
 use crate::companion::message::skill_query;
+
+/// The `$` menu's width, in points.
+const SKILL_MENU_WIDTH: f32 = 320.0;
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let working = page.is_working();
@@ -99,11 +105,14 @@ pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
             None => auto_grow(field, 1, 8),
         })
         .child(tools);
-    let mut dock = col().key("dock").w_full().px(10.0).pb(6.0).gap(6.0);
-    if let Some(menu) = skill_menu(page, k) {
-        dock = dock.child(menu);
-    }
-    dock = dock.child(field_box);
+    skill_menu(page, k, layer);
+    let dock = col()
+        .key("dock")
+        .w_full()
+        .px(10.0)
+        .pb(6.0)
+        .gap(6.0)
+        .child(field_box);
     let footer = row()
         .w_full()
         .gap(12.0)
@@ -289,76 +298,38 @@ fn pick_skill(s: &mut State, name: &str) {
     page.skills.active = 0;
 }
 
-fn skill_menu(page: &ChatPage, k: &Kit) -> Option<El> {
-    let (_, q) = query(page)?;
-    let found = matching(page, &q)?;
-    let note = |s: String| text(s).font(k.ty.small).color(k.c.text_muted).padding(8.0);
-    let mut menu = col()
-        .key("skills")
-        .w_full()
-        .max_h(220.0)
-        .padding(4.0)
-        .radius(12.0)
-        .fill(k.c.layer_03)
-        .border(1.0, k.c.border_base)
-        .scroll(rune::ScrollSpec {
-            stick_bottom: false,
-        });
-    menu = match (&page.skills.list, found) {
-        (SkillList::Loading, _) => menu.child(
-            row()
-                .gap(6.0)
-                .padding(8.0)
-                .child(Spinner::new().size(11.0).build(k))
-                .child(note("Loading skills…".into())),
-        ),
-        (_, Err(e)) => menu.child(note(format!("Couldn't load the skills: {e}"))),
-        (SkillList::Ready(all), Ok(found)) if found.is_empty() => menu.child(note(
-            if all.is_empty() {
-                "No skills available"
-            } else {
-                "No matching skills"
-            }
-            .into(),
-        )),
-        (_, Ok(found)) => {
-            let active = page.skills.active.min(found.len() - 1);
-            menu.children(found.into_iter().enumerate().map(|(i, skill)| {
-                let name = skill.name.clone();
-                let item = row()
-                    .w_full()
-                    .gap(8.0)
-                    .px(8.0)
-                    .py(6.0)
-                    .radius(8.0)
-                    .center_y()
-                    .fill(if i == active {
-                        k.c.layer_04
-                    } else {
-                        rune::Color::TRANSPARENT
-                    })
-                    .child(icon(&icons::SKILL, 13.0).color(k.c.icon_muted))
-                    .child(
-                        text(skill.name.clone())
-                            .font(k.ty.ui_medium)
-                            .color(k.c.text_base),
-                    )
-                    .child(
-                        text(skill.description.clone())
-                            .font(k.ty.small)
-                            .color(k.c.text_faint)
-                            .truncate()
-                            .grow(1.0)
-                            .min_w(0.0),
-                    );
-                k.interactive(item)
-                    .key(format!("skill-{}", skill.name))
-                    .preserve_focus_on_press(true)
-                    .on_press(move |s: &mut State| pick_skill(s, &name))
-            }))
-        }
+/// The `$` menu over the composer. Keys stay in the field (`composer_key`).
+fn skill_menu(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) {
+    let Some((_, q)) = query(page) else { return };
+    let Some(found) = matching(page, &q) else {
+        return;
     };
-    Some(menu)
+    let empty = match &page.skills.list {
+        SkillList::Loading => "Loading skills…".to_owned(),
+        SkillList::Failed(e) => format!("Couldn't load the skills: {e}"),
+        SkillList::Ready(all) if all.is_empty() => "No skills available".to_owned(),
+        SkillList::Ready(_) => "No matching skills".to_owned(),
+    };
+    let found = found.unwrap_or_default();
+    let active = (!found.is_empty()).then(|| page.skills.active.min(found.len() - 1));
+    let items = found.into_iter().map(|skill| {
+        PopupItem::new(skill.name.clone(), skill.name.clone())
+            .description(skill.description.clone())
+            .leading(icon(&icons::SKILL, 13.0).color(k.c.icon_muted))
+    });
+    PopupList::new("skills", "composer-box")
+        .width(SKILL_MENU_WIDTH)
+        .items(items)
+        .active(active)
+        .empty_message(empty)
+        .label("Skills")
+        .on_active(|s: &mut State, i| {
+            if let Some(page) = s.chat_mut() {
+                page.skills.active = i;
+            }
+        })
+        .on_choose(|s: &mut State, name, _| pick_skill(s, name))
+        .build(k, layer);
 }
 
 fn model_chip(s: &State, k: &Kit) -> El {

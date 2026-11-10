@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use axum::http::{HeaderMap, header};
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use ring::digest::{SHA256, digest};
 use serde::Serialize;
 use url::Url;
@@ -186,33 +186,37 @@ impl Auth {
     }
 }
 
-/// The session token in the request's cookie, if any.
-pub fn session_cookie(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get_all(header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
-        .find_map(|pair| pair.trim().strip_prefix(COOKIE)?.strip_prefix('='))
+/// The session token in the browser's cookies, if any.
+pub fn session_cookie(jar: &CookieJar) -> Option<&str> {
+    jar.get(COOKIE).map(Cookie::value)
 }
 
-/// The `Set-Cookie` value that signs the browser in with `token`.
-pub fn set_cookie(token: &str) -> String {
-    format!(
-        "{COOKIE}={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age={}",
-        SESSION_TTL.as_secs()
-    )
+/// Sign the browser in with `token`.
+pub fn set_cookie(jar: CookieJar, token: String) -> CookieJar {
+    let max_age = time::Duration::seconds(SESSION_TTL.as_secs().cast_signed());
+    jar.add(session(token, max_age))
 }
 
-/// The `Set-Cookie` value that signs the browser out.
-pub fn clear_cookie() -> String {
-    format!("{COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0")
+/// Sign the browser out.
+pub fn clear_cookie(jar: CookieJar) -> CookieJar {
+    jar.remove(session(String::new(), time::Duration::ZERO))
+}
+
+/// The session cookie with `value`, and the attributes `__Host-` requires.
+fn session(value: String, max_age: time::Duration) -> Cookie<'static> {
+    Cookie::build((COOKIE, value))
+        .max_age(max_age)
+        .path("/")
+        .secure(true)
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .build()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
+    use axum::http::{HeaderMap, HeaderValue, header};
 
     #[test]
     fn the_session_comes_from_its_own_cookie() {
@@ -221,8 +225,11 @@ mod tests {
             header::COOKIE,
             HeaderValue::from_static("other=1; __Host-zeron=abc; __Host-zeronx=no"),
         );
-        assert_eq!(session_cookie(&headers), Some("abc"));
-        assert_eq!(session_cookie(&HeaderMap::new()), None);
+        assert_eq!(
+            session_cookie(&CookieJar::from_headers(&headers)),
+            Some("abc")
+        );
+        assert_eq!(session_cookie(&CookieJar::new()), None);
     }
 
     #[test]

@@ -13,24 +13,32 @@ use rune_kit::Kit;
 use rune_kit::markdown::{Highlight, MarkdownStyle, Syntax};
 
 /// Token colours, dark then light. Inline code takes the keyword colour.
-const PALETTE: [[(Syntax, &str); 7]; 2] = [
+/// Regexes, headings and attributes share a colour as the phone app's
+/// highlight.js classes do; other kinds keep the kit's colours.
+const PALETTE: [[(Syntax, &str); 10]; 2] = [
     [
         (Syntax::Keyword, "#c678dd"),
         (Syntax::String, "#98c379"),
+        (Syntax::Regex, "#98c379"),
         (Syntax::Number, "#d19a66"),
         (Syntax::Comment, "#7f848e"),
         (Syntax::Type, "#e5c07b"),
         (Syntax::Function, "#61afef"),
+        (Syntax::Heading, "#61afef"),
         (Syntax::Property, "#e06c75"),
+        (Syntax::Attribute, "#e06c75"),
     ],
     [
         (Syntax::Keyword, "#a626a4"),
         (Syntax::String, "#50a14f"),
+        (Syntax::Regex, "#50a14f"),
         (Syntax::Number, "#986801"),
         (Syntax::Comment, "#a0a1a7"),
         (Syntax::Type, "#c18401"),
         (Syntax::Function, "#4078f2"),
+        (Syntax::Heading, "#4078f2"),
         (Syntax::Property, "#e45649"),
+        (Syntax::Attribute, "#e45649"),
     ],
 ];
 

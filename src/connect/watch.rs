@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGEventType};
 use serde_json::json;
 use tokio::sync::{mpsc, watch};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
@@ -25,8 +26,6 @@ const AWAY_AFTER: Duration = Duration::from_secs(120);
 const RETRY: Duration = Duration::from_secs(5);
 /// How long building one notice (reading its chat) may take.
 const NOTICE_TIMEOUT: Duration = Duration::from_secs(15);
-/// How long reading the Mac's idle time may take.
-const IOREG_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most characters in a notice's body.
 const BODY_CHARS: usize = 240;
 
@@ -41,10 +40,10 @@ pub enum NotifyWhen {
 
 impl NotifyWhen {
     /// Whether a notice may go out now.
-    async fn allows_now(self) -> bool {
+    fn allows_now(self) -> bool {
         match self {
             Self::Always => true,
-            Self::Away => away().await,
+            Self::Away => away(),
         }
     }
 }
@@ -125,7 +124,7 @@ fn spawn_notice(
     // status watch keeps only its latest value, so a slow step there would
     // make it skip transitions.
     tokio::spawn(async move {
-        if !notify.allows_now().await {
+        if !notify.allows_now() {
             return;
         }
         match tokio::time::timeout(NOTICE_TIMEOUT, notice(&zeron, &chat, kind)).await {
@@ -195,23 +194,16 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
 
 /// Whether nobody has touched the Mac's keyboard or mouse for [`AWAY_AFTER`].
 /// If idle time can't be read, assume away: a missed notice is worse.
-async fn away() -> bool {
-    let output = tokio::process::Command::new("ioreg")
-        .args(["-c", "IOHIDSystem", "-d", "4"])
-        .kill_on_drop(true)
-        .output();
-    let idle = match tokio::time::timeout(IOREG_TIMEOUT, output).await {
-        Ok(Ok(o)) => hid_idle(&String::from_utf8_lossy(&o.stdout)),
-        _ => None,
-    };
-    idle.is_none_or(|idle| idle >= AWAY_AFTER)
-}
-
-/// Read `"HIDIdleTime" = <nanoseconds>` from `ioreg` output.
-fn hid_idle(ioreg: &str) -> Option<Duration> {
-    let line = ioreg.lines().find(|l| l.contains("\"HIDIdleTime\""))?;
-    let nanos = line.rsplit('=').next()?.trim().parse().ok()?;
-    Some(Duration::from_nanos(nanos))
+fn away() -> bool {
+    // `kCGAnyInputEventType` (`~0`), a C macro the bindings leave out.
+    let any_input = CGEventType(u32::MAX);
+    let idle = CGEventSource::seconds_since_last_event_type(
+        CGEventSourceStateID::HIDSystemState,
+        any_input,
+    );
+    Duration::try_from_secs_f64(idle)
+        .ok()
+        .is_none_or(|idle| idle >= AWAY_AFTER)
 }
 
 #[cfg(test)]
@@ -284,12 +276,5 @@ mod tests {
                 now.status
             );
         }
-    }
-
-    #[test]
-    fn idle_time_comes_from_ioreg() {
-        let out = "    | |   \"HIDIdleSomething\" = 1\n    | |     \"HIDIdleTime\" = 19338182208\n";
-        assert_eq!(hid_idle(out), Some(Duration::from_nanos(19_338_182_208)));
-        assert_eq!(hid_idle("nothing"), None);
     }
 }

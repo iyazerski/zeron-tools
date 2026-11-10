@@ -328,7 +328,7 @@ async fn pump(
         tokio::select! {
             outgoing = out.recv() => match outgoing {
                 Some(Outgoing { call, text }) => {
-                    if sink.send(Message::Text(text)).await.is_err() {
+                    if sink.send(Message::Text(text.into())).await.is_err() {
                         unsent = call;
                         break;
                     }
@@ -341,7 +341,7 @@ async fn pump(
             message = stream.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if let Some(cancel) = route(&pending, &text)
-                        && sink.send(Message::Text(cancel)).await.is_err()
+                        && sink.send(Message::Text(cancel.into())).await.is_err()
                     {
                         break;
                     }
@@ -522,7 +522,9 @@ mod tests {
                     other => vec![json!({ "id": id, "err": format!("{UNKNOWN_METHOD}{other}") })],
                 };
                 for reply in replies {
-                    sink.send(Message::Text(reply.to_string())).await.unwrap();
+                    sink.send(Message::Text(reply.to_string().into()))
+                        .await
+                        .unwrap();
                 }
             }
         });

@@ -40,9 +40,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc, watch as state};
 use tokio::task::JoinSet;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode, header};
+use tokio_tungstenite::tungstenite::{Bytes, Message};
 use zeron_relay_proto::{Battery, CONNECT_PATH, Call, Notice, PROTOCOL, Up};
 
 use self::tools::{Tool, Unavailable, parse_args};
@@ -249,7 +249,7 @@ async fn serve(
                 if heard.elapsed() > SILENCE_LIMIT {
                     bail!("no answer from the relay for {}s", SILENCE_LIMIT.as_secs());
                 }
-                sink.send(Message::Ping(vec![])).await?;
+                sink.send(Message::Ping(Bytes::new())).await?;
             }
         }
     }
@@ -439,7 +439,7 @@ fn rejected(error: &anyhow::Error) -> bool {
 
 /// One message for the relay, as a JSON text frame.
 fn encode(up: &Up) -> Result<Message> {
-    Ok(Message::Text(serde_json::to_string(up)?))
+    Ok(Message::Text(serde_json::to_string(up)?.into()))
 }
 
 /// Where the link is saved: `<data dir>/zeron-tools-connect.json`.
@@ -521,7 +521,10 @@ mod tests {
             let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
             socket.send(Message::Text("nonsense".into())).await.unwrap();
             let call = json!({ "id": 7, "tool": "list_chats", "args": {} });
-            socket.send(Message::Text(call.to_string())).await.unwrap();
+            socket
+                .send(Message::Text(call.to_string().into()))
+                .await
+                .unwrap();
             while let Some(Ok(frame)) = socket.next().await {
                 if let Message::Text(body) = frame
                     && let Ok(Up::Reply { id, result }) = serde_json::from_str(&body)

@@ -7,7 +7,7 @@ description = "Background services for Zeron: archive old chats, title untitled 
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 futures-util = "0.3"
@@ -19,6 +19,10 @@ objc2-av-foundation = { version = "0.3", default-features = false, features = ["
 objc2-avf-audio = { version = "0.3", default-features = false, features = ["std", "block2", "AVAudioBuffer", "AVAudioEngine", "AVAudioFormat", "AVAudioIONode", "AVAudioNode", "AVAudioTime", "AVAudioTypes"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
 objc2-speech = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-avf-audio", "SFSpeechRecognitionMetadata", "SFSpeechRecognitionRequest", "SFSpeechRecognitionResult", "SFSpeechRecognitionTask", "SFSpeechRecognizer", "SFTranscription"] }
+# How long the Mac's keyboard and mouse have been idle, for notices.
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGEventSource", "CGEventTypes"] }
+# The launch agents' job descriptions.
+plist = { version = "1", default-features = false, features = ["serde"] }
 # Finds inline code in the transcript's Markdown, to colour it, and writes
 # the HTML a copy puts beside the plain text.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
@@ -26,20 +30,24 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "net", "process", "sync", "time"] }
 # The relay link and Zeron's IPC.
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # tokio-tungstenite leaves the TLS crypto provider to the app; with only
 # `ring` enabled, rustls picks it on its own.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # The companion window. Rune is pre-release and changes often: keep one
 # tested revision.
-rune = { git = "https://github.com/anomalyco/rune", rev = "39301f6793266450a057f270da06b048a689be96" }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "39301f6793266450a057f270da06b048a689be96", features = ["markdown"] }
-rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "39301f6793266450a057f270da06b048a689be96" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "7ed827a2b969ec737323c3e80d2bfc1b8032b609" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "7ed827a2b969ec737323c3e80d2bfc1b8032b609", features = ["markdown"] }
+rune-theme-opencode = { git = "https://github.com/anomalyco/rune", rev = "7ed827a2b969ec737323c3e80d2bfc1b8032b609" }
 # Shrinks image thumbnails before Rune keeps them; matches Rune's own image build.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 zeron-json-file = { path = "json-file" }
 zeron-relay-proto = { path = "relay-proto" }
+# Finds pi on PATH.
+which = "8"
+# Compares this version with the latest release's.
+semver = "1"
 
 [dev-dependencies]
 tempfile = "3"

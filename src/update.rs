@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use semver::Version;
 
 use crate::service::{COMPANION, CONNECT};
 
@@ -30,7 +31,10 @@ pub fn run() -> Result<()> {
         .map(|(_, tag)| tag.trim().to_string())
         .with_context(|| format!("unexpected latest release address {latest_url}"))?;
     let latest = tag.trim_start_matches('v');
-    if !is_newer(latest, VERSION) {
+    let newer = Version::parse(latest)
+        .with_context(|| format!("unexpected latest release tag {tag}"))?
+        > Version::parse(VERSION)?;
+    if !newer {
         println!("zeron-tools {VERSION} is up to date");
         return Ok(());
     }
@@ -94,24 +98,4 @@ fn run_tool(command: &mut Command, what: &str) -> Result<String> {
         bail!("{what}: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
-/// Whether version `a` (like `0.11.10`) is newer than `b`, comparing the
-/// numbers in order.
-fn is_newer(a: &str, b: &str) -> bool {
-    let parts = |v: &str| -> Vec<u64> { v.split('.').map(|p| p.parse().unwrap_or(0)).collect() };
-    parts(a) > parts(b)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn versions_compare_by_number() {
-        assert!(is_newer("0.11.10", "0.11.9"));
-        assert!(is_newer("1.0.0", "0.99.99"));
-        assert!(!is_newer("0.11.6", "0.11.6"));
-        assert!(!is_newer("0.11.5", "0.11.6"));
-    }
 }

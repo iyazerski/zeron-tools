@@ -23,11 +23,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::extract::{Path, Request, State, WebSocketUpgrade};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use axum_extra::TypedHeader;
+use axum_extra::extract::cookie::CookieJar;
+use axum_extra::headers::Authorization;
+use axum_extra::headers::authorization::Bearer;
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -232,7 +236,7 @@ async fn check_origin(State(app): State<App>, request: Request, next: Next) -> R
 
 /// Refuse calls without a valid session cookie.
 async fn require_session(State(app): State<App>, request: Request, next: Next) -> Response {
-    if signed_in(&app, request.headers()) {
+    if signed_in(&app, &CookieJar::from_headers(request.headers())) {
         next.run(request).await
     } else {
         failure(StatusCode::UNAUTHORIZED, "sign in first")
@@ -240,13 +244,13 @@ async fn require_session(State(app): State<App>, request: Request, next: Next) -
 }
 
 /// Whether the request carries a valid session cookie.
-fn signed_in(app: &App, headers: &HeaderMap) -> bool {
-    auth::session_cookie(headers).is_some_and(|t| app.store.session_valid(t))
+fn signed_in(app: &App, jar: &CookieJar) -> bool {
+    auth::session_cookie(jar).is_some_and(|t| app.store.session_valid(t))
 }
 
-async fn auth_status(State(app): State<App>, headers: HeaderMap) -> Response {
+async fn auth_status(State(app): State<App>, jar: CookieJar) -> Response {
     Json(json!({
-        "signedIn": signed_in(&app, &headers),
+        "signedIn": signed_in(&app, &jar),
         "hasPasskey": !app.store.passkeys().is_empty(),
     }))
     .into_response()
@@ -259,10 +263,10 @@ struct RegisterStart {
 
 async fn register_start(
     State(app): State<App>,
-    headers: HeaderMap,
+    jar: CookieJar,
     Json(body): Json<RegisterStart>,
 ) -> Response {
-    if !signed_in(&app, &headers) && !app.auth.setup_allowed(body.setup.as_deref()) {
+    if !signed_in(&app, &jar) && !app.auth.setup_allowed(body.setup.as_deref()) {
         return failure(StatusCode::FORBIDDEN, "this setup link isn't valid");
     }
     respond(app.auth.start_register(&app.store))
@@ -276,6 +280,7 @@ struct Finish<T> {
 
 async fn register_finish(
     State(app): State<App>,
+    jar: CookieJar,
     Json(body): Json<Finish<RegisterPublicKeyCredential>>,
 ) -> Response {
     // The flow itself proves setup was allowed when it started.
@@ -283,7 +288,7 @@ async fn register_finish(
         .auth
         .finish_register(&app.store, &body.flow, &body.credential)
         .and_then(|()| app.store.new_session());
-    signed_in_response(result)
+    signed_in_response(jar, result)
 }
 
 async fn login_start(State(app): State<App>, Json(_): Json<Value>) -> Response {
@@ -292,38 +297,31 @@ async fn login_start(State(app): State<App>, Json(_): Json<Value>) -> Response {
 
 async fn login_finish(
     State(app): State<App>,
+    jar: CookieJar,
     Json(body): Json<Finish<PublicKeyCredential>>,
 ) -> Response {
     let result = app
         .auth
         .finish_login(&app.store, &body.flow, &body.credential)
         .and_then(|()| app.store.new_session());
-    signed_in_response(result)
+    signed_in_response(jar, result)
 }
 
 /// Set the session cookie on success.
-fn signed_in_response(session: Result<String>) -> Response {
+fn signed_in_response(jar: CookieJar, session: Result<String>) -> Response {
     match session {
-        Ok(token) => (
-            [(header::SET_COOKIE, auth::set_cookie(&token))],
-            Json(json!({ "ok": true })),
-        )
-            .into_response(),
+        Ok(token) => (auth::set_cookie(jar, token), Json(json!({ "ok": true }))).into_response(),
         Err(e) => failure(StatusCode::BAD_REQUEST, format!("{e:#}")),
     }
 }
 
-async fn logout(State(app): State<App>, headers: HeaderMap) -> Response {
-    if let Some(token) = auth::session_cookie(&headers)
+async fn logout(State(app): State<App>, jar: CookieJar) -> Response {
+    if let Some(token) = auth::session_cookie(&jar)
         && let Err(e) = app.store.end_session(token)
     {
         return failure(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"));
     }
-    (
-        [(header::SET_COOKIE, auth::clear_cookie())],
-        Json(json!({ "ok": true })),
-    )
-        .into_response()
+    (auth::clear_cookie(jar), Json(json!({ "ok": true }))).into_response()
 }
 
 /// The Macs, with whether each is connected.
@@ -386,11 +384,12 @@ async fn call_tool(
 }
 
 /// A Mac's link: `zeron-tools connect` with `Authorization: Bearer <token>`.
-async fn connect(State(app): State<App>, headers: HeaderMap, ws: WebSocketUpgrade) -> Response {
-    let token = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+async fn connect(
+    State(app): State<App>,
+    bearer: Option<TypedHeader<Authorization<Bearer>>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let token = bearer.as_ref().map(|TypedHeader(auth)| auth.token());
     let Some(machine) = token.and_then(|t| app.store.machine_for_token(t)) else {
         return failure(StatusCode::UNAUTHORIZED, "unknown Mac token");
     };
