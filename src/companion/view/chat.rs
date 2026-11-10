@@ -344,14 +344,14 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
         out = out.child(text("Stopped").font(k.ty.small).color(k.c.text_faint));
     }
     if !streaming {
-        out = out.child(footer(k, m));
+        out = out.child(footer(page, k, m));
     }
     out
 }
 
 /// When the message started, and a button that copies its closing answer as
 /// Markdown, as the desktop shows under a finished reply.
-fn footer(k: &Kit, m: &Message) -> El {
+fn footer(page: &Existing, k: &Kit, m: &Message) -> El {
     let mut out = row().gap(8.0).center_y();
     if let Some(at) = chrono::DateTime::from_timestamp_millis(m.created_at) {
         out = out.child(
@@ -364,17 +364,16 @@ fn footer(k: &Kit, m: &Message) -> El {
             .color(k.c.text_faint),
         );
     }
-    if let Some(answer) = m.answer() {
+    if m.answer().is_some() {
+        let copied = page.just_copied(&m.id);
+        let id = m.id.clone();
         out = out.child(
-            IconButton::new(&icons::COPY)
+            IconButton::new(if copied { &icons::CHECK } else { &icons::COPY })
                 .variant(IconButtonVariant::GhostMuted)
                 .control_size(ControlSize::Small)
-                .label("Copy")
+                .label(if copied { "Copied" } else { "Copy" })
                 .help("Copy the answer")
-                .on_press_tx(move |s: &mut State, tx: &mut Tx| {
-                    tx.copy(answer.clone());
-                    s.notify("Copied");
-                })
+                .on_press_tx(move |s: &mut State, tx: &mut Tx| s.copy_answer(&id, tx))
                 .build(k),
         );
     }

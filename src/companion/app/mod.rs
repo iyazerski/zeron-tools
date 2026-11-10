@@ -229,7 +229,7 @@ impl State {
         }
     }
 
-    /// Start what's due and expire the toast; true when the view must redraw.
+    /// Start what's due and expire the toast and copy checks; true when the view must redraw.
     pub fn tick(&mut self, _: &mut Tx) -> bool {
         let mut changed = false;
         if self
@@ -239,6 +239,9 @@ impl State {
         {
             self.toast = None;
             changed = true;
+        }
+        if let Some(chat) = self.chat_mut().and_then(|p| p.existing_mut()) {
+            changed |= chat.expire_copied();
         }
         if !self.api.app().is_visible() || !matches!(self.engine, Engine::Running { .. }) {
             return changed;

@@ -95,6 +95,23 @@ impl State {
         self.refresh_chat();
     }
 
+    /// Copy message `id`'s answer as Markdown, and mark its button copied.
+    pub fn copy_answer(&mut self, id: &str, tx: &mut Tx) {
+        let Some(chat) = self.chat_mut().and_then(|p| p.existing_mut()) else {
+            return;
+        };
+        let Some(answer) = chat
+            .read
+            .as_ref()
+            .and_then(|r| r.messages.iter().find(|m| m.id == id))
+            .and_then(|m| m.answer())
+        else {
+            return;
+        };
+        tx.copy(answer);
+        chat.copied = Some((id.to_owned(), Instant::now()));
+    }
+
     /// The composer's branch, context and model: the chat's, or a new chat's in its project.
     pub fn load_info(&mut self) {
         let Some(page) = self.chat_mut() else { return };

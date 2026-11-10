@@ -16,6 +16,8 @@ use crate::companion::dictation::Listening;
 const PAGE: usize = 40;
 /// The composer's branch and context change slowly; re-read them at most this often.
 const INFO_EVERY: Duration = Duration::from_secs(8);
+/// How long a reply's copy button shows a check after a copy.
+const COPIED_FOR: Duration = Duration::from_secs(2);
 
 pub struct ChatPage {
     pub nav: u64,
@@ -102,6 +104,8 @@ pub struct Existing {
     pub(super) refresh: u64,
     info_for: Option<String>,
     pub(super) info_at: Option<Instant>,
+    /// The message whose answer was just copied, and when.
+    pub(super) copied: Option<(String, Instant)>,
 }
 
 /// What's open over the page.
@@ -227,6 +231,25 @@ impl Target {
 }
 
 impl Existing {
+    /// Whether message `id`'s answer was copied a moment ago.
+    pub fn just_copied(&self, id: &str) -> bool {
+        self.copied
+            .as_ref()
+            .is_some_and(|(m, at)| m == id && at.elapsed() < COPIED_FOR)
+    }
+
+    /// Forget a copy shown long enough; true when one was.
+    pub(super) fn expire_copied(&mut self) -> bool {
+        let expired = self
+            .copied
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= COPIED_FOR);
+        if expired {
+            self.copied = None;
+        }
+        expired
+    }
+
     /// Whether the agent works but shows nothing yet (no prose and no
     /// running tool), so the transcript counts the seconds instead.
     pub fn shows_clock(&self) -> bool {
@@ -260,6 +283,7 @@ impl Existing {
             refresh: 0,
             info_for: None,
             info_at: None,
+            copied: None,
         }
     }
 
