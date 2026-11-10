@@ -5,6 +5,7 @@
 //! (`crates/mcp/src/zeron.rs`). Writes go through `Mutate` and the chat's
 //! command queue, so Zeron applies, saves, and syncs them itself.
 
+pub mod daemon;
 pub mod ipc;
 pub mod transcript;
 pub mod types;
@@ -38,6 +39,7 @@ pub mod methods {
     pub const QUEUE_COMMAND: &str = "QueueCommand";
     pub const UPLOAD_CHUNK: &str = "UploadChunk";
     pub const UPLOAD_COMMIT: &str = "UploadCommit";
+    pub const STOP_ENGINE: &str = "StopEngine";
 }
 
 /// The bytes of one `UploadChunk`, before base64. A multiple of 3, so no

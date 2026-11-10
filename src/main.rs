@@ -1,8 +1,9 @@
 //! zeron-tools: background services for the running Zeron, set up together
 //! by `install`: `connect` keeps the sidebar short and links Zeron to the
 //! phone, and `companion` shows the chats in a floating window. They talk to
-//! Zeron through its engine's loopback IPC, so they work while Zeron runs and
-//! don't depend on Zeron's code. `update` installs the latest release.
+//! Zeron through its engine's loopback IPC, so they don't depend on Zeron's
+//! code, and `install` runs that engine as a service, so they work without
+//! the app. `update` installs the latest release.
 
 mod archive;
 mod companion;
@@ -24,7 +25,7 @@ use zeron_json_file as json_file;
 use crate::connect::{Link, NotifyWhen, Upkeep};
 use crate::pi::Pi;
 use crate::service::{COMPANION, CONNECT, RunMode};
-use crate::zeron::Zeron;
+use crate::zeron::{Zeron, daemon};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -58,6 +59,12 @@ enum Cmd {
     /// Run zeron-tools in the background from now on: start at login,
     /// restart after a crash. Run it again to change the options
     ///
+    /// It also runs Zeron's engine as a service of its own (Zeron's `daemon`
+    /// command), so Zeron works without the app: the app, when opened,
+    /// connects to it, and the engine follows the app's updates. The first
+    /// time, it quits the app and restarts the engine, so it refuses while
+    /// agents work.
+    ///
     /// While Zeron runs, it archives all but the most recently active chats
     /// of each project (pinned chats and chats in sidebar sections stay) and
     /// titles chats that stayed untitled or got Zeron's fallback title, with
@@ -66,8 +73,8 @@ enum Cmd {
     /// With a relay link, it dials out to the relay and stays connected, so
     /// the phone app can list chats, follow them live, send messages, stop
     /// turns, answer agent questions, and start chats, and it reports chats
-    /// that finish, need an answer, or fail, for notifications. Zeron may be
-    /// closed: the app shows that and can open it. Pass --relay and --token
+    /// that finish, need an answer, or fail, for notifications. If Zeron's
+    /// engine stops, the app shows that and can start it. Pass --relay and --token
     /// once (the app shows them when you add a Mac); they're saved.
     ///
     /// A global shortcut shows a floating window with the same chats as the
@@ -274,11 +281,17 @@ async fn install(global: &Global, args: InstallArgs) -> Result<()> {
             "nothing to do: add this Mac in the phone app (it shows the command), or drop --no-archive or --no-rename"
         );
     }
+    daemon::install(
+        &Zeron::new(global.ipc_port, &data_dir),
+        &data_dir,
+        global.ipc_port,
+    )
+    .await?;
     let connect_log = CONNECT.install(&agent_args(global, notify, &upkeep))?;
     let shortcut = args.companion.shortcut;
     let companion_log = COMPANION.install(&companion_args(global, &shortcut, &upkeep))?;
     println!(
-        "zeron-tools now runs in the background and starts at login; {shortcut} shows the chats window"
+        "zeron-tools and Zeron's engine now run in the background and start at login; {shortcut} shows the chats window"
     );
     println!(
         "logs: {} and {}",
@@ -301,6 +314,12 @@ fn uninstall() -> Result<()> {
         println!("stopped; zeron-tools no longer runs in the background");
     } else {
         println!("zeron-tools wasn't running in the background");
+    }
+    if daemon::installed() {
+        println!(
+            "Zeron's engine still runs as a service; to run it with the app again, run {}",
+            daemon::uninstall_command()
+        );
     }
     Ok(())
 }

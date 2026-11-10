@@ -1,6 +1,6 @@
 # zeron-tools
 
-Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). While Zeron runs, it:
+Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Apple silicon). They work without the Zeron app open. They:
 
 - archives all but the 10 most recently active chats of each project (pinned chats and chats in sidebar sections stay),
 - titles chats that stayed untitled or got Zeron's fallback title (the prompt's first words), with a small model through pi,
@@ -8,6 +8,8 @@ Background services for [Zeron](https://github.com/zeronsh/zeron) on macOS (Appl
 - shows Zeron's chats in a small floating window on a global shortcut, so you can follow and steer them from any app.
 
 It talks to Zeron's engine over its local IPC and doesn't build against Zeron's code, so new Zeron releases don't need a new zeron-tools. `zeron-tools <command> --help` lists every option.
+
+`install` also runs Zeron's engine as a service of its own (Zeron's `daemon` command), so Zeron works while the app is closed, and you can quit the app to save memory. When you open the app, it connects to that engine. When the app updates itself, the engine restarts into the new version once no agent works. Desktop banners come from the app's own engine, so the service doesn't post them; the phone's notifications still work. The first `install` quits the app and restarts the engine, so it refuses while agents work. To go back to the app's own engine, run `"/Applications/Zeron.app/Contents/MacOS/Zeron Engine" daemon uninstall`. The engine logs to `~/.zeron/daemon.log`.
 
 ## Installation
 
@@ -20,9 +22,9 @@ The script puts the binary in `~/.local/bin`. Pin an older release with `ZERON_T
 
 zeron-tools has three commands:
 
-- `install` runs it in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log` and `~/Library/Logs/zeron-tools-companion.log`. Run it again to change the options.
+- `install` runs it, and Zeron's engine, in the background from then on: it starts at login, restarts after a crash, and logs to `~/Library/Logs/zeron-tools-connect.log` and `~/Library/Logs/zeron-tools-companion.log`. Run it again to change the options.
 - `update` installs the latest release and restarts the background services.
-- `uninstall` stops them.
+- `uninstall` stops them. Zeron's engine keeps running.
 
 ## Usage
 
@@ -32,7 +34,7 @@ zeron-tools install --no-rename                  # archive only
 zeron-tools install --shortcut cmd+shift+k       # another shortcut for the chats window
 ```
 
-- The upkeep runs a minute after Zeron opens, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
+- The upkeep runs a minute after Zeron's engine starts, then every 15 minutes. Archived chats move to Zeron's Archived shelf and stay searchable and resumable. A chat you unarchive stays until it has new activity.
 - Titling waits until a chat has been idle for 10 minutes and doesn't touch titles Zeron's model or you wrote. It uses the `pi` CLI (default `--title-model gpt-6-luna`), 20 chats per call. The same model, with thinking off, cleans up dictation on the phone and in the companion: while you speak, a waveform stands in for the text, and only the cleaned-up words appear. With `--no-rename` they stay as heard.
 
 ## Chats window
@@ -54,4 +56,4 @@ Each Mac dials out to a small relay, so no VPN or open ports are needed. You sig
   echo "https://zeron.iyazerski.dev/#/setup/$(kubectl get secret zeron-relay-secrets -o jsonpath='{.data.SETUP_TOKEN}' | base64 -d)"
   ```
 
-- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows (`install` with the relay and token; the link is saved). Zeron may be closed: the app shows that and can open it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).
+- **Each Mac:** in the app, open **⋯** → **Add a Mac** and run the command it shows (`install` with the relay and token; the link is saved). If Zeron's engine stops, the app shows that and can start it, or restart it when it hangs. The app shows one Mac at a time. Keep the Mac awake. Notifications wait until the Mac has been idle for 2 minutes (`--notify-always` skips that).

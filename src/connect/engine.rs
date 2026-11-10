@@ -5,17 +5,18 @@
 //! opens or closes. When Zeron comes up (and now and then while it runs) it
 //! also checks that the data this tool reads still parses; if Zeron changed
 //! it, Zeron counts as outdated and calls are refused, rather than failing
-//! one by one. The phone can open Zeron, or restart it when it hangs.
+//! one by one. The phone can start Zeron's engine service ([`daemon`]), or
+//! restart it when it hangs.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde_json::json;
 use tokio::sync::{Notify, watch};
 use zeron_relay_proto::Engine;
 
-use crate::zeron::{Zeron, ipc, methods};
+use crate::zeron::{Zeron, daemon, ipc, methods};
 
 /// How often to probe while Zeron is closed: short, so it shows up soon
 /// after the phone opens it.
@@ -30,10 +31,6 @@ const CHECK_EVERY: u32 = 20;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The compatibility check reads a few snapshots; a starting engine may be slow.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-/// Zeron's bundle id, for `open -b` and quitting it.
-const BUNDLE_ID: &str = "sh.zeron.app";
-/// Quits an app by bundle id, force-quitting it if it hangs.
-const QUIT_SCRIPT: &str = include_str!("quit.js");
 
 /// Zeron's state as the prober last saw it, and opening or restarting Zeron.
 #[derive(Clone)]
@@ -55,19 +52,19 @@ impl EngineWatch {
         self.state.clone()
     }
 
-    /// Start Zeron hidden in the background, as if opened from the Dock.
+    /// Start Zeron's engine service if it's stopped.
     pub async fn open(&self) -> Result<()> {
-        open().await?;
+        daemon::start().await?;
         self.wake.notify_one();
         Ok(())
     }
 
-    /// Quit Zeron (force-quitting it if it hangs), then start it again.
-    /// Works while Zeron is closed too: then it just opens it.
+    /// Restart Zeron's engine service, killing the engine if it hangs.
+    /// Works while it's stopped too: then it just starts it.
     pub async fn restart(&self) -> Result<()> {
-        quit().await?;
+        daemon::restart().await?;
         self.wake.notify_one();
-        self.open().await
+        Ok(())
     }
 
     /// Return a watch stuck at `state`, with no prober.
@@ -233,41 +230,4 @@ fn describe(state: &Engine) -> String {
         Engine::Running { running: Some(v) } => format!("Zeron {v} is open"),
         _ => refusal(state).unwrap_or_else(|| "Zeron is open".into()),
     }
-}
-
-/// Start Zeron hidden in the background, as if opened from the Dock.
-async fn open() -> Result<()> {
-    let out = tokio::process::Command::new("/usr/bin/open")
-        .args(["-g", "-j", "-b", BUNDLE_ID])
-        .output()
-        .await
-        .context("running open")?;
-    if !out.status.success() {
-        bail!(
-            "couldn't open Zeron: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
-/// Quit Zeron, force-quitting it if it hangs.
-async fn quit() -> Result<()> {
-    let out = tokio::process::Command::new("/usr/bin/osascript")
-        .args(["-l", "JavaScript", "-e", QUIT_SCRIPT, BUNDLE_ID])
-        .output()
-        .await
-        .context("running osascript")?;
-    // The script answers `closed`, `quit`, `killed` (force-quit), or `stuck`.
-    let outcome = String::from_utf8_lossy(&out.stdout);
-    match (out.status.success(), outcome.trim()) {
-        (_, "stuck") => bail!("couldn't quit Zeron: it's still running"),
-        (false, _) => bail!(
-            "couldn't quit Zeron: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        (true, "killed") => eprintln!("force-quit Zeron for a restart"),
-        (true, _) => eprintln!("quit Zeron for a restart"),
-    }
-    Ok(())
 }

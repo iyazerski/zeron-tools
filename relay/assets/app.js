@@ -274,12 +274,12 @@ async function openZeron(machine) {
   } catch (e) { toast({ title: "Couldn't open Zeron", body: e.message, kind: "error" }); }
 }
 
-/** Quit Zeron on a Mac (force-quitting it if it hangs) and start it again. */
+/** Restart Zeron's engine on a Mac; launchd kills it if it hangs. */
 async function restartZeron(machine) {
   const name = machineName(machine);
   if (!confirm(`Restart Zeron on ${name}? Agents that are working stop.`)) return;
   haptic(8);
-  toast({ title: `Restarting Zeron on ${name}`, body: "A hung Zeron takes about 15 seconds.", kind: "info", timeout: 4000 });
+  toast({ title: `Restarting Zeron on ${name}`, body: "A hung Zeron takes about 20 seconds.", kind: "info", timeout: 4000 });
   try {
     await call(machine, "restart_zeron");
     toast({ title: `Zeron restarted on ${name}`, body: "Its chats are back in a few seconds.", kind: "done", timeout: 3000 });
@@ -1766,7 +1766,7 @@ function macPage(m, close) {
     h("div", { class: "note", style: { marginTop: "-8px" } }, withBattery(m, sub)),
     state !== "offline" && h("div", { class: "group" }, state === "closed"
       ? itemRow({ iconName: "laptop", label: "Open Zeron", onclick: () => { close(); openZeron(m.id); } })
-      : itemRow({ iconName: "restart", label: "Restart Zeron", sub: "Quits it, or force-quits it if it hangs, then opens it", onclick: () => { close(); restartZeron(m.id); } })),
+      : itemRow({ iconName: "restart", label: "Restart Zeron", sub: "Restarts its engine, even if it hangs", onclick: () => { close(); restartZeron(m.id); } })),
     h("div", { class: "group" }, itemRow({ iconName: "trash", label: "Remove this Mac", cls: "danger", onclick: async () => {
       if (!confirm(`Remove ${m.name}? It disconnects now, and needs a new token to connect again.`)) return;
       try { await post("/api/machines/remove", { id: m.id }); close(); toast({ title: `${m.name} removed`, kind: "done" }); }
