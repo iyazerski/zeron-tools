@@ -122,6 +122,24 @@ impl Message {
             .collect();
         texts.join("\n\n")
     }
+
+    /// The prose after the message's last tool group or error: the answer
+    /// that ends the turn, as Markdown; `None` when it ends without prose.
+    pub fn answer(&self) -> Option<String> {
+        let tail = self
+            .parts
+            .iter()
+            .rposition(|p| !matches!(p, Part::Text { .. }))
+            .map_or(0, |i| i + 1);
+        let texts: Vec<&str> = self.parts[tail..]
+            .iter()
+            .filter_map(|p| match p {
+                Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        (!texts.is_empty()).then(|| texts.join("\n\n"))
+    }
 }
 
 /// Questions the agent waits on, as Zeron asks them.
@@ -258,6 +276,41 @@ pub fn levels_of<'a>(models: &'a [Model], harness: &'a [String], model: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn answer_is_the_prose_after_the_last_tools_or_error() {
+        let text = |t: &str| Part::Text { text: t.into() };
+        let tools = || Part::Tools {
+            tools: vec!["ran ls".into()],
+        };
+        let error = || Part::Error {
+            error: "boom".into(),
+        };
+        let cases = [
+            (vec![text("a")], Some("a")),
+            (
+                vec![text("a"), tools(), text("b"), tools(), text("c")],
+                Some("c"),
+            ),
+            (
+                vec![text("a"), tools(), text("b"), text("c")],
+                Some("b\n\nc"),
+            ),
+            (vec![text("a"), error(), text("b")], Some("b")),
+            (vec![text("a"), tools()], None),
+            (vec![], None),
+        ];
+        for (parts, want) in cases {
+            let m = Message {
+                id: "m".into(),
+                role: Role::Assistant,
+                created_at: 0,
+                status: None,
+                parts,
+            };
+            assert_eq!(m.answer().as_deref(), want);
+        }
+    }
 
     #[test]
     fn statuses_read_back_from_their_labels() {

@@ -4,11 +4,11 @@
 use rune::{El, ScrollSpec, Span, TextStyle, Tx, col, icon, rich, row, text};
 use rune_kit::markdown::MarkdownStyle;
 use rune_kit::{
-    Button, ButtonVariant, IconButton, IconButtonVariant, Kit, Markdown, Menu, MenuItem, Spinner,
-    TextInput,
+    Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown, Menu,
+    MenuItem, Spinner, TextInput,
 };
 
-use super::{code, copy, icons};
+use super::{code, icons};
 
 use super::widgets::{dot, engine_note, head, head_titles, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
@@ -330,9 +330,10 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
             Part::Text { text } => Markdown::new(text.clone())
                 .style(style.clone())
                 .highlights(code::inline_code_marks(k, text))
-                .block_keys(copy::block_keys(text))
                 .streaming(streaming && i + 1 == m.parts.len())
                 .selectable(true)
+                .copy_source(true)
+                .on_link_tx(|_: &mut State, url: &str, tx: &mut Tx| drop(tx.open_url(url)))
                 .build(k)
                 .key(format!("{}#{i}", m.id)),
             Part::Tools { tools } => tool_group(page, k, &format!("{}#{i}", m.id), tools),
@@ -341,6 +342,41 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
     }
     if m.status == Some(MessageStatus::Aborted) {
         out = out.child(text("Stopped").font(k.ty.small).color(k.c.text_faint));
+    }
+    if !streaming {
+        out = out.child(footer(k, m));
+    }
+    out
+}
+
+/// When the message started, and a button that copies its closing answer as
+/// Markdown, as the desktop shows under a finished reply.
+fn footer(k: &Kit, m: &Message) -> El {
+    let mut out = row().gap(8.0).center_y();
+    if let Some(at) = chrono::DateTime::from_timestamp_millis(m.created_at) {
+        out = out.child(
+            text(
+                at.with_timezone(&chrono::Local)
+                    .format("%b %-d, %-I:%M %p")
+                    .to_string(),
+            )
+            .font(k.ty.small)
+            .color(k.c.text_faint),
+        );
+    }
+    if let Some(answer) = m.answer() {
+        out = out.child(
+            IconButton::new(&icons::COPY)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(ControlSize::Small)
+                .label("Copy")
+                .help("Copy the answer")
+                .on_press_tx(move |s: &mut State, tx: &mut Tx| {
+                    tx.copy(answer.clone());
+                    s.notify("Copied");
+                })
+                .build(k),
+        );
     }
     out
 }
