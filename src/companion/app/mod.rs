@@ -57,8 +57,35 @@ pub enum Page {
 pub struct ListState {
     pub chats: Option<Vec<Chat>>,
     pub query: TextEdit,
+    pub filter: ListFilter,
     pub error: Option<String>,
     poll: Poll,
+}
+
+/// Which chats the list shows, by status.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ListFilter {
+    #[default]
+    All,
+    Working,
+    /// Finished since they were last opened: the ones marked Done.
+    Done,
+    /// Active in the last `RECENT`.
+    Recent,
+}
+
+impl ListFilter {
+    /// The filters in the order the list offers them.
+    pub const ALL: [Self; 4] = [Self::All, Self::Working, Self::Done, Self::Recent];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Working => "Working",
+            Self::Done => "Done",
+            Self::Recent => "Recent",
+        }
+    }
 }
 
 pub struct Toast {
