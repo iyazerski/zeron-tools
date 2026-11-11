@@ -9,9 +9,10 @@ use super::icons;
 use super::widgets::{busy, head, head_titles, hide_button};
 use crate::companion::app::{Changes, Existing, State};
 use crate::companion::data::TurnChanges;
+use crate::text::one_line;
 
 /// "3 files changed +12 −4", pressed to open the diff.
-pub fn button(k: &Kit, counts: TurnChanges) -> El {
+pub fn button(k: &Kit, counts: &TurnChanges) -> El {
     let small = TextStyle {
         size: 12.0,
         ..k.ty.ui
@@ -26,6 +27,7 @@ pub fn button(k: &Kit, counts: TurnChanges) -> El {
         Span::new(0, plus).color(k.c.success.fg),
         Span::new(plus + 1, stats.len()).color(k.c.danger.fg),
     ];
+    let turn = counts.turn.clone();
     let face = row()
         .key("turn-changes")
         .gap(8.0)
@@ -46,14 +48,22 @@ pub fn button(k: &Kit, counts: TurnChanges) -> El {
         );
     row().w_full().child(
         k.interactive(face)
-            .label("Show the changes of the latest turn")
-            .on_press(State::open_changes),
+            .label("Show the changes of this turn")
+            .on_press(move |s: &mut State| s.open_changes(&turn)),
     )
 }
 
 /// The diff page: the back button returns to the chat.
 pub fn page(s: &State, chat: &Existing, changes: &Changes, k: &Kit) -> El {
-    let title = chat.chat.as_ref().map(|c| c.title()).unwrap_or_default();
+    // The prompt that started the turn names it; the chat's title if it's not loaded.
+    let prompt = chat.read.as_ref().and_then(|r| {
+        let m = r.messages.iter().find(|m| m.id == chat.changes_of)?;
+        Some(one_line(&m.text(), 120))
+    });
+    let title = prompt.unwrap_or_else(|| {
+        let title = chat.chat.as_ref().map(|c| c.title()).unwrap_or_default();
+        title.to_owned()
+    });
     let back = IconButton::new(&icons::BACK)
         .variant(IconButtonVariant::Ghost)
         .label("Back")
@@ -63,13 +73,13 @@ pub fn page(s: &State, chat: &Existing, changes: &Changes, k: &Kit) -> El {
     let titles = head_titles()
         .gap(1.0)
         .child(
-            text("Latest turn changes")
+            text("Turn changes")
                 .font(k.ty.ui_medium)
                 .color(k.c.text_base)
                 .truncate(),
         )
         .child(
-            text(title.to_owned())
+            text(title)
                 .font(k.ty.text_xsmall)
                 .color(k.c.text_faint)
                 .truncate(),

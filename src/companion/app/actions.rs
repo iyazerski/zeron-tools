@@ -90,15 +90,16 @@ impl State {
         );
     }
 
-    /// Open the chat's latest turn diff in place of its transcript.
-    pub fn open_changes(&mut self) {
+    /// Open the diff of the chat's turn `turn` in place of its transcript.
+    pub fn open_changes(&mut self, turn: &str) {
         let Some(page) = self.chat_mut() else { return };
         let nav = page.nav;
         let Some(chat) = page.existing_mut() else {
             return;
         };
         chat.changes = Some(Changes::Loading);
-        let args = json!({ "chat": chat.id });
+        turn.clone_into(&mut chat.changes_of);
+        let args = json!({ "chat": chat.id, "turn": turn });
         self.api.call(
             "turn_changes",
             args,
