@@ -77,12 +77,6 @@ pub async fn start() -> Result<()> {
     daemon(&["start"], &[]).await
 }
 
-/// Restart the service; launchd kills the engine if it hangs.
-pub async fn restart() -> Result<()> {
-    require_installed()?;
-    daemon(&["restart"], &[]).await
-}
-
 /// The way to stop the service, for the user to run.
 pub fn uninstall_command() -> String {
     format!(

@@ -5,8 +5,7 @@
 //! opens or closes. When Zeron comes up (and now and then while it runs) it
 //! also checks that the data this tool reads still parses; if Zeron changed
 //! it, Zeron counts as outdated and calls are refused, rather than failing
-//! one by one. The phone can start Zeron's engine service ([`daemon`]), or
-//! restart it when it hangs.
+//! one by one. The phone can start Zeron's engine service ([`daemon`]).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,11 +31,11 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The compatibility check reads a few snapshots; a starting engine may be slow.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Zeron's state as the prober last saw it, and opening or restarting Zeron.
+/// Zeron's state as the prober last saw it, and opening Zeron.
 #[derive(Clone)]
 pub struct EngineWatch {
     state: watch::Receiver<Engine>,
-    /// Wakes the prober early, so a restart shows up without waiting a full
+    /// Wakes the prober early, so a start shows up without waiting a full
     /// probe interval.
     wake: Arc<Notify>,
 }
@@ -55,14 +54,6 @@ impl EngineWatch {
     /// Start Zeron's engine service if it's stopped.
     pub async fn open(&self) -> Result<()> {
         daemon::start().await?;
-        self.wake.notify_one();
-        Ok(())
-    }
-
-    /// Restart Zeron's engine service, killing the engine if it hangs.
-    /// Works while it's stopped too: then it just starts it.
-    pub async fn restart(&self) -> Result<()> {
-        daemon::restart().await?;
         self.wake.notify_one();
         Ok(())
     }

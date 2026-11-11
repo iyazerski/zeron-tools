@@ -28,7 +28,6 @@ const ICONS = {
   "bot": ["0 0 24 24", "", "<g fill=\"none\"><path stroke=\"currentColor\" stroke-width=\"1.5\" d=\"M4.75 10.5C4.75 8.98122 5.98122 7.75 7.5 7.75H16.5C18.0188 7.75 19.25 8.98122 19.25 10.5V16.5C19.25 18.0188 18.0188 19.25 16.5 19.25H7.5C5.98122 19.25 4.75 18.0188 4.75 16.5V10.5Z\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M12 7.5V5.25\"/><path fill=\"currentColor\" d=\"M13.25 3.75C13.25 4.44036 12.6904 5 12 5C11.3096 5 10.75 4.44036 10.75 3.75C10.75 3.05964 11.3096 2.5 12 2.5C12.6904 2.5 13.25 3.05964 13.25 3.75Z\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M9.25 12.25V14\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M14.75 12.25V14\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M2 12.5V15\"/><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M22 12.5V15\"/></g>"],
   "archive": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M2 12c0-4.714 0-7.071 1.464-8.536C4.93 2 7.286 2 12 2s7.071 0 8.535 1.464C22 4.93 22 7.286 22 12\"/><path d=\"M2 14c0-2.8 0-4.2.545-5.27A5 5 0 0 1 4.73 6.545C5.8 6 7.2 6 10 6h4c2.8 0 4.2 0 5.27.545a5 5 0 0 1 2.185 2.185C22 9.8 22 11.2 22 14s0 4.2-.545 5.27a5 5 0 0 1-2.185 2.185C18.2 22 16.8 22 14 22h-4c-2.8 0-4.2 0-5.27-.545a5 5 0 0 1-2.185-2.185C2 18.2 2 16.8 2 14Z\"/><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m9.5 14.4l1.429 1.6l3.571-4\"/></g>"],
   "laptop": ["0 0 24 24", "", "<g fill=\"none\"><path stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M19.647 15.536H4.353m15.294 0V8c0-1.886 0-2.828-.586-3.414C18.476 4 17.533 4 15.647 4H8.353c-1.886 0-2.828 0-3.414.586S4.353 6.114 4.353 8v7.536m15.294 0l1.744 1.8l.088.092a2 2 0 0 1 .52 1.284l.001.127c0 .15 0 .224-.004.287a2 2 0 0 1-1.87 1.87a5 5 0 0 1-.287.004H4.161c-.15 0-.224 0-.287-.004a2 2 0 0 1-1.87-1.87C2 19.063 2 18.988 2 18.84l.001-.127a2 2 0 0 1 .52-1.284l.088-.092l1.744-1.8M9.5 18.5h5\"/><path fill=\"currentColor\" d=\"M12.75 6.75a.75.75 0 1 1-1.5 0a.75.75 0 0 1 1.5 0\"/></g>"],
-  "restart": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\"", "<path d=\"M4.27 11a8 8 0 1 1 2.07 4.66\"/><path stroke-linejoin=\"round\" d=\"M6.84 20.66l-.63-2.86l2.86-.63\"/>"],
   "logout": ["0 0 24 24", "", "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\"><path d=\"M9.002 7c.012-2.175.109-3.353.877-4.121C10.758 2 12.172 2 15 2h1c2.829 0 4.243 0 5.122.879C22 3.757 22 5.172 22 8v8c0 2.828 0 4.243-.878 5.121C20.242 22 18.829 22 16 22h-1c-2.828 0-4.242 0-5.121-.879c-.768-.768-.865-1.946-.877-4.121\"/><path stroke-linejoin=\"round\" d=\"M15 12H2m0 0l3.5-3M2 12l3.5 3\"/></g>"],
   "trash": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-width=\"1.5\" d=\"M9.17 4a3.001 3.001 0 0 1 5.66 0m5.67 2h-17m15.333 2.5l-.46 6.9c-.177 2.654-.265 3.981-1.13 4.79s-2.196.81-4.856.81h-.774c-2.66 0-3.991 0-4.856-.81c-.865-.809-.954-2.136-1.13-4.79l-.46-6.9M9.5 11l.5 5m4.5-5l-.5 5\"/>"],
   "skill": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\"", "<path stroke-width=\"1.5\" d=\"M3.84453 7.92226C2.71849 6.79623 2.71849 4.97056 3.84453 3.84453C4.97056 2.71849 6.79623 2.71849 7.92226 3.84453L20.1555 16.0777C21.2815 17.2038 21.2815 19.0294 20.1555 20.1555C19.0294 21.2815 17.2038 21.2815 16.0777 20.1555L3.84453 7.92226Z\"/><path stroke-width=\"1.5\" d=\"M6 10L10 6\"/><path d=\"M16.1 2.30719C16.261 1.8976 16.8385 1.8976 16.9994 2.30719L17.4298 3.40247C17.479 3.52752 17.5776 3.62651 17.7022 3.67583L18.7934 4.1078C19.2015 4.26934 19.2015 4.849 18.7934 5.01054L17.7022 5.44252C17.5776 5.49184 17.479 5.59082 17.4298 5.71587L16.9995 6.81115C16.8385 7.22074 16.261 7.22074 16.1 6.81116L15.6697 5.71587C15.6205 5.59082 15.5219 5.49184 15.3973 5.44252L14.3061 5.01054C13.898 4.849 13.898 4.26934 14.3061 4.1078L15.3973 3.67583C15.5219 3.62651 15.6205 3.52752 15.6697 3.40247L16.1 2.30719Z\"/><path d=\"M19.9672 9.12945C20.1281 8.71987 20.7057 8.71987 20.8666 9.12945L21.0235 9.5288C21.0727 9.65385 21.1713 9.75284 21.2959 9.80215L21.6937 9.95965C22.1018 10.1212 22.1018 10.7009 21.6937 10.8624L21.2959 11.0199C21.1713 11.0692 21.0727 11.1682 21.0235 11.2932L20.8666 11.6926C20.7057 12.1022 20.1281 12.1022 19.9672 11.6926L19.8103 11.2932C19.7611 11.1682 19.6625 11.0692 19.5379 11.0199L19.14 10.8624C18.732 10.7009 18.732 10.1212 19.14 9.95965L19.5379 9.80215C19.6625 9.75284 19.7611 9.65385 19.8103 9.5288L19.9672 9.12945Z\"/><path d=\"M5.1332 15.3072C5.29414 14.8976 5.87167 14.8976 6.03261 15.3072L6.18953 15.7065C6.23867 15.8316 6.33729 15.9306 6.46188 15.9799L6.85975 16.1374C7.26783 16.2989 7.26783 16.8786 6.85975 17.0401L6.46188 17.1976C6.33729 17.2469 6.23867 17.3459 6.18953 17.471L6.03261 17.8703C5.87167 18.2799 5.29414 18.2799 5.1332 17.8703L4.97628 17.471C4.92714 17.3459 4.82852 17.2469 4.70393 17.1976L4.30606 17.0401C3.89798 16.8786 3.89798 16.2989 4.30606 16.1374L4.70393 15.9799C4.82852 15.9306 4.92714 15.8316 4.97628 15.7065L5.1332 15.3072Z\"/>"],
@@ -273,18 +272,6 @@ async function openZeron(machine) {
     await call(machine, "open_zeron");
     toast({ title: `Opening Zeron on ${machineName(machine)}`, kind: "info", timeout: 2600 });
   } catch (e) { toast({ title: "Couldn't open Zeron", body: e.message, kind: "error" }); }
-}
-
-/** Restart Zeron's engine on a Mac; launchd kills it if it hangs. */
-async function restartZeron(machine) {
-  const name = machineName(machine);
-  if (!confirm(`Restart Zeron on ${name}? Agents that are working stop.`)) return;
-  haptic(8);
-  toast({ title: `Restarting Zeron on ${name}`, body: "A hung Zeron takes about 20 seconds.", kind: "info", timeout: 4000 });
-  try {
-    await call(machine, "restart_zeron");
-    toast({ title: `Zeron restarted on ${name}`, body: "Its chats are back in a few seconds.", kind: "done", timeout: 3000 });
-  } catch (e) { toast({ title: "Couldn't restart Zeron", body: e.message, kind: "error" }); }
 }
 
 /** The note for a Mac that can't show chats, if it can't. */
@@ -1263,7 +1250,6 @@ function chatView(machine, id, fromList) {
         [harnessName(chat.harness), shortModel(chat.model), chat.reasoning, chat.project?.name, chat.branch, severalMacs() && machineName(machine)].filter(Boolean).join(" · ")),
       h("div", { class: "group" },
         isWorking() && itemRow({ iconName: "stop", label: "Stop the agent", cls: "danger", onclick: () => { close(); stop(); } }),
-        itemRow({ iconName: "restart", label: "Restart Zeron", sub: severalMacs() ? `On ${machineName(machine)}` : "If it hangs", onclick: () => { close(); restartZeron(machine); } }),
         itemRow({ iconName: "copy", label: "Copy link", onclick: () => { close(); copyText(location.href); toast({ title: "Link copied", kind: "done", timeout: 1800 }); } }),
         itemRow({ iconName: "archive", label: "Archive", cls: "danger", onclick: async () => {
           close();
@@ -1898,7 +1884,7 @@ function settingsSheet() {
   });
 }
 
-/** One Mac's page: start or restart its Zeron, or remove it. */
+/** One Mac's page: start its Zeron, or remove it. */
 function macPage(m, close) {
   const state = macState(m);
   const sub = { offline: "Offline. Run zeron-tools install on it.", closed: "Zeron is closed.",
@@ -1907,9 +1893,8 @@ function macPage(m, close) {
   return [
     h("h2", {}, m.name),
     h("div", { class: "note", style: { marginTop: "-8px" } }, withBattery(m, sub)),
-    state !== "offline" && h("div", { class: "group" }, state === "closed"
-      ? itemRow({ iconName: "laptop", label: "Open Zeron", onclick: () => { close(); openZeron(m.id); } })
-      : itemRow({ iconName: "restart", label: "Restart Zeron", sub: "Restarts its engine, even if it hangs", onclick: () => { close(); restartZeron(m.id); } })),
+    state === "closed" && h("div", { class: "group" },
+      itemRow({ iconName: "laptop", label: "Open Zeron", onclick: () => { close(); openZeron(m.id); } })),
     h("div", { class: "group" }, itemRow({ iconName: "trash", label: "Remove this Mac", cls: "danger", onclick: async () => {
       if (!confirm(`Remove ${m.name}? It disconnects now, and needs a new token to connect again.`)) return;
       try { await post("/api/machines/remove", { id: m.id }); close(); toast({ title: `${m.name} removed`, kind: "done" }); }

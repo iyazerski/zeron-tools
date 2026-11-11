@@ -464,17 +464,6 @@ impl State {
         );
     }
 
-    pub fn restart_zeron(&mut self) {
-        self.api.call(
-            "restart_zeron",
-            json!({}),
-            |s, result: Result<Value, String>, _| match result {
-                Ok(_) => s.notify("Restarting Zeron"),
-                Err(e) => s.fail("Couldn't restart Zeron", e),
-            },
-        );
-    }
-
     /// Load the skills for the `$` menu: the chat's agent's, or a new chat's in its project.
     pub fn load_skills(&mut self) {
         let Some(page) = self.chat_mut() else { return };
