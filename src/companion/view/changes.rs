@@ -33,7 +33,6 @@ pub fn button(k: &Kit, counts: TurnChanges) -> El {
         .h(30.0)
         .center_y()
         .radius(8.0)
-        .border(1.0, k.c.border_weak)
         .child(icon(&icons::DIFF, 14.0).color(k.c.icon_base))
         .child(text(files).font(small).color(k.c.text_muted))
         .child(rich(stats, spans).font(TextStyle {

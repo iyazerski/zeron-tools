@@ -1726,14 +1726,18 @@ function diffFile(file) {
   const fill = () => {
     if (body.childElementCount) return;
     if (!file.hunks.length) { body.append(h("div", { class: "dnote" }, file.note || "No line changes")); return; }
+    let widest = 0;
     for (const hunk of file.hunks) {
       body.append(h("div", { class: "dhunk" }, hunk.head));
       const rows = document.createDocumentFragment();
       for (const [kind, o, n, text] of hunk.lines) {
-        rows.append(h("div", { class: `dl d${kind}` }, h("span", { class: "no" }, o ?? ""), h("span", { class: "no" }, n ?? ""), h("span", { class: "src" }, text || " ")));
+        const no = n ?? o;
+        widest = Math.max(widest, no);
+        rows.append(h("div", { class: `dl d${kind}` }, h("span", { class: "no" }, no), h("span", { class: "src" }, text || " ")));
       }
       body.append(rows);
     }
+    body.style.setProperty("--nw", String(widest).length);
   };
   const slash = file.path.lastIndexOf("/");
   const head = h("summary", {}, icon("chevDown", "chev"), fileIcon(file.path),
