@@ -11,8 +11,8 @@
 //! [`composer`]), checked here and not on the relay: the raw IPC also opens
 //! terminals and writes files, and a compromised relay must not reach those.
 //! [`engine`] tracks whether Zeron is open (and opens it), and [`watch`]
-//! reports chats that finish, need an answer, or fail. [`power`] reports the
-//! battery.
+//! keeps each finished turn's changes ([`turns`]) and reports chats that
+//! finish, need an answer, or fail. [`power`] reports the battery.
 
 mod changes;
 mod chat;
@@ -22,12 +22,14 @@ mod engine;
 mod maintain;
 mod power;
 mod tools;
+mod turns;
 mod watch;
 
 pub use engine::{EngineWatch, spawn as watch_engine};
 pub use maintain::Upkeep;
 pub use tools::ChatStatus;
-pub use watch::NotifyWhen;
+pub use turns::Turns;
+pub use watch::{NotifyWhen, run as watch_chats};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -111,6 +113,7 @@ pub struct Opts {
     /// The relay link; without one, only the upkeep runs.
     pub relay: Option<Link>,
     pub zeron: Zeron,
+    pub turns: Turns,
     pub notify: NotifyWhen,
     pub upkeep: Upkeep,
     pub mode: RunMode,
@@ -120,17 +123,29 @@ pub struct Opts {
 /// manual run.
 pub async fn run(opts: Opts) -> Result<()> {
     let zeron = Arc::new(opts.zeron);
+    let turns = Arc::new(opts.turns);
     let engine = engine::spawn(zeron.clone());
     let pi = opts.upkeep.pi.clone();
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.changes(), opts.upkeep));
+    // Notices wait here while the relay is unreachable.
+    let (notices_tx, notices) = mpsc::channel(QUEUE);
+    let notify = opts.relay.is_some().then_some(watch::Notices {
+        to: notices_tx,
+        when: opts.notify,
+    });
+    tokio::spawn(watch::run(
+        zeron.clone(),
+        engine.changes(),
+        turns.clone(),
+        notify,
+    ));
     if let Some(link) = opts.relay {
         let relay = Relay {
             link,
-            notify: opts.notify,
             mode: opts.mode,
             pi,
         };
-        relay.run(zeron, engine).await?;
+        relay.run(zeron, turns, engine, notices).await?;
     }
     // A failing exit would make launchd restart it forever, so the upkeep
     // goes on without the relay.
@@ -141,7 +156,6 @@ pub async fn run(opts: Opts) -> Result<()> {
 /// The link to the relay, kept up by [`Relay::run`].
 struct Relay {
     link: Link,
-    notify: NotifyWhen,
     mode: RunMode,
     /// The title model, which also cleans up dictation.
     pi: Option<Pi>,
@@ -150,16 +164,20 @@ struct Relay {
 impl Relay {
     /// Stay connected to the relay until it rejects the token. Returns `Ok`
     /// then if running as the launch agent.
-    async fn run(self, zeron: Arc<Zeron>, engine: EngineWatch) -> Result<()> {
+    async fn run(
+        self,
+        zeron: Arc<Zeron>,
+        turns: Arc<Turns>,
+        engine: EngineWatch,
+        mut notices: mpsc::Receiver<Notice>,
+    ) -> Result<()> {
         let url = socket_url(&self.link.relay)?;
         let mac = Arc::new(Mac {
-            zeron: zeron.clone(),
+            zeron,
+            turns,
             pi: self.pi,
             slots: Semaphore::new(MAX_CALLS),
         });
-        // Notices wait here while the relay is unreachable.
-        let (notices_tx, mut notices) = mpsc::channel(QUEUE);
-        tokio::spawn(watch::run(zeron, engine.changes(), notices_tx, self.notify));
         let mut battery = power::spawn();
         let mut backoff = MIN_BACKOFF;
         loop {
@@ -267,7 +285,15 @@ async fn run_call(mac: Arc<Mac>, engine: EngineWatch, call: Call) -> Up {
             .acquire()
             .await
             .map_err(|_| "connect is stopping")?;
-        call_tool(&mac.zeron, mac.pi.as_ref(), &engine, &tool, args).await
+        call_tool(
+            &mac.zeron,
+            &mac.turns,
+            mac.pi.as_ref(),
+            &engine,
+            &tool,
+            args,
+        )
+        .await
     };
     let result = tokio::time::timeout(TOOL_TIMEOUT, run)
         .await
@@ -314,6 +340,7 @@ fn hello() -> Up {
 /// This Mac's Zeron, as the relay's calls reach it.
 struct Mac {
     zeron: Arc<Zeron>,
+    turns: Arc<Turns>,
     pi: Option<Pi>,
     /// Limits the tool calls running at once ([`MAX_CALLS`]).
     slots: Semaphore,
@@ -328,7 +355,7 @@ enum Request {
     RestartZeron,
     /// The chat screen ([`chat::view`]).
     ChatView,
-    /// The latest turn's diff page ([`changes::turn`]).
+    /// A turn's diff page ([`changes::turn`]).
     TurnChanges,
     /// The composer footer ([`composer::info`]).
     ComposerInfo,
@@ -376,6 +403,7 @@ impl FromStr for Request {
 /// window) call it directly; the relay's calls come through here too.
 pub async fn call_tool(
     zeron: &Zeron,
+    turns: &Turns,
     pi: Option<&Pi>,
     engine: &EngineWatch,
     tool: &str,
@@ -387,7 +415,7 @@ pub async fn call_tool(
     {
         return Err(why);
     }
-    let run = dispatch(zeron, pi, engine, request, args);
+    let run = dispatch(zeron, turns, pi, engine, request, args);
     match tokio::time::timeout(TOOL_TIMEOUT, run).await {
         Ok(result) => result.map_err(|e| format!("{e:#}")),
         Err(_) => Err("Zeron didn't answer in time".into()),
@@ -397,6 +425,7 @@ pub async fn call_tool(
 /// Run `request` with its JSON `args`.
 async fn dispatch(
     zeron: &Zeron,
+    turns: &Turns,
     pi: Option<&Pi>,
     engine: &EngineWatch,
     request: Request,
@@ -405,8 +434,8 @@ async fn dispatch(
     match request {
         Request::OpenZeron => engine.open().await.map(|()| opening()),
         Request::RestartZeron => engine.restart().await.map(|()| opening()),
-        Request::ChatView => chat::view(zeron, parse_args(args)?).await,
-        Request::TurnChanges => changes::turn(zeron, parse_args(args)?).await,
+        Request::ChatView => chat::view(zeron, turns, parse_args(args)?).await,
+        Request::TurnChanges => changes::turn(zeron, turns, parse_args(args)?).await,
         Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
         Request::SetChatModel => composer::set_model(zeron, parse_args(args)?).await,
         Request::ListSkills => composer::skills(zeron, parse_args(args)?).await,
@@ -471,9 +500,11 @@ mod tests {
             thinking: "low".into(),
         };
         let zeron = Zeron::new(9, Path::new("/nonexistent"));
+        let turns = Turns::new(dir.path());
         let args = || json!({ "text": "um hello there" });
         let polished = call_tool(
             &zeron,
+            &turns,
             Some(&pi),
             &EngineWatch::fixed(Engine::Closed),
             "polish_dictation",
@@ -484,6 +515,7 @@ mod tests {
         assert_eq!(polished, json!({ "text": "Tidy: um hello there" }));
         let without = call_tool(
             &zeron,
+            &turns,
             None,
             &EngineWatch::fixed(Engine::Closed),
             "polish_dictation",
@@ -498,9 +530,13 @@ mod tests {
     async fn calls_wait_for_a_readable_zeron() {
         // Nothing listens here: a call that got through would fail differently.
         let zeron = Zeron::new(9, Path::new("/nonexistent"));
+        let turns = Turns::new(Path::new("/nonexistent"));
         let call = |engine: Engine, tool: &'static str| {
-            let zeron = &zeron;
-            async move { call_tool(zeron, None, &EngineWatch::fixed(engine), tool, json!({})).await }
+            let (zeron, turns) = (&zeron, &turns);
+            async move {
+                let engine = EngineWatch::fixed(engine);
+                call_tool(zeron, turns, None, &engine, tool, json!({})).await
+            }
         };
         let closed = call(Engine::Closed, "list_chats").await.unwrap_err();
         assert_eq!(closed, "Zeron isn't open on this Mac");
@@ -541,6 +577,7 @@ mod tests {
         });
         let mac = Arc::new(Mac {
             zeron: Arc::new(Zeron::new(9, Path::new("/nonexistent"))),
+            turns: Arc::new(Turns::new(Path::new("/nonexistent"))),
             pi: None,
             slots: Semaphore::new(MAX_CALLS),
         });

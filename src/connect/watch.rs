@@ -1,5 +1,6 @@
-//! Report chats that finish, need an answer, or fail, so the relay can
-//! notify the phone.
+//! Follow chat statuses: capture each turn's changes as it ends, and report
+//! chats that finish, need an answer, or fail, so the relay can notify the
+//! phone.
 //!
 //! It follows the engine's `WatchSessions` stream and reports a status
 //! change. By default it stays quiet while the Mac is in use, since then
@@ -16,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
 
 use super::changes;
+use super::turns::Turns;
 use crate::text::one_line;
 use crate::zeron::transcript;
 use crate::zeron::types::{Session, SessionStatus};
@@ -49,22 +51,29 @@ impl NotifyWhen {
     }
 }
 
-/// Follow chat statuses whenever Zeron runs, and send notices for changes.
+/// Where notices go, and when they may.
+pub struct Notices {
+    pub to: mpsc::Sender<Notice>,
+    pub when: NotifyWhen,
+}
+
+/// Follow chat statuses whenever Zeron runs: keep each finished turn's
+/// changes in `turns`, and send `notices`, if given, for changes.
 pub async fn run(
     zeron: Arc<Zeron>,
     mut engine: watch::Receiver<Engine>,
-    notices: mpsc::Sender<Notice>,
-    notify: NotifyWhen,
+    turns: Arc<Turns>,
+    notices: Option<Notices>,
 ) {
     loop {
         // An outdated Zeron may speak another IPC, so it isn't watched either.
         if engine.wait_for(Engine::is_running).await.is_err() {
             return;
         }
-        if let Err(e) = watch_once(&zeron, &notices, notify).await {
+        if let Err(e) = watch_once(&zeron, &turns, notices.as_ref()).await {
             // Zeron quitting ends the stream too; the engine log covers that.
             if engine.borrow().is_running() {
-                eprintln!("notifications paused: {e:#}");
+                eprintln!("watching chats paused: {e:#}");
             }
         }
         tokio::time::sleep(RETRY).await;
@@ -74,8 +83,8 @@ pub async fn run(
 /// Follow one `WatchSessions` stream until it ends.
 async fn watch_once(
     zeron: &Arc<Zeron>,
-    notices: &mpsc::Sender<Notice>,
-    notify: NotifyWhen,
+    turns: &Arc<Turns>,
+    notices: Option<&Notices>,
 ) -> Result<()> {
     let mut stream = zeron.subscribe(methods::WATCH_SESSIONS, json!({})).await?;
     // The first snapshot is the baseline: nothing has changed yet.
@@ -88,11 +97,19 @@ async fn watch_once(
             .map(|s| ((s.chat_id.clone(), s.device_id.clone()), s))
             .collect();
         if let Some(previous) = &known {
-            for (chat, kind) in changes(previous, &current) {
-                if kind == NoticeKind::Finished {
-                    spawn_freeze(zeron.clone(), chat.clone());
+            // Stopped turns settle in idle too, and their changes count.
+            for (key, now) in &current {
+                let settled = previous
+                    .get(key)
+                    .is_some_and(|before| before.status != SessionStatus::Idle);
+                if settled && now.status == SessionStatus::Idle {
+                    spawn_freeze(zeron.clone(), turns.clone(), now.chat_id.clone());
                 }
-                spawn_notice(zeron.clone(), notices.clone(), notify, chat, kind);
+            }
+            if let Some(notices) = notices {
+                for (chat, kind) in changes(previous, &current) {
+                    spawn_notice(zeron.clone(), notices.to.clone(), notices.when, chat, kind);
+                }
             }
         }
         known = Some(current);
@@ -142,9 +159,9 @@ fn spawn_notice(
 
 /// Capture the turn `chat` just finished in its own task, before later
 /// edits in its folder can blur it.
-fn spawn_freeze(zeron: Arc<Zeron>, chat: String) {
+fn spawn_freeze(zeron: Arc<Zeron>, turns: Arc<Turns>, chat: String) {
     tokio::spawn(async move {
-        match tokio::time::timeout(NOTICE_TIMEOUT, changes::freeze(&zeron, &chat)).await {
+        match tokio::time::timeout(NOTICE_TIMEOUT, changes::freeze(&zeron, &turns, &chat)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => eprintln!("turn changes of {chat}: {e:#}"),
             Err(_) => eprintln!("turn changes of {chat}: Zeron didn't answer in time"),

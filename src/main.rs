@@ -342,6 +342,7 @@ async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     connect::run(connect::Opts {
         relay,
         zeron: Zeron::new(global.ipc_port, &data_dir),
+        turns: connect::Turns::new(&data_dir),
         notify,
         upkeep,
         mode,
