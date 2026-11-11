@@ -549,7 +549,7 @@ a { color: inherit; text-decoration: none; }
 /* ---- turn changes ------------------------------------------------------- */
 
 .turn-changes {
-  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+  display: inline-flex; align-self: flex-start; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
   margin-left: -10px; border-radius: 10px; font-size: 13.5px; color: var(--secondary);
 }
 .turn-changes:active { background: var(--control); }
