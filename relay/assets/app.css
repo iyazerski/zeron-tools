@@ -549,8 +549,8 @@ a { color: inherit; text-decoration: none; }
 /* ---- turn changes ------------------------------------------------------- */
 
 .turn-changes {
-  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px;
-  border: 1px solid var(--rail); border-radius: 10px; font-size: 13.5px; color: var(--secondary);
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px;
+  margin-left: -10px; border-radius: 10px; font-size: 13.5px; color: var(--secondary);
 }
 .turn-changes:active { background: var(--control); }
 .turn-changes .i { width: 16px; height: 16px; }
@@ -574,13 +574,14 @@ a { color: inherit; text-decoration: none; }
 .dbody { font-family: var(--mono); font-size: 12px; line-height: 18px; padding-bottom: 8px; }
 .dhunk { padding: 4px 14px; color: var(--tertiary); background: var(--control); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dnote { padding: 8px 14px; color: var(--tertiary); font-family: var(--sans, inherit); }
-.dl { display: grid; grid-template-columns: auto auto 1fr; }
-.dl .no { min-width: 34px; padding: 0 6px; text-align: right; color: var(--tertiary); user-select: none; -webkit-user-select: none; }
-.dl .src { padding: 0 12px 0 8px; white-space: pre-wrap; word-break: break-all; min-width: 0; }
+/* One narrow gutter, as wide as the file's longest line number: the new side's, or the old side's for a deleted line. */
+.dl { display: grid; grid-template-columns: calc(var(--nw, 3) * 1ch + 6px) 1fr; }
+.dl .no { padding-right: 2px; text-align: right; font-size: 10.5px; color: var(--tertiary); user-select: none; -webkit-user-select: none; }
+.dl .src { padding: 0 10px 0 6px; white-space: pre-wrap; word-break: break-all; min-width: 0; }
 .dl.dadd { background: rgb(from var(--success) r g b / .12); }
 .dl.ddel { background: rgb(from var(--danger) r g b / .12); }
-.dl.dadd .no:nth-child(2) { color: var(--success); }
-.dl.ddel .no:first-child { color: var(--danger); }
+.dl.dadd .no { color: var(--success); }
+.dl.ddel .no { color: var(--danger); }
 
 /* ---- sheets ------------------------------------------------------------- */
 
