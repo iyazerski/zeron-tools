@@ -99,11 +99,6 @@ pub static ARCHIVE: Icon = icon(
     24.0,
     r#"<path d="M2 12c0-4.714 0-7.071 1.464-8.536C4.93 2 7.286 2 12 2s7.071 0 8.535 1.464C22 4.93 22 7.286 22 12" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="6" width="20" height="16" rx="5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="m9.5 14.4l1.429 1.6l3.571-4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>"#,
 );
-pub static RESTART: Icon = icon(
-    "restart",
-    24.0,
-    r#"<path d="M4.27 11a8 8 0 1 1 2.07 4.66" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6.84 20.66l-.63-2.86l2.86-.63" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>"#,
-);
 pub static SKILL: Icon = icon(
     "skill",
     24.0,

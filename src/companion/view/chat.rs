@@ -151,15 +151,6 @@ fn more_menu(page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
         );
     }
     menu.item(
-        MenuItem::new("Restart Zeron")
-            .icon(&icons::RESTART)
-            .description("If it hangs")
-            .on_select(|s: &mut State| {
-                close_menu(s);
-                s.restart_zeron();
-            }),
-    )
-    .item(
         MenuItem::new("Archive")
             .icon(&icons::ARCHIVE)
             .danger(true)

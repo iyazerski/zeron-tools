@@ -351,8 +351,6 @@ struct Mac {
 enum Request {
     /// Start Zeron; works while it's closed.
     OpenZeron,
-    /// Quit and start Zeron; works while it's closed or hangs.
-    RestartZeron,
     /// The chat screen ([`chat::view`]).
     ChatView,
     /// A turn's diff page ([`changes::turn`]).
@@ -372,10 +370,7 @@ enum Request {
 impl Request {
     /// Whether it needs a Zeron that is open and readable.
     fn needs_zeron(self) -> bool {
-        !matches!(
-            self,
-            Self::OpenZeron | Self::RestartZeron | Self::PolishDictation
-        )
+        !matches!(self, Self::OpenZeron | Self::PolishDictation)
     }
 }
 
@@ -385,7 +380,6 @@ impl FromStr for Request {
     fn from_str(name: &str) -> Result<Self, Unavailable> {
         Ok(match name {
             "open_zeron" => Self::OpenZeron,
-            "restart_zeron" => Self::RestartZeron,
             "chat_view" => Self::ChatView,
             "turn_changes" => Self::TurnChanges,
             "composer_info" => Self::ComposerInfo,
@@ -433,7 +427,6 @@ async fn dispatch(
 ) -> Result<Value> {
     match request {
         Request::OpenZeron => engine.open().await.map(|()| opening()),
-        Request::RestartZeron => engine.restart().await.map(|()| opening()),
         Request::ChatView => chat::view(zeron, turns, parse_args(args)?).await,
         Request::TurnChanges => changes::turn(zeron, turns, parse_args(args)?).await,
         Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
