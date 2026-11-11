@@ -242,6 +242,24 @@ pub struct Choice {
     pub id: String,
 }
 
+/// What a checkout changed (`zeron_proto::CheckoutDiff`): a `git diff` patch
+/// of every file, capped at Zeron's size limit.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutDiff {
+    pub patch: String,
+    pub files: Vec<DiffFile>,
+    pub additions: u32,
+    pub deletions: u32,
+    /// The patch stops at the cap, so it leaves files or lines out.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DiffFile {
+    pub path: String,
+}
+
 /// Pinned chats and user-made sidebar sections.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]

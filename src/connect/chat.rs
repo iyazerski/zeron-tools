@@ -11,6 +11,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::changes;
 use super::tools::{ChatStatus, summary};
 use crate::zeron::transcript::{self, Part, Role};
 use crate::zeron::{Zeron, session_for};
@@ -34,9 +35,10 @@ pub struct ViewArgs {
 ///
 /// `version` changes when the transcript moves (its length, last activity,
 /// or status) or `limit` changes. `read` holds the last `limit` messages,
-/// `total`, `olderRemaining`, and `pendingInput`; it is `null` when the
-/// caller passes the `known` version and the chat isn't working, since then
-/// nothing it shows can have changed.
+/// `total`, `olderRemaining`, `pendingInput`, and, once the turn is over
+/// and changed files, `turnChanges`; it is `null` when the caller passes
+/// the `known` version and the chat isn't working, since then nothing it
+/// shows can have changed.
 pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
     let chat = zeron.chat(&args.chat).await?;
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -54,7 +56,17 @@ pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
     );
     // While a turn streams, its last message changes without moving the version.
     let unchanged = args.known.as_deref() == Some(version.as_str()) && !status.is_working();
-    let read = (!unchanged).then(|| window(&messages, limit));
+    let mut read = (!unchanged).then(|| window(&messages, limit));
+    // Counted once per finished turn, as an idle chat's version holds still.
+    if let Some(read) = read.as_mut()
+        && !status.is_working()
+    {
+        match changes::counts(zeron, &chat, &spaces).await {
+            Ok(counts) => read["turnChanges"] = json!(counts),
+            // The chat screen still shows; it only loses its changes button.
+            Err(e) => eprintln!("can't read {}'s turn changes: {e:#}", chat.id),
+        }
+    }
     Ok(json!({
         "chat": summary(&chat, &spaces, &sessions),
         "version": version,
