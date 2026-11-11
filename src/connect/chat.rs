@@ -6,15 +6,13 @@
 //! `read_chat`, each message keeps its prose, tool calls, and errors in
 //! transcript order, as the desktop shows them.
 
-use std::collections::{HashMap, HashSet};
-
 use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::tools::{ChatStatus, summary};
-use crate::zeron::transcript::{self, Entry, Part, Rendered, Role};
+use crate::zeron::transcript::{self, Part, Role};
 use crate::zeron::{Zeron, session_for};
 
 /// Messages per page, as `read_chat`.
@@ -44,11 +42,11 @@ pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let (spaces, sessions, entries) =
         tokio::try_join!(zeron.spaces(), zeron.sessions(), zeron.transcript(&chat))?;
-    let rendered = transcript::render(&entries);
+    let messages = transcript::messages(&entries);
     let status = ChatStatus::of(session_for(&sessions, &chat), Utc::now());
     let version = format!(
         "{}|{}|{}|{limit}",
-        rendered.len(),
+        messages.len(),
         chat.last_message_at
             .map(|t| t.to_rfc3339())
             .unwrap_or_default(),
@@ -56,7 +54,7 @@ pub async fn view(zeron: &Zeron, args: ViewArgs) -> Result<Value> {
     );
     // While a turn streams, its last message changes without moving the version.
     let unchanged = args.known.as_deref() == Some(version.as_str()) && !status.is_working();
-    let read = (!unchanged).then(|| window(&entries, &rendered, limit));
+    let read = (!unchanged).then(|| window(&messages, limit));
     Ok(json!({
         "chat": summary(&chat, &spaces, &sessions),
         "version": version,
@@ -89,57 +87,31 @@ enum Shown<'a> {
 }
 
 /// The last `limit` messages, shaped like `read_chat`'s answer.
-fn window(entries: &[Entry], rendered: &[Rendered], limit: usize) -> Value {
-    let start = rendered.len().saturating_sub(limit);
-    let page = &rendered[start..];
-    let owned = entries_of(entries, page);
-    let messages: Vec<Message> = page
+fn window(all: &[transcript::Message], limit: usize) -> Value {
+    let start = all.len().saturating_sub(limit);
+    let messages: Vec<Message> = all[start..]
         .iter()
         .map(|m| Message {
-            id: &m.id,
-            role: m.role,
-            created_at: m.created_at,
-            status: m.status.as_deref(),
-            parts: parts(owned.get(m.id.as_str()).map_or(&[], Vec::as_slice)),
+            id: m.id(),
+            role: m.role(),
+            created_at: m.created_at(),
+            status: m.status(),
+            parts: parts(m.parts()),
         })
         .collect();
     json!({
-        "total": rendered.len(),
+        "total": all.len(),
         "olderRemaining": start,
         // From the whole transcript, not just the page shown.
-        "pendingInput": transcript::pending_input(rendered),
+        "pendingInput": transcript::pending_input(all),
         "messages": messages,
     })
 }
 
-/// Map each message on `page` to its entries: its own and the continuations
-/// folded into it, in order.
-fn entries_of<'a>(entries: &'a [Entry], page: &[Rendered]) -> HashMap<&'a str, Vec<&'a Entry>> {
-    let shown: HashSet<&str> = page.iter().map(|m| m.id.as_str()).collect();
-    let mut owned: HashMap<&str, Vec<&Entry>> = HashMap::new();
-    // As `transcript::render`: a continuation folds into its parent only if
-    // the parent came before it; otherwise it stands alone.
-    let mut roots: HashSet<&str> = HashSet::new();
-    for entry in entries {
-        let root = entry
-            .continuation_of
-            .as_deref()
-            .filter(|parent| roots.contains(parent))
-            .unwrap_or(&entry.id);
-        if root == entry.id {
-            roots.insert(&entry.id);
-        }
-        if shown.contains(root) {
-            owned.entry(root).or_default().push(entry);
-        }
-    }
-    owned
-}
-
 /// A message's parts, in transcript order.
-fn parts<'a>(entries: &[&'a Entry]) -> Vec<Shown<'a>> {
+fn parts<'a>(all: impl Iterator<Item = &'a Part>) -> Vec<Shown<'a>> {
     let mut shown = Vec::new();
-    for part in entries.iter().flat_map(|e| &e.parts) {
+    for part in all {
         match part {
             Part::Text { text } if !text.trim().is_empty() => shown.push(Shown::Text { text }),
             Part::Error { message } => shown.push(Shown::Error { error: message }),
@@ -198,8 +170,7 @@ mod tests {
                 ]),
             ),
         ];
-        let rendered = transcript::render(&entries);
-        let read = window(&entries, &rendered, 2);
+        let read = window(&transcript::messages(&entries), 2);
         assert_eq!(read["olderRemaining"], 1);
         assert_eq!(
             read["messages"],

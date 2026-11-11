@@ -169,18 +169,16 @@ async fn notice(zeron: &Zeron, chat_id: &str, kind: NoticeKind) -> Result<Notice
         NoticeKind::Failed => "The turn failed.".to_owned(),
         NoticeKind::Input => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries);
-            let question = transcript::pending_input(&rendered)
+            let question = transcript::pending_input(&transcript::messages(&entries))
                 .and_then(|p| p.first_question())
                 .unwrap_or_default();
             format!("Needs your answer: {}", question.trim())
         }
         NoticeKind::Finished => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries);
-            rendered
+            transcript::messages(&entries)
                 .last()
-                .map(|m| m.text.trim().to_owned())
+                .map(|m| m.text().trim().to_owned())
                 .unwrap_or_default()
         }
     };

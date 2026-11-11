@@ -1,10 +1,10 @@
-//! Chat transcripts: the entries `WatchDocMessages` sends, and a flat,
-//! readable rendering of them.
+//! Chat transcripts: the entries `WatchDocMessages` sends, grouped into
+//! messages and rendered as flat, readable lines.
 //!
 //! The engine keeps a message as a list of parts (text, thinking, tool
 //! calls, input requests, errors) and splits long turns into continuation
-//! entries (`crates/doc/src/schema.rs`, `parts.rs` in Zeron). Rendering
-//! follows Zeron's own `read_chat` (`crates/mcp/src/transcript.rs`):
+//! entries (`crates/doc/src/schema.rs`, `parts.rs` in Zeron). Grouping and
+//! rendering follow Zeron's own `read_chat` (`crates/mcp/src/transcript.rs`):
 //! continuations fold into their turn, prose joins, and each tool call
 //! becomes one capped line. A part that doesn't parse (a new kind, or a
 //! changed one) is skipped rather than failing the transcript.
@@ -108,101 +108,110 @@ pub fn from_frame(frame: &Value) -> Option<Result<Vec<Entry>, serde_json::Error>
     Some(Vec::<Entry>::deserialize(reset))
 }
 
-/// One message, with its continuations folded in.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Rendered {
-    pub id: String,
-    pub role: Role,
-    pub created_at: i64,
-    pub status: Option<String>,
-    /// Prose parts joined with blank lines.
-    pub text: String,
-    /// An unanswered question the agent waits on.
-    pub pending_input: Option<PendingInput>,
+/// One message: an entry and the continuations folded into it, borrowed
+/// from the transcript. Its fields are read on demand, so a caller pays only
+/// for what it uses.
+#[derive(Debug, Clone)]
+pub struct Message<'a> {
+    first: &'a Entry,
+    continuations: Vec<&'a Entry>,
 }
 
 /// A question the agent waits on, with the id that answers it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PendingInput {
+pub struct PendingInput<'a> {
     /// Zeron's question list, passed through as it came.
-    pub questions: Value,
-    pub request_id: String,
+    pub questions: &'a Value,
+    pub request_id: &'a str,
 }
 
-impl PendingInput {
+impl<'a> PendingInput<'a> {
     /// The first question's text, if it has one.
-    pub fn first_question(&self) -> Option<&str> {
+    pub fn first_question(self) -> Option<&'a str> {
         self.questions.get(0)?.get("question")?.as_str()
     }
 }
 
-/// Render `entries` in order, folding each continuation into the message it
-/// continues (one whose parent isn't rendered yet stands alone).
-pub fn render(entries: &[Entry]) -> Vec<Rendered> {
-    let mut rendered: Vec<Rendered> = Vec::with_capacity(entries.len());
-    // Where each rendered message sits, by its entry's id.
-    let mut at: HashMap<&str, usize> = HashMap::with_capacity(entries.len());
-    for entry in entries {
-        let message = render_one(entry);
-        if let Some(&parent) = entry.continuation_of.as_deref().and_then(|id| at.get(id)) {
-            fold_into(&mut rendered[parent], message);
-            continue;
-        }
-        at.entry(&entry.id).or_insert(rendered.len());
-        rendered.push(message);
+impl<'a> Message<'a> {
+    pub fn id(&self) -> &'a str {
+        &self.first.id
     }
-    rendered
-}
 
-/// The unanswered question of the whole transcript, if any.
-pub fn pending_input(rendered: &[Rendered]) -> Option<&PendingInput> {
-    rendered.iter().rev().find_map(|m| m.pending_input.as_ref())
-}
+    pub fn role(&self) -> Role {
+        self.first.role
+    }
 
-fn fold_into(parent: &mut Rendered, child: Rendered) {
-    if !child.text.is_empty() {
-        if !parent.text.is_empty() {
-            parent.text.push_str("\n\n");
-        }
-        parent.text.push_str(&child.text);
+    pub fn created_at(&self) -> i64 {
+        self.first.created_at
     }
-    if child.pending_input.is_some() {
-        parent.pending_input = child.pending_input;
-    }
-    // The continuation carries the turn's live status.
-    if child.status.is_some() {
-        parent.status = child.status;
-    }
-}
 
-fn render_one(entry: &Entry) -> Rendered {
-    let mut text = Vec::new();
-    let mut pending_input = None;
-    for part in &entry.parts {
-        match part {
-            Part::Text { text: t } if !t.trim().is_empty() => text.push(t.as_str()),
+    /// Its parts in transcript order: its own entry's, then each continuation's.
+    pub fn parts(&self) -> impl DoubleEndedIterator<Item = &'a Part> + '_ {
+        std::iter::once(self.first)
+            .chain(self.continuations.iter().copied())
+            .flat_map(|e| &e.parts)
+    }
+
+    /// The status the last continuation set: it carries the turn's live one.
+    pub fn status(&self) -> Option<&'a str> {
+        std::iter::once(self.first)
+            .chain(self.continuations.iter().copied())
+            .rev()
+            .find_map(|e| e.status.as_deref())
+    }
+
+    /// Its prose parts, joined with blank lines.
+    pub fn text(&self) -> String {
+        let texts: Vec<&str> = self
+            .parts()
+            .filter_map(|p| match p {
+                Part::Text { text } if !text.trim().is_empty() => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        texts.join("\n\n")
+    }
+
+    /// The latest question it asks that isn't answered yet.
+    pub fn pending_input(&self) -> Option<PendingInput<'a>> {
+        self.parts().rev().find_map(|p| match p {
             Part::Input {
                 request_id,
                 questions,
                 resolved: false,
-            } => {
-                pending_input = Some(PendingInput {
-                    questions: questions.clone(),
-                    request_id: request_id.clone(),
-                });
-            }
-            _ => {}
+            } => Some(PendingInput {
+                questions,
+                request_id,
+            }),
+            _ => None,
+        })
+    }
+}
+
+/// Group `entries` into messages in order, folding each continuation into
+/// the message it continues (one whose parent isn't listed yet stands alone).
+pub fn messages(entries: &[Entry]) -> Vec<Message<'_>> {
+    let mut messages: Vec<Message> = Vec::with_capacity(entries.len());
+    // Where each message sits, by its first entry's id.
+    let mut at: HashMap<&str, usize> = HashMap::with_capacity(entries.len());
+    for entry in entries {
+        if let Some(&parent) = entry.continuation_of.as_deref().and_then(|id| at.get(id)) {
+            messages[parent].continuations.push(entry);
+            continue;
         }
+        at.entry(&entry.id).or_insert(messages.len());
+        messages.push(Message {
+            first: entry,
+            continuations: Vec::new(),
+        });
     }
-    Rendered {
-        id: entry.id.clone(),
-        role: entry.role,
-        created_at: entry.created_at,
-        status: entry.status.clone(),
-        text: text.join("\n\n"),
-        pending_input,
-    }
+    messages
+}
+
+/// The unanswered question of the whole transcript, if any.
+pub fn pending_input<'a>(messages: &[Message<'a>]) -> Option<PendingInput<'a>> {
+    messages.iter().rev().find_map(Message::pending_input)
 }
 
 /// The log line of a tool call, image, or visual: `kind: subject → first
@@ -317,11 +326,10 @@ pub(crate) mod tests {
         // The odd parts (a new kind, a text that isn't text) are skipped.
         assert_eq!(entries[1].parts[2], Part::Other);
         assert_eq!(entries[1].parts[3], Part::Other);
-        let rendered = render(&entries);
-        assert_eq!(rendered.len(), 2);
-        assert_eq!(rendered[0].text, "hello");
-        let a = &rendered[1];
-        assert_eq!(a.text, "done");
+        let messages = messages(&entries);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text(), "hello");
+        assert_eq!(messages[1].text(), "done");
         let tools: Vec<String> = entries[1..]
             .iter()
             .flat_map(|e| &e.parts)
@@ -330,7 +338,7 @@ pub(crate) mod tests {
         assert_eq!(tools, ["exec: cargo test → ok", "Agent (running)"]);
         // The app reads this shape.
         assert_eq!(
-            serde_json::to_string(pending_input(&rendered).unwrap()).unwrap(),
+            serde_json::to_string(&pending_input(&messages).unwrap()).unwrap(),
             r#"{"questions":[],"requestId":"req-1"}"#
         );
     }
