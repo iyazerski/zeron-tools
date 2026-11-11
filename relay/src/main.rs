@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
         origin: opts.public_url.origin().ascii_serialization(),
         store,
     };
-    if app.store.passkeys().is_empty() {
+    if !app.store.has_passkey() {
         if app.auth.has_setup_token() {
             eprintln!(
                 "no passkey yet: open {}#/setup/<SETUP_TOKEN> to create one",
@@ -251,7 +251,7 @@ fn signed_in(app: &App, jar: &CookieJar) -> bool {
 async fn auth_status(State(app): State<App>, jar: CookieJar) -> Response {
     Json(json!({
         "signedIn": signed_in(&app, &jar),
-        "hasPasskey": !app.store.passkeys().is_empty(),
+        "hasPasskey": app.store.has_passkey(),
     }))
     .into_response()
 }
@@ -400,7 +400,7 @@ async fn connect(
             move |id: &str| store.has_machine(id)
         };
         hub.serve(machine, socket, known, move |machine, notice| {
-            let payload = payload(machine, notice, store.machines().len() > 1);
+            let payload = payload(machine, notice, store.machine_count() > 1);
             let push = push.clone();
             tokio::spawn(async move { push.broadcast(&payload).await });
         })
