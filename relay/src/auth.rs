@@ -86,11 +86,7 @@ impl Auth {
 
     /// Start creating a passkey.
     pub fn start_register(&self, store: &Store) -> Result<Started<CreationChallengeResponse>> {
-        let existing = store
-            .passkeys()
-            .iter()
-            .map(|p| p.cred_id().clone())
-            .collect();
+        let existing = store.credential_ids();
         let (options, state) = self.webauthn.start_passkey_registration(
             store.user(),
             "zeron",

@@ -15,7 +15,7 @@ use ring::digest::{SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use webauthn_rs::prelude::{AuthenticationResult, Passkey};
+use webauthn_rs::prelude::{AuthenticationResult, CredentialID, Passkey};
 use zeron_json_file as json_file;
 
 /// How long a sign-in lasts.
@@ -105,6 +105,20 @@ impl Store {
         self.lock().passkeys.clone()
     }
 
+    /// Whether a passkey is saved.
+    pub fn has_passkey(&self) -> bool {
+        !self.lock().passkeys.is_empty()
+    }
+
+    /// The saved passkeys' credential ids.
+    pub fn credential_ids(&self) -> Vec<CredentialID> {
+        self.lock()
+            .passkeys
+            .iter()
+            .map(|p| p.cred_id().clone())
+            .collect()
+    }
+
     /// Save `passkey`, replacing an older one with its credential id.
     pub fn add_passkey(&self, passkey: Passkey) -> Result<()> {
         self.update(|data| {
@@ -155,6 +169,11 @@ impl Store {
     /// The added Macs.
     pub fn machines(&self) -> Vec<Machine> {
         self.lock().machines.iter().map(Machine::from).collect()
+    }
+
+    /// How many Macs are added.
+    pub fn machine_count(&self) -> usize {
+        self.lock().machines.len()
     }
 
     /// Add a Mac named `name`; return it and its token (shown once).
