@@ -18,8 +18,6 @@ use crate::text::clip;
 
 /// The most characters of an `exec` command in its tool line.
 const COMMAND_CHARS: usize = 160;
-/// The most characters of a tool's first output line in its tool line.
-const OUTPUT_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,8 +71,6 @@ pub enum Part {
         is_error: bool,
         #[serde(default)]
         resolved: bool,
-        #[serde(default)]
-        output: Option<String>,
     },
     /// A question the agent asked; unresolved, it waits for an answer.
     #[serde(rename_all = "camelCase")]
@@ -214,18 +210,17 @@ pub fn pending_input<'a>(messages: &[Message<'a>]) -> Option<PendingInput<'a>> {
     messages.iter().rev().find_map(Message::pending_input)
 }
 
-/// The log line of a tool call, image, or visual: `kind: subject → first
-/// output line`, capped so a build log stays one short line.
+/// The log line of a tool call, image, or visual: `kind: subject`, as the
+/// desktop's activity rows name it.
 pub fn tool_line(part: &Part) -> Option<String> {
-    let (call, is_error, resolved, output) = match part {
+    let (call, is_error, resolved) = match part {
         Part::Image { name } => return Some(format!("image: {name}")),
         Part::Visual { title } => return Some(format!("visual: {title}")),
         Part::Tool {
             call,
             is_error,
             resolved,
-            output,
-        } => (call, *is_error, *resolved, output.as_deref()),
+        } => (call, *is_error, *resolved),
         _ => return None,
     };
     let field = |name: &str| call.get(name).and_then(Value::as_str);
@@ -264,10 +259,6 @@ pub fn tool_line(part: &Part) -> Option<String> {
         // `unknown {name}`, or a kind added since: name what there is.
         _ => field("name").unwrap_or(kind).to_owned(),
     };
-    if let Some(first) = output.and_then(|o| o.trim().lines().next()) {
-        line.push_str(" → ");
-        line.push_str(&clip(first, OUTPUT_CHARS));
-    }
     if is_error {
         line.push_str(" (error)");
     } else if !resolved {
@@ -335,7 +326,7 @@ pub(crate) mod tests {
             .flat_map(|e| &e.parts)
             .filter_map(tool_line)
             .collect();
-        assert_eq!(tools, ["exec: cargo test → ok", "Agent (running)"]);
+        assert_eq!(tools, ["exec: cargo test", "Agent (running)"]);
         // The app reads this shape.
         assert_eq!(
             serde_json::to_string(&pending_input(&messages).unwrap()).unwrap(),
