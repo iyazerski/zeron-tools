@@ -12,6 +12,12 @@ use rune::color::hex;
 use rune_kit::Kit;
 use rune_kit::markdown::{Highlight, MarkdownStyle, Syntax};
 
+/// The Markdown options Rune's Markdown parses with, so source ranges found
+/// here match its own.
+pub const MARKDOWN: Options = Options::ENABLE_STRIKETHROUGH
+    .union(Options::ENABLE_TABLES)
+    .union(Options::ENABLE_TASKLISTS);
+
 /// Token colours, dark then light. Inline code takes the keyword colour.
 /// Regexes, headings and attributes share a colour as the phone app's
 /// highlight.js classes do; other kinds keep the kit's colours.
@@ -81,10 +87,7 @@ fn inline_code(src: &str) -> Vec<Range<usize>> {
     if !src.contains('`') {
         return Vec::new();
     }
-    // Rune's Markdown parses with these, so both see the same spans.
-    let options =
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
-    Parser::new_ext(src, options)
+    Parser::new_ext(src, MARKDOWN)
         .into_offset_iter()
         .filter_map(|(event, range)| matches!(event, Event::Code(_)).then_some(range))
         .collect()

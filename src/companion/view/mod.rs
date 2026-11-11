@@ -1,6 +1,7 @@
 //! What the window draws, and its keys: the chat list or a chat's page,
 //! under the toast.
 
+mod breaks;
 mod changes;
 mod chat;
 mod code;
