@@ -237,8 +237,9 @@ impl Zeron {
 
     /// The chat with this id or unique id prefix.
     pub async fn chat(&self, key: &str) -> Result<Chat> {
-        let chats = self.chats().await?;
-        find_chat(&chats, key).cloned()
+        let mut chats = self.chats().await?;
+        let at = find_chat(&chats, key)?;
+        Ok(chats.swap_remove(at))
     }
 }
 
@@ -266,18 +267,20 @@ fn text_field(reply: &Value, name: &str) -> String {
         .to_owned()
 }
 
-/// The one chat whose id is `key` or starts with it.
-pub fn find_chat<'a>(chats: &'a [Chat], key: &str) -> Result<&'a Chat> {
+/// Where in `chats` the one chat whose id is `key` or starts with it sits.
+fn find_chat(chats: &[Chat], key: &str) -> Result<usize> {
     let key = key.trim();
     if key.is_empty() {
         bail!("chat is required");
     }
-    if let Some(chat) = chats.iter().find(|c| c.id == key) {
-        return Ok(chat);
+    if let Some(at) = chats.iter().position(|c| c.id == key) {
+        return Ok(at);
     }
-    let hits: Vec<_> = chats.iter().filter(|c| c.id.starts_with(key)).collect();
+    let hits: Vec<usize> = (0..chats.len())
+        .filter(|&i| chats[i].id.starts_with(key))
+        .collect();
     match hits.as_slice() {
-        [one] => Ok(one),
+        [one] => Ok(*one),
         [] => bail!("no chat matches {key}"),
         _ => bail!("{key} matches {} chats; use a longer prefix", hits.len()),
     }
