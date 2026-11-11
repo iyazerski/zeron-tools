@@ -687,7 +687,17 @@ function signInView(setupToken) {
 
 // ---- chat list ----------------------------------------------------------------
 
-const listState = { query: "", scroll: 0 };
+const listState = { query: "", filter: "all", scroll: 0 };
+
+/** The list's status filters; Recent means active in the last 15 minutes. */
+const RECENT_MS = 15 * 60 * 1000;
+const FILTERS = [
+  { id: "all", label: "All", keeps: () => true, empty: "No chats yet" },
+  { id: "working", label: "Working", keeps: c => statusOf(c) === "working", empty: "No chat is working" },
+  { id: "done", label: "Done", keeps: c => statusOf(c) === "idle" && seen.unseen(c), empty: "No finished chats to look at" },
+  { id: "recent", label: "Recent", keeps: c => Date.now() - Date.parse(c.lastMessageAt || c.createdAt) <= RECENT_MS,
+    empty: "No chats active in the last 15 minutes" },
+];
 const collapsed = new Set(JSON.parse(localStorage.getItem("zeron.collapsed") || "[]"));
 
 function listView() {
@@ -698,11 +708,12 @@ function listView() {
     h("button", { class: "circle glass", "aria-label": "Settings", onclick: settingsSheet }, icon("more"))));
   const macs = h("div", { class: "macs" });
   const input = h("input", { type: "search", placeholder: "Search", value: listState.query, enterkeyhint: "search" });
+  const filters = h("div", { class: "filters", role: "radiogroup", "aria-label": "Show" });
   const rows = h("div", {}, Array.from({ length: 7 }, () => h("div", { class: "skeleton" })));
   const scroll = h("div", { class: "scroll" },
     h("div", { class: "list-head" }, h("h1", {}, "Chats"), macs),
     h("label", { class: "search" }, icon("search"), input),
-    rows, h("div", { style: { height: "calc(var(--bottom) + 30px)" } }));
+    filters, rows, h("div", { style: { height: "calc(var(--bottom) + 30px)" } }));
   const offline = offlineBanner();
   const el = h("div", { class: "view" }, scroll, bar, offline.el);
   const updateBar = solidOnScroll(scroll, bar, 40);
@@ -774,7 +785,13 @@ function listView() {
       if (!rows.querySelector(".skeleton")) rows.replaceChildren(...Array.from({ length: 7 }, () => h("div", { class: "skeleton" })));
       return;
     }
-    const chats = store.chats.filter(c => c.machine === sel?.id);
+    filters.replaceChildren(...FILTERS.map(f => h("button", {
+      class: f.id === listState.filter ? "on" : "", role: "radio", "aria-checked": String(f.id === listState.filter),
+      onclick: () => { if (f.id === listState.filter) return; haptic(4); listState.filter = f.id; draw(); },
+    }, f.label)));
+    const filter = FILTERS.find(f => f.id === listState.filter);
+    const all = store.chats.filter(c => c.machine === sel?.id);
+    const chats = all.filter(filter.keeps);
     const nodes = [];
     if (!machines.length) {
       nodes.push(h("div", { class: "empty" }, "No Macs yet. Tap ", icon("more", ""), " and add one."));
@@ -798,7 +815,7 @@ function listView() {
         nodes.push(section(key, g.project, g.items));
         if (!collapsed.has(key)) nodes.push(...g.items.map(c => row(c, false)));
       }
-      if (!chats.length && !note && machines.length) nodes.push(h("div", { class: "empty" }, "No chats yet"));
+      if (!chats.length && !note && machines.length) nodes.push(h("div", { class: "empty" }, all.length ? filter.empty : "No chats yet"));
     }
     reconcile(rows, nodes);
     painted = true;
