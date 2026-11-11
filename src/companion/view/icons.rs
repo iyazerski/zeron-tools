@@ -24,6 +24,11 @@ pub static CHEV_DOWN: Icon = icon(
     24.0,
     r#"<path d="M17.5 9.25 12 14.75 6.5 9.25" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>"#,
 );
+pub static DIFF: Icon = icon(
+    "diff",
+    24.0,
+    r#"<g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z"/><path d="M14 3v5h5M12 10.5v5M9.5 13h5M9.5 18h5"/></g>"#,
+);
 pub static PLUS: Icon = icon(
     "plus",
     24.0,

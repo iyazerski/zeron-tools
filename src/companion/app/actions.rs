@@ -6,13 +6,15 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use rune::{TextEdit, Tx};
+use rune_kit::diff::{self, DiffState};
 use serde_json::{Value, json};
 
-use super::page::{Dictating, LEVELS_KEPT, SkillList, SkillMenu, Voice};
+use super::page::{Changes, Dictating, LEVELS_KEPT, SkillList, SkillMenu, Voice};
 use super::{QuestionForm, State, Target, attach};
 use crate::companion::data::{ChatView, ComposerInfo, Polished, Role, Skills};
 use crate::companion::dictation::{self, Heard, Listening};
 use crate::companion::message::{split_from, with_images, with_skill_refs};
+use crate::zeron::types::CheckoutDiff;
 
 /// A call on the open chat that refreshes it after.
 enum ChatAction {
@@ -84,6 +86,38 @@ impl State {
                 if refresh_info {
                     s.load_info();
                 }
+            },
+        );
+    }
+
+    /// Open the chat's latest turn diff in place of its transcript.
+    pub fn open_changes(&mut self) {
+        let Some(page) = self.chat_mut() else { return };
+        let nav = page.nav;
+        let Some(chat) = page.existing_mut() else {
+            return;
+        };
+        chat.changes = Some(Changes::Loading);
+        let args = json!({ "chat": chat.id });
+        self.api.call(
+            "turn_changes",
+            args,
+            move |s, result: Result<CheckoutDiff, String>, _| {
+                let Some(chat) = s.existing_at(nav).filter(|c| c.changes.is_some()) else {
+                    return;
+                };
+                chat.changes = Some(match result {
+                    Ok(got) => {
+                        let mut diff = Box::new(DiffState::new(diff::parse(&got.patch)));
+                        // The window is too narrow to scroll lines sideways.
+                        diff.set_wrap(true);
+                        Changes::Ready {
+                            diff,
+                            truncated: got.truncated,
+                        }
+                    }
+                    Err(e) => Changes::Failed(e),
+                });
             },
         );
     }

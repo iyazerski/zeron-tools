@@ -20,6 +20,11 @@ use crate::companion::message::{
 use rune_theme_opencode::file_icons;
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
+    if let Some(chat) = page.existing()
+        && let Some(changes) = &chat.changes
+    {
+        return super::changes::page(s, chat, changes, k);
+    }
     let mut body = col().key("transcript").w_full().px(14.0).py(10.0).gap(14.0);
     let error = page.existing().and_then(|c| c.error.as_deref());
     if let Some(note) = engine_note(s, k) {
@@ -265,6 +270,8 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
     }
     if let Some(form) = &page.question {
         out.push(question(k, form).key(format!("q-{}", form.input.request_id)));
+    } else if let Some(counts) = read.turn_changes.filter(|_| !working) {
+        out.push(super::changes::button(k, counts));
     }
     out
 }

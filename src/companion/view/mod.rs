@@ -1,6 +1,7 @@
 //! What the window draws, and its keys: the chat list or a chat's page,
 //! under the toast.
 
+mod changes;
 mod chat;
 mod code;
 mod composer;
@@ -11,7 +12,7 @@ mod widgets;
 use rune::{Color, Cx, El, Key, KeyEvent, SystemMaterial, Tx, col};
 use rune_kit::{Toast, ToastRegion};
 
-use super::app::{Overlay, Page, State, ToastKind};
+use super::app::{ChatPage, Overlay, Page, State, ToastKind};
 
 /// The window's corner radius.
 pub const CORNER: f32 = 14.0;
@@ -84,11 +85,20 @@ pub fn on_key(s: &mut State, key: &KeyEvent, tx: &mut Tx) -> bool {
         s.back();
         return true;
     }
+    let changes = s
+        .chat()
+        .and_then(ChatPage::existing)
+        .is_some_and(|c| c.changes.is_some());
+    // Its hunk and file keys, and copying its selected lines.
+    if changes && s.diff_mut().key(key, tx) {
+        return true;
+    }
     if key.key != Key::Escape {
         return false;
     }
     match s.chat_mut() {
         Some(page) if page.overlay != Overlay::Closed => page.overlay = Overlay::Closed,
+        _ if changes => s.back(),
         _ => s.hide(),
     }
     true
