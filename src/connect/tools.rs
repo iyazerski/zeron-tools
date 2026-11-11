@@ -320,9 +320,8 @@ async fn respond_to_input(zeron: &Zeron, args: RespondArgs) -> Result<Value> {
         Some(id) => id,
         None => {
             let entries = zeron.transcript(&chat).await?;
-            let rendered = transcript::render(&entries);
-            transcript::pending_input(&rendered)
-                .map(|p| p.request_id.clone())
+            transcript::pending_input(&transcript::messages(&entries))
+                .map(|p| p.request_id.to_owned())
                 .context("this chat has no pending question")?
         }
     };
