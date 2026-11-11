@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use rune::{ImageCache, TextEdit, Tx};
+use rune_kit::diff::DiffState;
 use serde_json::json;
 use zeron_relay_proto::Engine;
 
@@ -21,7 +22,8 @@ use super::prefs::Prefs;
 pub use self::attach::Upload;
 pub use self::draft::{Catalog, Config, Draft, Load, Pick};
 pub use self::page::{
-    ChatPage, Existing, LEVELS_KEPT, Overlay, QuestionForm, Sheet, SkillList, Target, Voice,
+    Changes, ChatPage, Existing, LEVELS_KEPT, Overlay, QuestionForm, Sheet, SkillList, Target,
+    Voice,
 };
 
 /// How often the list refreshes while shown, as on the phone.
@@ -46,6 +48,8 @@ pub struct State {
     drafts: HashMap<String, String>,
     /// Counts page changes, so a late answer for a page that's gone is dropped.
     nav: u64,
+    /// What the diff view reads and changes once its page is gone.
+    scratch_diff: DiffState,
 }
 
 pub enum Page {
@@ -142,6 +146,7 @@ impl State {
             images: None,
             drafts: HashMap::new(),
             nav: 0,
+            scratch_diff: DiffState::default(),
         }
     }
 
@@ -178,6 +183,30 @@ impl State {
                 _ => &mut page.scratch,
             },
             Page::List => &mut self.list.query,
+        }
+    }
+
+    /// The open changes page's diff, for the diff view.
+    pub fn diff(&self) -> &DiffState {
+        match self
+            .chat()
+            .and_then(ChatPage::existing)
+            .and_then(|c| c.changes.as_ref())
+        {
+            Some(Changes::Ready { diff, .. }) => diff,
+            _ => &self.scratch_diff,
+        }
+    }
+
+    /// The open changes page's diff, for the diff view's edits.
+    pub fn diff_mut(&mut self) -> &mut DiffState {
+        let changes = match &mut self.page {
+            Page::Chat(page) => page.existing_mut().and_then(|c| c.changes.as_mut()),
+            Page::List => None,
+        };
+        match changes {
+            Some(Changes::Ready { diff, .. }) => diff,
+            _ => &mut self.scratch_diff,
         }
     }
 
@@ -355,7 +384,13 @@ impl State {
         self.load_draft();
     }
 
+    /// Close the changes page for its chat, else the chat for the list.
     pub fn back(&mut self) {
+        if let Some(chat) = self.chat_mut().and_then(ChatPage::existing_mut)
+            && chat.changes.take().is_some()
+        {
+            return;
+        }
         self.leave_page();
         self.list.poll.expire();
         self.load_due();

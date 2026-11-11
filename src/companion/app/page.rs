@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use rune::{Image, TextEdit};
+use rune_kit::diff::DiffState;
 
 use super::Poll;
 use super::attach::Attached;
@@ -106,6 +107,19 @@ pub struct Existing {
     pub(super) info_at: Option<Instant>,
     /// The message whose answer was just copied, and when.
     pub(super) copied: Option<(String, Instant)>,
+    /// The latest turn's diff, shown in place of the transcript while open.
+    pub changes: Option<Changes>,
+}
+
+/// The latest turn's diff page.
+pub enum Changes {
+    Loading,
+    Ready {
+        diff: Box<DiffState>,
+        /// Zeron capped the patch, so files or lines are missing.
+        truncated: bool,
+    },
+    Failed(String),
 }
 
 /// What's open over the page.
@@ -284,6 +298,7 @@ impl Existing {
             info_for: None,
             info_at: None,
             copied: None,
+            changes: None,
         }
     }
 
