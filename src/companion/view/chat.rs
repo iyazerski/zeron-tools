@@ -364,7 +364,7 @@ fn footer(page: &Existing, k: &Kit, m: &Message) -> El {
             .color(k.c.text_faint),
         );
     }
-    if m.answer().is_some() {
+    if m.has_answer() {
         let copied = page.just_copied(&m.id);
         let id = m.id.clone();
         out = out.child(

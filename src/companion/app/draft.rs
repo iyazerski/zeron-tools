@@ -106,7 +106,12 @@ impl State {
             "list_projects",
             json!({}),
             move |s, result: Result<Projects, String>, _| {
-                let recent = s.list.chats.as_ref().and_then(|c| c.first()).cloned();
+                let recent = s
+                    .list
+                    .chats
+                    .as_ref()
+                    .and_then(|c| c.first()?.project.as_ref())
+                    .map(|p| p.id.clone());
                 let Some(draft) = s.page_at(nav).and_then(|p| p.draft_mut()) else {
                     return;
                 };
@@ -115,7 +120,7 @@ impl State {
                         got.projects.sort_by(|a, b| a.name.cmp(&b.name));
                         draft.projects = got.projects;
                         if draft.saved_project == ProjectPick::Recent {
-                            draft.project = recent.and_then(|c| c.project).map(|p| p.id);
+                            draft.project = recent;
                         }
                         if !draft
                             .projects
@@ -229,7 +234,8 @@ impl State {
                     }
                 };
                 // The chat exists, so there's no text to keep for the next new chat.
-                let typed = page.composer.text.clone();
+                let typed = std::mem::take(&mut page.composer.text);
+                // Also resets the caret, history, and marks.
                 page.composer.clear();
                 s.prefs.new_chat = pick;
                 s.save_prefs();

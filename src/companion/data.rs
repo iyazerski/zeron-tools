@@ -123,6 +123,11 @@ impl Message {
         texts.join("\n\n")
     }
 
+    /// Whether the message ends with prose, so `answer` has one.
+    pub fn has_answer(&self) -> bool {
+        matches!(self.parts.last(), Some(Part::Text { .. }))
+    }
+
     /// The prose after the message's last tool group or error: the answer
     /// that ends the turn, as Markdown; `None` when it ends without prose.
     pub fn answer(&self) -> Option<String> {
@@ -309,6 +314,7 @@ mod tests {
                 parts,
             };
             assert_eq!(m.answer().as_deref(), want);
+            assert_eq!(m.has_answer(), want.is_some());
         }
     }
 
