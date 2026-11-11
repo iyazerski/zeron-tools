@@ -8,7 +8,7 @@ use rune_kit::{
     MenuItem, TextInput,
 };
 
-use super::{code, icons};
+use super::{breaks, code, icons};
 
 use super::widgets::{busy, dot, engine_note, head, head_titles, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
@@ -305,6 +305,7 @@ fn user_bubble(k: &Kit, page: &Existing, text_in: &str, pending: bool) -> El {
             rich(shown, spans)
                 .font(k.ty.ui)
                 .color(k.c.text_base)
+                .wrap_anywhere()
                 .selectable(true),
         );
     let mut out = col().w_full().pl(40.0).items_end().gap(4.0);
@@ -337,15 +338,27 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
     let mut out = col().w_full().gap(10.0);
     for (i, part) in m.parts.iter().enumerate() {
         out = out.child(match part {
-            Part::Text { text } => Markdown::new(text.clone())
-                .style(style.clone())
-                .highlights(code::inline_code_marks(k, text))
-                .streaming(streaming && i + 1 == m.parts.len())
-                .selectable(true)
-                .copy_source(true)
-                .on_link_tx(|_: &mut State, url: &str, tx: &mut Tx| drop(tx.open_url(url)))
-                .build(k)
-                .key(format!("{}#{i}", m.id)),
+            Part::Text { text } => {
+                let soft = breaks::breakable(text);
+                let shown = soft.as_deref().unwrap_or(text);
+                let md = Markdown::new(shown.to_owned())
+                    .style(style.clone())
+                    .highlights(code::inline_code_marks(k, shown))
+                    .streaming(streaming && i + 1 == m.parts.len())
+                    .selectable(true)
+                    // The source with break points would paste broken links.
+                    .copy_source(soft.is_none())
+                    .on_link_tx(|_: &mut State, url: &str, tx: &mut Tx| drop(tx.open_url(url)))
+                    .build(k);
+                match soft {
+                    Some(_) => col()
+                        .w_full()
+                        .child(md)
+                        .selection_copy(|sel| Some(sel.text().replace(breaks::ZWSP, ""))),
+                    None => md,
+                }
+                .key(format!("{}#{i}", m.id))
+            }
             Part::Tools { tools } => tool_group(page, k, &format!("{}#{i}", m.id), tools),
             Part::Error { error } => errbox(k, error),
         });
