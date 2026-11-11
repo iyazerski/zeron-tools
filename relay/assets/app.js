@@ -10,6 +10,7 @@ const ICONS = {
   "chevDown": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M17.5 9.25 12 14.75 6.5 9.25\"/>"],
   "chevRight": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M9.25 6.5 14.75 12 9.25 17.5\"/>"],
   "plus": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.75\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M12 5v14M5 12h14\"/>"],
+  "diff": ["0 0 24 24", "fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"", "<path d=\"M14.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7.5z\"/><path d=\"M14 3v5h5M12 10.5v5M9.5 13h5M9.5 18h5\"/>"],
   "more": ["0 0 24 24", "fill=\"none\"", "<g fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"3.75\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"20.25\" cy=\"12\" r=\"1\"/></g>"],
   "send": ["0 0 24 24", "", "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"1.5\" d=\"M12 20V4m0 0l6 6m-6-6l-6 6\"/>"],
   "stop": ["0 0 10 10", "", "<rect x=\"1\" y=\"1\" width=\"8\" height=\"8\" rx=\"2\" fill=\"currentColor\"/>"],
@@ -609,7 +610,9 @@ function route() {
   const fromList = previous?.kind === "list" || (previous?.kind === "new" && previous.fromList);
   if (parts[1] === "setup") view = signInView(parts[2]);
   else if (parts[1] === "new") view = chatView(null, null, fromList);
-  else if (parts[1] === "m" && parts[3] === "chat") view = chatView(parts[2], parts[4], fromList);
+  else if (parts[1] === "m" && parts[3] === "chat" && parts[5] === "changes") view = changesView(parts[2], parts[4], previous?.kind === "chat", previous?.fromList);
+  // Back from the changes, the chat goes back the way it came.
+  else if (parts[1] === "m" && parts[3] === "chat") view = chatView(parts[2], parts[4], previous?.kind === "changes" ? previous.chatFromList : fromList);
   else view = listView();
   current = view;
   if (previous) {
@@ -617,7 +620,7 @@ function route() {
     previous.el.classList.add("leave");
     setTimeout(() => previous.el.remove(), 220);
     view.el.classList.add("enter");
-    if (view.kind === "list") view.el.classList.add("back");
+    if (view.kind === "list" || (view.kind === "chat" && previous.kind === "changes")) view.el.classList.add("back");
   }
   $("#app").append(view.el);
   view.mounted?.();
@@ -953,7 +956,8 @@ function chatView(machine, id, fromList) {
   const secs = h("span", { class: "secs" });
   const working = h("div", { class: "working hide" }, glyph("trail"), h("span", { class: "shimmer" }, "Working"), secs);
   const questionSlot = h("div");
-  msgs.append(working, questionSlot);
+  const changesSlot = h("div");
+  msgs.append(working, questionSlot, changesSlot);
   const scroll = h("div", { class: "scroll" }, msgs);
   const textarea = h("textarea", { rows: 1, placeholder: isDraft ? "Describe the task" : "Message" });
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
@@ -1334,10 +1338,11 @@ function chatView(machine, id, fromList) {
       if (landed) p.el.remove();
       return !landed;
     });
-    reconcile(msgs, [older, ...nodes, ...pending.map(p => p.el), working, questionSlot]);
+    reconcile(msgs, [older, ...nodes, ...pending.map(p => p.el), working, questionSlot, changesSlot]);
     older.classList.toggle("hide", !read.olderRemaining);
     drawWorking();
     drawQuestion(read.pendingInput);
+    drawChanges();
     if (anchor != null) { scroll.scrollTop = scroll.scrollHeight - anchor; keepAnchor = false; }
     else if (stick) toBottom(!firstPaint);
   }
@@ -1354,6 +1359,15 @@ function chatView(machine, id, fromList) {
     secs.textContent = since ? `${Math.max(0, Math.round((Date.now() - since) / 1000))}s` : "";
   }
   const clock = setInterval(() => { if (read && isWorking()) drawWorking(); }, 1000);
+
+  // What the finished latest turn changed, opening its diff.
+  function drawChanges() {
+    const c = read.turnChanges;
+    const show = c && !isWorking() && !read.pendingInput;
+    changesSlot.replaceChildren(show ? h("a", { class: "turn-changes", href: `${chatHash(machine, id)}/changes` },
+      icon("diff"), h("span", {}, `${c.files} ${c.files === 1 ? "file" : "files"} changed`),
+      h("span", { class: "plus" }, `+${c.additions}`), h("span", { class: "minus" }, `−${c.deletions}`), icon("chevRight", "chev")) : "");
+  }
 
   // The agent is blocked on questions: pick options, type an answer, or both.
   function drawQuestion(input) {
@@ -1665,6 +1679,91 @@ function chatView(machine, id, fromList) {
     },
     destroy() { poll?.stop(); offline.stop(); dockSize.disconnect(); clearInterval(clock); stopDictation(); },
   };
+}
+
+// ---- turn changes ---------------------------------------------------------------
+
+/** Files of a `git diff` patch: each one's path, counts, and hunks of numbered lines. */
+function parsePatch(patch) {
+  const files = [];
+  let file = null, hunk = null, oldNo = 0, newNo = 0;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      file = { path: line.match(/ b\/(.*)$/)?.[1] || line.slice(11), hunks: [], additions: 0, deletions: 0, note: "", lines: 0 };
+      files.push(file);
+      hunk = null;
+    } else if (!file) {
+      continue;
+    } else if (line.startsWith("@@")) {
+      const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/);
+      oldNo = Number(m?.[1] || 0);
+      newNo = Number(m?.[2] || 0);
+      hunk = { head: line, lines: [] };
+      file.hunks.push(hunk);
+    } else if (!hunk) {
+      // Headers before the first hunk: only what changes the path or says why there are no lines.
+      if (line.startsWith("+++ ") && line !== "+++ /dev/null") file.path = line.slice(4).replace(/^b\//, "");
+      else if (line.startsWith("Binary files")) file.note = "Binary file";
+    } else if (line[0] === "+") {
+      hunk.lines.push(["add", null, newNo++, line.slice(1)]);
+      file.additions++;
+    } else if (line[0] === "-") {
+      hunk.lines.push(["del", oldNo++, null, line.slice(1)]);
+      file.deletions++;
+    } else if (line[0] === " ") {
+      hunk.lines.push(["ctx", oldNo++, newNo++, line.slice(1)]);
+    }
+  }
+  for (const f of files) f.lines = f.hunks.reduce((n, h) => n + h.lines.length, 0);
+  return files;
+}
+
+/** Files this long start folded, so a big turn doesn't stall the phone. */
+const FOLD_LINES = 400;
+
+function diffFile(file) {
+  const body = h("div", { class: "dbody" });
+  const fill = () => {
+    if (body.childElementCount) return;
+    if (!file.hunks.length) { body.append(h("div", { class: "dnote" }, file.note || "No line changes")); return; }
+    for (const hunk of file.hunks) {
+      body.append(h("div", { class: "dhunk" }, hunk.head));
+      const rows = document.createDocumentFragment();
+      for (const [kind, o, n, text] of hunk.lines) {
+        rows.append(h("div", { class: `dl d${kind}` }, h("span", { class: "no" }, o ?? ""), h("span", { class: "no" }, n ?? ""), h("span", { class: "src" }, text || " ")));
+      }
+      body.append(rows);
+    }
+  };
+  const slash = file.path.lastIndexOf("/");
+  const head = h("summary", {}, icon("chevDown", "chev"), fileIcon(file.path),
+    h("span", { class: "path" }, slash >= 0 ? h("span", { class: "dir" }, file.path.slice(0, slash + 1)) : null, file.path.slice(slash + 1)),
+    h("span", { class: "plus" }, `+${file.additions}`), h("span", { class: "minus" }, `−${file.deletions}`));
+  const el = h("details", { class: "dfile" }, head, body);
+  el.addEventListener("toggle", () => el.open && fill());
+  el.open = file.lines <= FOLD_LINES;
+  return el;
+}
+
+/** The chat's latest turn as a unified diff, in place of the chat; back returns to it. */
+function changesView(machine, id, fromChat, chatFromList) {
+  const cached = store.chats?.find(c => c.id === id && c.machine === machine);
+  const back = () => { haptic(5); fromChat ? history.back() : go(chatHash(machine, id)); };
+  const bar = h("div", { class: "bar floating" }, h("div", { class: "bar-card glass" },
+    h("button", { class: "circle", "aria-label": "Back", onclick: back }, icon("back")),
+    h("div", { class: "grow" }, h("div", { class: "t" }, "Latest turn changes"), h("div", { class: "s" }, cached?.title || " ")),
+    h("div", { class: "circle" })));
+  const body = h("div", { class: "diff" }, h("div", { class: "skeleton", style: { height: "120px" } }));
+  const offline = offlineBanner();
+  const el = h("div", { class: "view" }, h("div", { class: "scroll" }, body), bar, offline.el);
+  let gone = false;
+  call(machine, "turn_changes", { chat: id }).then(d => {
+    if (gone) return;
+    const files = parsePatch(d.patch || "");
+    const notes = [!files.length && "No changes this turn", d.truncated && "The diff is too large to show whole."];
+    body.replaceChildren(...notes.filter(Boolean).map(n => h("div", { class: "dempty" }, n)), ...files.map(diffFile));
+  }, e => !gone && body.replaceChildren(h("div", { class: "dempty" }, `Couldn't load the changes: ${e.message}`)));
+  return { kind: "changes", chatFromList: fromChat && chatFromList, el, destroy() { gone = true; offline.stop(); } };
 }
 
 /** Unsent text per chat, kept while moving between chats. */
