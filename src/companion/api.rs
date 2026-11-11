@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 
-use crate::connect::{EngineWatch, call_tool, watch_engine};
+use crate::connect::{EngineWatch, Turns, call_tool, watch_chats, watch_engine};
 use crate::json_file;
 use crate::pi::Pi;
 use crate::zeron::Zeron;
@@ -38,6 +38,7 @@ pub struct Api {
 #[derive(Clone)]
 pub struct Tools {
     zeron: Arc<Zeron>,
+    turns: Arc<Turns>,
     pi: Option<Arc<Pi>>,
     engine: EngineWatch,
 }
@@ -49,17 +50,27 @@ impl Tools {
         tool: &'static str,
         args: Value,
     ) -> Result<T, String> {
-        let value = call_tool(&self.zeron, self.pi.as_deref(), &self.engine, tool, args).await?;
+        let value = call_tool(
+            &self.zeron,
+            &self.turns,
+            self.pi.as_deref(),
+            &self.engine,
+            tool,
+            args,
+        )
+        .await?;
         serde_json::from_value(value).map_err(|e| format!("unexpected {tool} answer: {e}"))
     }
 }
 
 impl Api {
-    /// Watch Zeron's engine, tick the UI and write the prefs to
+    /// Watch Zeron's engine and its chats (keeping each finished turn's
+    /// changes in `turns`), tick the UI and write the prefs to
     /// `prefs_path`, all on `rt`; `pi` cleans up dictation.
     pub fn start(
         rt: Handle,
         zeron: Arc<Zeron>,
+        turns: Turns,
         pi: Option<Pi>,
         app: AppHandle<State>,
         prefs_path: PathBuf,
@@ -68,6 +79,13 @@ impl Api {
             let _entered = rt.enter();
             watch_engine(zeron.clone())
         };
+        let turns = Arc::new(turns);
+        rt.spawn(watch_chats(
+            zeron.clone(),
+            engine.changes(),
+            turns.clone(),
+            None,
+        ));
         let mut changes = engine.changes();
         let to_ui = app.clone();
         rt.spawn(async move {
@@ -92,6 +110,7 @@ impl Api {
             rt,
             tools: Tools {
                 zeron,
+                turns,
                 pi: pi.map(Arc::new),
                 engine,
             },
