@@ -610,7 +610,7 @@ function route() {
   const fromList = previous?.kind === "list" || (previous?.kind === "new" && previous.fromList);
   if (parts[1] === "setup") view = signInView(parts[2]);
   else if (parts[1] === "new") view = chatView(null, null, fromList);
-  else if (parts[1] === "m" && parts[3] === "chat" && parts[5] === "changes") view = changesView(parts[2], parts[4], previous?.kind === "chat", previous?.fromList);
+  else if (parts[1] === "m" && parts[3] === "chat" && parts[5] === "changes") view = changesView(parts[2], parts[4], parts[6], previous?.kind === "chat", previous?.fromList);
   // Back from the changes, the chat goes back the way it came.
   else if (parts[1] === "m" && parts[3] === "chat") view = chatView(parts[2], parts[4], previous?.kind === "changes" ? previous.chatFromList : fromList);
   else view = listView();
@@ -956,8 +956,7 @@ function chatView(machine, id, fromList) {
   const secs = h("span", { class: "secs" });
   const working = h("div", { class: "working hide" }, glyph("trail"), h("span", { class: "shimmer" }, "Working"), secs);
   const questionSlot = h("div");
-  const changesSlot = h("div");
-  msgs.append(working, questionSlot, changesSlot);
+  msgs.append(working, questionSlot);
   const scroll = h("div", { class: "scroll" }, msgs);
   const textarea = h("textarea", { rows: 1, placeholder: isDraft ? "Describe the task" : "Message" });
   const sendBtn = h("button", { class: "send", "aria-label": "Send", disabled: true }, icon("send"));
@@ -1331,6 +1330,9 @@ function chatView(machine, id, fromList) {
         rendered.set(m.id, entry);
       }
       nodes.push(entry.node);
+      // The latest turn's button waits until it's over and nothing is asked.
+      const changes = read.turnChanges.find(t => t.after === m.id);
+      if (changes && (!isLast || (!isWorking() && !read.pendingInput))) nodes.push(changesButton(changes));
     }
     // Drop optimistic bubbles once the transcript has the real message.
     pending = pending.filter(p => {
@@ -1338,11 +1340,10 @@ function chatView(machine, id, fromList) {
       if (landed) p.el.remove();
       return !landed;
     });
-    reconcile(msgs, [older, ...nodes, ...pending.map(p => p.el), working, questionSlot, changesSlot]);
+    reconcile(msgs, [older, ...nodes, ...pending.map(p => p.el), working, questionSlot]);
     older.classList.toggle("hide", !read.olderRemaining);
     drawWorking();
     drawQuestion(read.pendingInput);
-    drawChanges();
     if (anchor != null) { scroll.scrollTop = scroll.scrollHeight - anchor; keepAnchor = false; }
     else if (stick) toBottom(!firstPaint);
   }
@@ -1360,13 +1361,18 @@ function chatView(machine, id, fromList) {
   }
   const clock = setInterval(() => { if (read && isWorking()) drawWorking(); }, 1000);
 
-  // What the finished latest turn changed, opening its diff.
-  function drawChanges() {
-    const c = read.turnChanges;
-    const show = c && !isWorking() && !read.pendingInput;
-    changesSlot.replaceChildren(show ? h("a", { class: "turn-changes", href: `${chatHash(machine, id)}/changes` },
-      icon("diff"), h("span", {}, `${c.files} ${c.files === 1 ? "file" : "files"} changed`),
-      h("span", { class: "plus" }, `+${c.additions}`), h("span", { class: "minus" }, `−${c.deletions}`), icon("chevRight", "chev")) : "");
+  // What a finished turn changed, opening its diff; kept per turn so redraws reuse it.
+  const changeButtons = new Map();
+  function changesButton(c) {
+    const sig = `${c.files}|${c.additions}|${c.deletions}`;
+    let kept = changeButtons.get(c.turn);
+    if (!kept || kept.sig !== sig) {
+      kept = { sig, node: h("a", { class: "turn-changes", href: `${chatHash(machine, id)}/changes/${encodeURIComponent(c.turn)}` },
+        icon("diff"), h("span", {}, `${c.files} ${c.files === 1 ? "file" : "files"} changed`),
+        h("span", { class: "plus" }, `+${c.additions}`), h("span", { class: "minus" }, `−${c.deletions}`), icon("chevRight", "chev")) };
+      changeButtons.set(c.turn, kept);
+    }
+    return kept.node;
   }
 
   // The agent is blocked on questions: pick options, type an answer, or both.
@@ -1749,19 +1755,19 @@ function diffFile(file) {
   return el;
 }
 
-/** The chat's latest turn as a unified diff, in place of the chat; back returns to it. */
-function changesView(machine, id, fromChat, chatFromList) {
+/** A turn of the chat as a unified diff, in place of the chat; back returns to it. */
+function changesView(machine, id, turn, fromChat, chatFromList) {
   const cached = store.chats?.find(c => c.id === id && c.machine === machine);
   const back = () => { haptic(5); fromChat ? history.back() : go(chatHash(machine, id)); };
   const bar = h("div", { class: "bar floating" }, h("div", { class: "bar-card glass" },
     h("button", { class: "circle", "aria-label": "Back", onclick: back }, icon("back")),
-    h("div", { class: "grow" }, h("div", { class: "t" }, "Latest turn changes"), h("div", { class: "s" }, cached?.title || " ")),
+    h("div", { class: "grow" }, h("div", { class: "t" }, "Turn changes"), h("div", { class: "s" }, cached?.title || " ")),
     h("div", { class: "circle" })));
   const body = h("div", { class: "diff" }, h("div", { class: "skeleton", style: { height: "120px" } }));
   const offline = offlineBanner();
   const el = h("div", { class: "view" }, h("div", { class: "scroll" }, body), bar, offline.el);
   let gone = false;
-  call(machine, "turn_changes", { chat: id }).then(d => {
+  call(machine, "turn_changes", { chat: id, turn }).then(d => {
     if (gone) return;
     const files = parsePatch(d.patch || "");
     const notes = [!files.length && "No changes this turn", d.truncated && "The diff is too large to show whole."];
