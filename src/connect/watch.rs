@@ -15,6 +15,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, watch};
 use zeron_relay_proto::{Engine, Notice, NoticeKind};
 
+use super::changes;
 use crate::text::one_line;
 use crate::zeron::transcript;
 use crate::zeron::types::{Session, SessionStatus};
@@ -88,6 +89,9 @@ async fn watch_once(
             .collect();
         if let Some(previous) = &known {
             for (chat, kind) in changes(previous, &current) {
+                if kind == NoticeKind::Finished {
+                    spawn_freeze(zeron.clone(), chat.clone());
+                }
                 spawn_notice(zeron.clone(), notices.clone(), notify, chat, kind);
             }
         }
@@ -132,6 +136,18 @@ fn spawn_notice(
             Ok(Ok(notice)) => _ = notices.try_send(notice),
             Ok(Err(e)) => eprintln!("notification for {chat}: {e:#}"),
             Err(_) => eprintln!("notification for {chat}: Zeron didn't answer in time"),
+        }
+    });
+}
+
+/// Capture the turn `chat` just finished in its own task, before later
+/// edits in its folder can blur it.
+fn spawn_freeze(zeron: Arc<Zeron>, chat: String) {
+    tokio::spawn(async move {
+        match tokio::time::timeout(NOTICE_TIMEOUT, changes::freeze(&zeron, &chat)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("turn changes of {chat}: {e:#}"),
+            Err(_) => eprintln!("turn changes of {chat}: Zeron didn't answer in time"),
         }
     });
 }
