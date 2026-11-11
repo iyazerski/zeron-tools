@@ -66,10 +66,14 @@ pub fn tool_verb(kind: &str) -> &'static str {
         "exec" => "Run",
         "read" => "Read",
         "write" => "Write",
-        "edit" | "patch" => "Edit",
-        "search" | "glob" | "web search" => "Search",
+        "edit" => "Edit",
+        "patch" => "Patch",
+        "search" => "Search",
+        "glob" => "Glob",
+        "web search" => "Web",
         "fetch" => "Fetch",
         "todo" => "Todo",
+        "mcp" => "MCP",
         _ => "Tool",
     }
 }

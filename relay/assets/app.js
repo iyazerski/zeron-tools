@@ -834,25 +834,39 @@ function listView() {
 
 // ---- chat ---------------------------------------------------------------------
 
-/** Split a tool line ("exec: cargo test → ok (running)") into its parts. */
+/** Split a tool line ("exec: cargo test (running)") into its parts. */
 function parseTool(line) {
   let state = "";
   let text = line;
   if (text.endsWith(" (running)")) { state = "run"; text = text.slice(0, -10); }
   else if (text.endsWith(" (error)")) { state = "err"; text = text.slice(0, -8); }
-  const cut = text.indexOf(" → ");
-  const head = cut < 0 ? text : text.slice(0, cut);
-  const output = cut < 0 ? "" : text.slice(cut + 3);
-  const m = head.match(/^(exec|read|write|edit|patch|search|glob|fetch|web search|todo|mcp)(?::\s?(.*))?$/);
-  return { kind: m ? m[1] : "tool", arg: m ? m[2] || "" : head, output, state };
+  const m = text.match(/^(exec|read|write|edit|patch|search|glob|fetch|web search|todo|mcp)(?::\s?([\s\S]*))?$/);
+  return { kind: m ? m[1] : "tool", arg: m ? m[2] || "" : text, state };
 }
 
 // How the desktop labels each call ("Run cargo test", "Tool codemode").
 const TOOL_VIEW = {
-  exec: ["Run", "terminal"], read: ["Read", "read"], write: ["Write", "edit"], edit: ["Edit", "edit"], patch: ["Edit", "edit"],
-  search: ["Search", "search"], glob: ["Search", "search"], "web search": ["Search", "fetch"], fetch: ["Fetch", "fetch"],
-  todo: ["Todo", "todo"], mcp: ["Tool", "tool"], tool: ["Tool", "tool"],
+  exec: ["Run", "terminal"], read: ["Read", "read"], write: ["Write", "edit"], edit: ["Edit", "edit"], patch: ["Patch", "edit"],
+  search: ["Search", "search"], glob: ["Glob", "search"], "web search": ["Web", "fetch"], fetch: ["Fetch", "fetch"],
+  todo: ["Todo", "todo"], mcp: ["MCP", "tool"], tool: ["Tool", "tool"],
 };
+/** The kinds whose subject is a file, shown by name on a badge. */
+const FILE_KINDS = new Set(["read", "write", "edit", "patch"]);
+const baseName = path => path.split(/[\\/]/).filter(Boolean).pop() || path;
+
+/** The colour file-type icon for `path`, chosen as rune-theme-opencode's `file_icons::file`. */
+function fileIcon(path) {
+  const name = baseName(path).toLowerCase();
+  const suffixes = [name, ...[...name.matchAll(/\./g)].map(m => name.slice(m.index + 1)).filter(Boolean)];
+  const id = FILE_ICONS.names[name] || suffixes.map(s => FILE_ICONS.exts[s]).find(Boolean) || "DOCUMENT";
+  const [view, body] = FILE_ICONS.svgs[id];
+  const wrap = document.createElement("span");
+  wrap.innerHTML = `<svg class="fi" viewBox="0 0 ${view} ${view}" aria-hidden="true">${body}</svg>`;
+  return wrap.firstChild;
+}
+
+/** The desktop's file badge: the file type's icon in a well, and the file's name. */
+const fileBadge = path => h("span", { class: "badge" }, h("span", { class: "well" }, fileIcon(path)), h("span", { class: "name" }, baseName(path)));
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 /** The desktop's group summary (zeron_proto::view::tool_group_summary). */
@@ -888,13 +902,16 @@ function toolGroup(lines, open, onToggle) {
   const live = tools.some(t => t.state === "run");
   const block = h("div", { class: `tools${open ? " open" : ""}` });
   const head = h("button", { onclick: () => { block.classList.toggle("open"); onToggle(block.classList.contains("open")); haptic(4); } },
-    h("span", { class: `sum${live ? " shimmer" : ""}` }, toolSummary(tools)), icon("chevDown", "chev"));
+    icon("chevDown", "chev"), h("span", { class: `sum${live ? " shimmer" : ""}` }, toolSummary(tools)));
+  // One line per call, as the desktop's activity rows: icon, verb, then the
+  // subject, or a file call's badge.
   const items = tools.map(t => {
     const [verb, iconName] = TOOL_VIEW[t.kind] || TOOL_VIEW.tool;
-    const arg = t.kind === "mcp" ? t.arg.split("/").pop() : t.arg;
+    const subject = FILE_KINDS.has(t.kind) && t.arg ? fileBadge(t.arg)
+      : h("span", { class: "arg" }, (t.kind === "mcp" ? t.arg.replace("/", " · ") : t.arg).replace(/\s+/g, " "));
     return h("div", { class: `item ${t.state}` },
-      t.state === "run" ? glyph("trail") : icon(iconName),
-      h("div", { class: "txt" }, verb, " ", h("span", { class: "arg" }, arg), t.output ? h("span", { class: "out" }, t.output) : null));
+      h("span", { class: "lead" }, t.state === "run" ? glyph("trail") : icon(iconName)),
+      h("span", { class: "verb" }, verb), subject);
   });
   block.append(head, h("div", { class: "rail" }, items));
   return block;

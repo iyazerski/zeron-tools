@@ -10,13 +10,12 @@ pub enum ToolState {
     Failed,
 }
 
-/// One tool call line (`exec: cargo test → ok (running)`), split up.
+/// One tool call line (`exec: cargo test (running)`), split up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCall<'a> {
     /// `exec`, `read`, … or `tool` for one the app doesn't name.
     pub kind: &'a str,
     pub arg: &'a str,
-    pub output: &'a str,
     pub state: ToolState,
 }
 
@@ -42,22 +41,16 @@ pub fn parse_tool(line: &str) -> ToolCall<'_> {
     } else {
         (line, ToolState::Done)
     };
-    let (head, output) = text.split_once(" → ").unwrap_or((text, ""));
     let named = TOOL_KINDS.iter().find_map(|kind| {
-        let rest = head.strip_prefix(kind)?;
+        let rest = text.strip_prefix(kind)?;
         if rest.is_empty() {
             return Some((*kind, ""));
         }
         rest.strip_prefix(':')
             .map(|arg| (*kind, arg.strip_prefix(' ').unwrap_or(arg)))
     });
-    let (kind, arg) = named.unwrap_or(("tool", head));
-    ToolCall {
-        kind,
-        arg,
-        output,
-        state,
-    }
+    let (kind, arg) = named.unwrap_or(("tool", text));
+    ToolCall { kind, arg, state }
 }
 
 /// What Zeron's composer appends to a message with images: the agent opens
@@ -210,29 +203,20 @@ mod tests {
     fn tool_lines_split_like_the_app() {
         let cases = [
             (
-                "exec: cargo test → ok (running)",
-                ("exec", "cargo test", "ok", ToolState::Running),
+                "exec: cargo test (running)",
+                ("exec", "cargo test", ToolState::Running),
             ),
-            ("read: /a/b.rs", ("read", "/a/b.rs", "", ToolState::Done)),
+            ("read: /a/b.rs", ("read", "/a/b.rs", ToolState::Done)),
             (
-                "web search: rune → 3 results (error)",
-                ("web search", "rune", "3 results", ToolState::Failed),
+                "web search: rune (error)",
+                ("web search", "rune", ToolState::Failed),
             ),
-            ("todo", ("todo", "", "", ToolState::Done)),
-            ("codemode", ("tool", "codemode", "", ToolState::Done)),
-            ("execute: x", ("tool", "execute: x", "", ToolState::Done)),
+            ("todo", ("todo", "", ToolState::Done)),
+            ("codemode", ("tool", "codemode", ToolState::Done)),
+            ("execute: x", ("tool", "execute: x", ToolState::Done)),
         ];
-        for (line, (kind, arg, output, state)) in cases {
-            assert_eq!(
-                parse_tool(line),
-                ToolCall {
-                    kind,
-                    arg,
-                    output,
-                    state
-                },
-                "{line}"
-            );
+        for (line, (kind, arg, state)) in cases {
+            assert_eq!(parse_tool(line), ToolCall { kind, arg, state }, "{line}");
         }
     }
 

@@ -1,7 +1,7 @@
 //! A chat's page, as the phone shows it: the header, the transcript with its
 //! tool groups and errors, the agent's questions, and the composer under them.
 
-use rune::{El, ScrollSpec, Span, TextStyle, Tx, col, icon, rich, row, text};
+use rune::{Color, El, ScrollSpec, Span, TextStyle, Tx, col, icon, rich, row, text};
 use rune_kit::markdown::MarkdownStyle;
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown, Menu,
@@ -14,7 +14,10 @@ use super::widgets::{busy, dot, engine_note, head, head_titles, hide_button, ton
 use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
 use crate::companion::data::{Message, MessageStatus, Part, Role};
 use crate::companion::labels::{tool_summary, tool_verb};
-use crate::companion::message::{ToolState, parse_tool, references, split_from, split_images};
+use crate::companion::message::{
+    ToolCall, ToolState, parse_tool, references, split_from, split_images,
+};
+use rune_theme_opencode::file_icons;
 
 pub fn view(s: &State, page: &ChatPage, k: &Kit, layer: &mut Vec<El>) -> El {
     let mut body = col().key("transcript").w_full().px(14.0).py(10.0).gap(14.0);
@@ -385,29 +388,37 @@ fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
     let open = page.open_groups.contains(key);
     let live = tools.iter().any(|t| t.state == ToolState::Running);
     let toggle = key.to_owned();
-    let mut head = row().w_full().gap(6.0).center_y();
-    if live {
-        head = head.child(busy(11.0, k));
-    }
-    head = head
+    // The chevron sits on the rail's trunk, the summary over the rows' icons.
+    let mut head = row()
+        .h(TOOL_HEADER_HEIGHT)
+        .gap(RAIL_X)
+        .pr(6.0)
+        .center_y()
+        .min_w(0.0)
         .child(
-            text(tool_summary(&tools))
-                .font(k.ty.small)
-                .color(k.c.text_muted)
-                .truncate()
-                .min_w(0.0),
-        )
-        .child(
-            icon(&icons::CHEV_DOWN, 13.0)
+            icon(&icons::CHEV_DOWN, RAIL_X * 2.0)
                 .color(k.c.icon_faint)
                 .rotate(if open {
                     0.0
                 } else {
                     -std::f32::consts::FRAC_PI_2
                 }),
+        )
+        .child(
+            text(tool_summary(&tools))
+                .font(TextStyle {
+                    size: TOOL_TEXT,
+                    ..k.ty.ui
+                })
+                .color(k.c.text_muted)
+                .truncate()
+                .min_w(0.0),
         );
+    if live {
+        head = head.child(busy(11.0, k));
+    }
     let head = k
-        .interactive(head.px(6.0).py(4.0).radius(6.0))
+        .interactive(head.radius(6.0).shrink())
         .on_press(move |s: &mut State| {
             if let Some(chat) = s.chat_mut().and_then(ChatPage::existing_mut)
                 && !chat.open_groups.remove(&toggle)
@@ -418,72 +429,128 @@ fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
     let mut group = col()
         .key(format!("tools-{key}"))
         .w_full()
-        .gap(2.0)
-        .child(head);
+        .child(row().w_full().child(head));
     if open {
-        let t = tones(k);
-        let mut rail = col()
-            .w_full()
-            .gap(4.0)
-            .pl(12.0)
-            .ml(6.0)
-            .border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_muted);
-        for tool in &tools {
-            let lead = match tool.state {
-                ToolState::Running => busy(11.0, k),
-                _ => icon(icons::tool(tool.kind), 12.0).color(if tool.state == ToolState::Failed {
-                    t.failed
-                } else {
-                    k.c.icon_faint
-                }),
-            };
-            let arg = if tool.kind == "mcp" {
-                tool.arg.rsplit('/').next().unwrap_or(tool.arg)
-            } else {
-                tool.arg
-            };
-            let mut line = col().grow(1.0).min_w(0.0).child(
-                row()
-                    .gap(5.0)
-                    .child(
-                        text(tool_verb(tool.kind))
-                            .font(k.ty.small_medium)
-                            .color(k.c.text_muted),
-                    )
-                    .child(
-                        text(arg.to_owned())
-                            .font(TextStyle {
-                                size: 11.5,
-                                ..k.ty.mono
-                            })
-                            .color(k.c.text_muted)
-                            .truncate()
-                            .min_w(0.0),
-                    ),
-            );
-            if !tool.output.is_empty() {
-                line = line.child(
-                    text(tool.output.to_owned())
-                        .font(TextStyle {
-                            size: 11.0,
-                            ..k.ty.mono
-                        })
-                        .color(k.c.text_faint)
-                        .truncate(),
-                );
-            }
-            rail = rail.child(
-                row()
-                    .w_full()
-                    .gap(6.0)
-                    .items_start()
-                    .child(lead.mt(2.0))
-                    .child(line),
-            );
-        }
-        group = group.child(rail);
+        let last = tools.len().saturating_sub(1);
+        let rail = tools
+            .iter()
+            .enumerate()
+            .map(|(i, tool)| tool_row(k, tool, i == last));
+        group = group.child(col().w_full().ml(RAIL_X).children(rail));
     }
     group
+}
+
+/// Where the rail's trunk runs, from the group's left edge.
+const RAIL_X: f32 = 8.0;
+/// The desktop's activity rows: one line each, branching off the trunk.
+const TOOL_ROW_HEIGHT: f32 = 28.0;
+const TOOL_HEADER_HEIGHT: f32 = 24.0;
+const TOOL_TEXT: f32 = 12.0;
+
+/// One call on the rail, as the desktop draws it: an elbow off the trunk,
+/// the kind's icon, its verb, and its subject on one truncated line. File
+/// tools show the file's name on a badge instead of its path.
+fn tool_row(k: &Kit, tool: &ToolCall, last: bool) -> El {
+    let failed = tool.state == ToolState::Failed;
+    let tint = if failed {
+        tones(k).failed
+    } else {
+        k.c.text_muted
+    };
+    let style = TextStyle {
+        size: TOOL_TEXT,
+        line_height: 18.0,
+        ..k.ty.ui
+    };
+    let elbow = rune::el()
+        .w(12.0)
+        .h(TOOL_ROW_HEIGHT / 2.0)
+        .border_sides([0.0, 0.0, 1.0, 1.0], k.c.border_muted)
+        .corners([0.0, 0.0, 0.0, 6.0]);
+    // The trunk runs on past every row but the last, which ends in its elbow.
+    let mut branch = col().w(12.0).h(TOOL_ROW_HEIGHT).child(elbow);
+    if !last {
+        branch = branch.border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_muted);
+    }
+    let lead = match tool.state {
+        ToolState::Running => busy(12.0, k),
+        _ => icon(icons::tool(tool.kind), 14.0).color(tint),
+    };
+    let subject = if FILE_KINDS.contains(&tool.kind) && !tool.arg.is_empty() {
+        file_badge(k, tool.arg, failed)
+    } else {
+        text(single_line(&tool_subject(tool)))
+            .font(style)
+            .color(tint)
+            .truncate()
+            .min_w(0.0)
+    };
+    row()
+        .w_full()
+        .h(TOOL_ROW_HEIGHT)
+        .center_y()
+        .child(branch)
+        .child(rune::el().w(14.0).center().child(lead).ml(4.0).mr(8.0))
+        .child(text(tool_verb(tool.kind)).font(style).color(tint).mr(8.0))
+        .child(subject.shrink())
+}
+
+/// The kinds whose subject is a file.
+const FILE_KINDS: [&str; 4] = ["read", "write", "edit", "patch"];
+
+/// The file a call touched, by name, on the desktop's soft badge with the
+/// file type's colour icon.
+fn file_badge(k: &Kit, path: &str, failed: bool) -> El {
+    let name = path
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
+        .unwrap_or(path);
+    let well = if k.dark { Color::BLACK } else { Color::WHITE }.alpha(0.16);
+    row()
+        .h(22.0)
+        .gap(6.0)
+        .pl(1.0)
+        .pr(6.0)
+        .radius(5.0)
+        .center_y()
+        .min_w(0.0)
+        .fill(k.c.text_base.alpha(0.06))
+        .child(
+            rune::el()
+                .size(20.0, 20.0)
+                .radius(4.0)
+                .fill(well)
+                .center()
+                .child(icon(file_icons::file(path), 14.0)),
+        )
+        .child(
+            text(name.to_owned())
+                .font(TextStyle {
+                    size: TOOL_TEXT,
+                    ..k.ty.ui
+                })
+                .color(if failed {
+                    tones(k).failed
+                } else {
+                    k.c.text_base.alpha(0.85)
+                })
+                .truncate()
+                .min_w(0.0),
+        )
+}
+
+/// What a call's line names after its verb, as the desktop words it.
+fn tool_subject(tool: &ToolCall) -> String {
+    match tool.kind {
+        "mcp" => tool.arg.replacen('/', " · ", 1),
+        _ => tool.arg.to_owned(),
+    }
+}
+
+/// `text` on one line, its runs of whitespace (newlines too) one space each.
+fn single_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The agent is blocked on questions: pick options, type an answer, or both.

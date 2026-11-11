@@ -27,6 +27,7 @@
   --tk-function: #61afef;
   --tk-property: #e06c75;
   --rail: rgb(255 255 255 / .12);
+  --well: rgb(0 0 0 / .16);
   --subline: rgb(169 169 174 / .5);
   --solid: #e8e8ea;
   --on-solid: #0e0e0e;
@@ -75,6 +76,7 @@
     --tk-function: #4078f2;
     --tk-property: #e45649;
     --rail: rgb(0 0 0 / .162);
+    --well: rgb(255 255 255 / .16);
     --subline: rgb(98 98 106 / .5);
     --solid: #27272c;
     --on-solid: #fafafa;
@@ -311,28 +313,34 @@ a { color: inherit; text-decoration: none; }
 .aborted { font-size: 13.5px; color: var(--tertiary); }
 .errbox { font-size: 14px; color: var(--danger); background: rgb(from var(--danger) r g b / .08); padding: 10px 12px; border-radius: 12px; overflow-wrap: anywhere; }
 
-/* Tool groups: a summary line; opened, a rail with one row per call. */
-.tools { font-size: 14.5px; color: var(--secondary); }
-.tools > button { display: flex; align-items: center; gap: 6px; padding: 2px 0; max-width: 100%; text-align: left; }
+/* Tool groups, as Zeron's mobile app lays them out: a 26px header with the
+   chevron on the rail's trunk, then one 32px row per call branching off it. */
+.tools { font-size: 13.5px; line-height: 18px; color: var(--secondary); }
+.tools > button { display: flex; align-items: center; height: 26px; max-width: 100%; text-align: left; }
 .tools > button .sum { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tools .chev { width: 15px; height: 15px; transform: rotate(-90deg); transition: transform .14s ease-out; flex: none; }
+.tools .chev { width: 14px; height: 14px; margin: 0 8.5px 0 5.5px; transform: rotate(-90deg); transition: transform .14s ease-out; flex: none; }
 .tools.open .chev { transform: none; }
-.tools .rail { display: none; margin: 6px 0 0 7px; padding-left: 0; }
+.tools .rail { display: none; padding-top: 2px; }
 .tools.open .rail { display: block; }
-.tools .item { position: relative; display: flex; align-items: flex-start; gap: 8px; padding: 5px 0 5px 22px; min-width: 0; }
-/* The trunk runs down the left; each row branches off with a soft elbow. */
-.tools .item::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--rail); }
-.tools .item:last-child::before { bottom: auto; height: 15px; }
+.tools .item { position: relative; display: flex; align-items: center; gap: 8px; height: 32px; padding-left: 32px; min-width: 0; }
+.tools .item::before { content: ""; position: absolute; left: 12px; top: 0; bottom: 0; border-left: 1px solid var(--rail); }
+.tools .item:last-child::before { bottom: auto; height: 10px; }
 .tools .item::after {
-  content: ""; position: absolute; left: 0; top: 6px; width: 12px; height: 9px;
-  border-left: 1px solid var(--rail); border-bottom: 1px solid var(--rail); border-bottom-left-radius: 8px;
+  content: ""; position: absolute; left: 12px; top: 10px; width: 16px; height: 6px;
+  border-left: 1px solid var(--rail); border-bottom: 1px solid var(--rail); border-bottom-left-radius: 6px;
 }
-.tools .item .i { width: 16px; height: 16px; margin-top: 2px; color: var(--secondary); }
-.tools .item .glyph { margin: 4px 2px 0; }
-.tools .item .txt { min-width: 0; overflow-wrap: anywhere; color: var(--secondary); }
-.tools .item .arg { color: var(--tertiary); }
-.tools .item .out { display: block; font: 12.5px/1.4 var(--mono); color: var(--tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tools .item.err .txt, .tools .item.err .i { color: var(--danger); }
+.tools .item .lead { width: 16px; height: 16px; flex: none; display: grid; place-items: center; }
+.tools .item .lead .i { width: 16px; height: 16px; }
+.tools .item .verb { flex: none; }
+.tools .item .arg { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tools .item .badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 22px; min-width: 0; padding: 0 6px 0 1px;
+  border-radius: 5px; background: rgb(from var(--text) r g b / .06); color: rgb(from var(--text) r g b / .85);
+}
+.tools .item .well { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 4px; background: var(--well); }
+.tools .item .fi { width: 14px; height: 14px; display: block; }
+.tools .item .name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tools .item.err, .tools .item.err .badge { color: var(--danger); }
 .shimmer {
   background: linear-gradient(90deg, var(--secondary) 0%, var(--secondary) 35%, var(--text) 50%, var(--secondary) 65%, var(--secondary) 100%);
   background-size: 250% 100%;
