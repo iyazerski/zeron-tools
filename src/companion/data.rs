@@ -70,14 +70,18 @@ pub struct Read {
     #[serde(default)]
     pub older_remaining: usize,
     pub pending_input: Option<PendingInput>,
-    /// What the finished latest turn changed; `None` while it runs, or when it changed nothing.
+    /// The finished turns whose changes were kept and changed files.
     #[serde(default)]
-    pub turn_changes: Option<TurnChanges>,
+    pub turn_changes: Vec<TurnChanges>,
 }
 
 /// The counts of a turn's changes, for the button that opens them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TurnChanges {
+    /// The user message that started the turn.
+    pub turn: String,
+    /// The turn's last message, which the button follows.
+    pub after: String,
     pub files: usize,
     pub additions: u32,
     pub deletions: u32,

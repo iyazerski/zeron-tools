@@ -109,6 +109,8 @@ pub struct Existing {
     pub(super) copied: Option<(String, Instant)>,
     /// The latest turn's diff, shown in place of the transcript while open.
     pub changes: Option<Changes>,
+    /// The turn the changes page shows: the user message that started it.
+    pub changes_of: String,
 }
 
 /// The latest turn's diff page.
@@ -299,6 +301,7 @@ impl Existing {
             info_at: None,
             copied: None,
             changes: None,
+            changes_of: String::new(),
         }
     }
 

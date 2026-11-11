@@ -230,6 +230,8 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
         );
     }
     let last = read.messages.last().map(|m| m.id.as_str());
+    // The latest turn's button waits until it's over and nothing is asked.
+    let settled = !working && page.question.is_none();
     for m in &read.messages {
         match m.role {
             Role::User => {
@@ -241,6 +243,11 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
                 out.push(assistant(page, k, &style, m, streaming).key(format!("m-{}", m.id)));
             }
             Role::System => {}
+        }
+        if let Some(counts) = read.turn_changes.iter().find(|t| t.after == m.id)
+            && (settled || Some(m.id.as_str()) != last)
+        {
+            out.push(super::changes::button(k, counts).key(format!("changes-{}", counts.turn)));
         }
     }
     for (i, text) in page.pending.iter().enumerate() {
@@ -270,8 +277,6 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
     }
     if let Some(form) = &page.question {
         out.push(question(k, form).key(format!("q-{}", form.input.request_id)));
-    } else if let Some(counts) = read.turn_changes.filter(|_| !working) {
-        out.push(super::changes::button(k, counts));
     }
     out
 }
