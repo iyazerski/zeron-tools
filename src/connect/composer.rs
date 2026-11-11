@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::tools::default_harness;
 use crate::zeron::types::{ChatConfig, Model, Skill, SkillCommand};
@@ -177,7 +177,7 @@ pub struct SetModelArgs {
 /// healed to a level the model offers, and options it doesn't offer drop.
 pub async fn set_model(zeron: &Zeron, args: SetModelArgs) -> Result<Value> {
     let chat = zeron.chat(&args.chat).await?;
-    let Some(mut config) = chat.config.clone() else {
+    let Some(mut config) = chat.config else {
         bail!("this chat has no model yet; send it a message first");
     };
     let (models, harnesses) = tokio::try_join!(zeron.models(&config.harness), zeron.harnesses())?;
@@ -222,18 +222,14 @@ fn fit_to_model(config: &mut ChatConfig, model: Option<&Model>, harness_levels: 
         config.reasoning = default_reasoning(ladder);
     }
     if let Some(model) = model {
-        let options = std::mem::take(&mut config.model_options);
-        config.model_options = options
-            .into_iter()
-            .filter(|(id, choice)| {
-                model.options.iter().any(|option| {
-                    option.id == *id
-                        && choice
-                            .as_str()
-                            .is_some_and(|choice| option.choices.iter().any(|c| c.id == choice))
-                })
+        config.model_options.retain(|id, choice| {
+            model.options.iter().any(|option| {
+                option.id == *id
+                    && choice
+                        .as_str()
+                        .is_some_and(|choice| option.choices.iter().any(|c| c.id == choice))
             })
-            .collect::<Map<_, _>>();
+        });
     }
 }
 

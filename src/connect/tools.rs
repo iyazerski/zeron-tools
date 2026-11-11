@@ -202,10 +202,15 @@ struct CreateChatArgs {
 /// the first prompt. If the chat was created but the prompt didn't go,
 /// `sendError` says why.
 async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
-    let space = match args.project.as_deref() {
-        Some(key) => Some(find_space(&zeron.spaces().await?, key)?.clone()),
-        None => None,
+    let spaces = match args.project {
+        Some(_) => zeron.spaces().await?,
+        None => Vec::new(),
     };
+    let space = args
+        .project
+        .as_deref()
+        .map(|key| find_space(&spaces, key))
+        .transpose()?;
     let (device, harnesses) = tokio::try_join!(zeron.local_device(), zeron.harnesses())?;
     let harness = pick_harness(args.harness, &harnesses)?;
     if let Some(model) = args.model.as_deref() {
@@ -222,7 +227,7 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
     let cwd = scratch.then(|| scratch_cwd(&id, created_at));
     let chat = Chat {
         id,
-        device_id: space.as_ref().map_or(device.id, |s| s.device_id.clone()),
+        device_id: space.map_or(device.id, |s| s.device_id.clone()),
         title: None,
         archived: false,
         cwd,
@@ -237,7 +242,7 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         last_message_preview: None,
         last_message_at: None,
         created_at,
-        space_id: space.as_ref().map(|s| s.id.clone()),
+        space_id: space.map(|s| s.id.clone()),
         parent_chat_id: None,
     };
     zeron.mutate(create_op(&chat)).await?;
@@ -245,7 +250,7 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         "chatId": chat.id,
         "kind": "chat",
         "deviceId": chat.device_id,
-        "project": space.as_ref().map(project),
+        "project": space.map(project),
         "harness": chat.harness(),
         "model": chat.model(),
         "reasoning": chat.reasoning(),
@@ -259,7 +264,7 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
         // The new row may not be in WatchChats yet: use what was just written.
         // The chat exists either way, so a failed send is part of the answer:
         // retrying the whole call would create a second chat.
-        match deliver(zeron, &chat, space.as_ref(), &harnesses, None, prompt).await {
+        match deliver(zeron, &chat, space, &harnesses, None, prompt).await {
             Ok(sent) => result["sent"] = sent,
             Err(e) => result["sendError"] = json!(format!("{e:#}")),
         }
@@ -392,22 +397,17 @@ fn run_request(
         None => default_harness(harnesses)?,
     };
     let config = chat.config.as_ref();
-    let cwd = chat
-        .cwd
-        .clone()
-        .or_else(|| space.map(|s| s.path.clone()))
-        .unwrap_or_else(|| "~".into());
-    let sandbox = config
-        .and_then(|c| c.rest.get("sandbox").cloned())
-        .unwrap_or_else(|| json!(DEFAULT_SANDBOX));
+    let cwd = cwd_of(chat, space).unwrap_or("~");
     Ok(json!({
         "prompt": text,
         "harness": harness,
         "model": chat.model(),
         "reasoning": chat.reasoning(),
-        "modelOptions": config.map(|c| c.model_options.clone()).unwrap_or_default(),
+        "modelOptions": config.map_or(&Map::new(), |c| &c.model_options),
         "cwd": cwd,
-        "sandbox": sandbox,
+        "sandbox": config
+            .and_then(|c| c.rest.get("sandbox"))
+            .unwrap_or(&json!(DEFAULT_SANDBOX)),
         "autoApprove": false,
         "resume": null,
     }))
@@ -466,6 +466,11 @@ fn find_space<'a>(spaces: &'a [Space], key: &str) -> Result<&'a Space> {
         .with_context(|| format!("no project matches {key}"))
 }
 
+/// The folder `chat` runs in: its own, else its project's.
+fn cwd_of<'a>(chat: &'a Chat, space: Option<&'a Space>) -> Option<&'a str> {
+    chat.cwd.as_deref().or(space.map(|s| s.path.as_str()))
+}
+
 fn project(space: &Space) -> Value {
     json!({ "id": space.id, "name": space.display_name(), "path": space.path })
 }
@@ -479,7 +484,7 @@ pub(super) fn summary(chat: &Chat, spaces: &[Space], sessions: &[Session]) -> Va
         "title": chat.title,
         "project": space.map(project),
         "deviceId": chat.device_id,
-        "cwd": chat.cwd.clone().or_else(|| space.map(|s| s.path.clone())),
+        "cwd": cwd_of(chat, space),
         "branch": chat.branch,
         "harness": chat.harness(),
         "model": chat.model(),
