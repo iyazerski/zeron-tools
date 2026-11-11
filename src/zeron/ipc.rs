@@ -86,13 +86,6 @@ pub struct EngineError {
     message: String,
 }
 
-impl EngineError {
-    /// Whether the engine doesn't have the method called.
-    fn is_unknown_method(&self) -> bool {
-        self.message.contains(UNKNOWN_METHOD)
-    }
-}
-
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.method, self.message)
@@ -153,10 +146,15 @@ impl Ipc {
 
 /// Whether `error` says the engine doesn't have the method called.
 pub fn is_unknown_method(error: &anyhow::Error) -> bool {
+    engine_says(error, UNKNOWN_METHOD)
+}
+
+/// Whether the engine answered with an error that says `text`.
+pub fn engine_says(error: &anyhow::Error, text: &str) -> bool {
     error
         .chain()
         .filter_map(|e| e.downcast_ref::<EngineError>())
-        .any(EngineError::is_unknown_method)
+        .any(|e| e.message.contains(text))
 }
 
 /// One WebSocket to the engine. A task owns the socket; it ends when every

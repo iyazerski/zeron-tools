@@ -467,7 +467,7 @@ fn find_space<'a>(spaces: &'a [Space], key: &str) -> Result<&'a Space> {
 }
 
 /// The folder `chat` runs in: its own, else its project's.
-fn cwd_of<'a>(chat: &'a Chat, space: Option<&'a Space>) -> Option<&'a str> {
+pub(super) fn cwd_of<'a>(chat: &'a Chat, space: Option<&'a Space>) -> Option<&'a str> {
     chat.cwd.as_deref().or(space.map(|s| s.path.as_str()))
 }
 

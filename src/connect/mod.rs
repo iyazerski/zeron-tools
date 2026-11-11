@@ -14,6 +14,7 @@
 //! reports chats that finish, need an answer, or fail. [`power`] reports the
 //! battery.
 
+mod changes;
 mod chat;
 mod composer;
 mod dictation;
@@ -327,6 +328,8 @@ enum Request {
     RestartZeron,
     /// The chat screen ([`chat::view`]).
     ChatView,
+    /// The latest turn's diff page ([`changes::turn`]).
+    TurnChanges,
     /// The composer footer ([`composer::info`]).
     ComposerInfo,
     /// The composer's model picker ([`composer::set_model`]).
@@ -357,6 +360,7 @@ impl FromStr for Request {
             "open_zeron" => Self::OpenZeron,
             "restart_zeron" => Self::RestartZeron,
             "chat_view" => Self::ChatView,
+            "turn_changes" => Self::TurnChanges,
             "composer_info" => Self::ComposerInfo,
             "set_chat_model" => Self::SetChatModel,
             "list_skills" => Self::ListSkills,
@@ -402,6 +406,7 @@ async fn dispatch(
         Request::OpenZeron => engine.open().await.map(|()| opening()),
         Request::RestartZeron => engine.restart().await.map(|()| opening()),
         Request::ChatView => chat::view(zeron, parse_args(args)?).await,
+        Request::TurnChanges => changes::turn(zeron, parse_args(args)?).await,
         Request::ComposerInfo => composer::info(zeron, parse_args(args)?).await,
         Request::SetChatModel => composer::set_model(zeron, parse_args(args)?).await,
         Request::ListSkills => composer::skills(zeron, parse_args(args)?).await,

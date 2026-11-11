@@ -19,7 +19,9 @@ use serde_json::{Value, json};
 
 use self::ipc::{Ipc, Subscription};
 use self::transcript::Entry;
-use self::types::{Chat, Device, Harness, Model, Session, SidebarPreferences, Skill, Space};
+use self::types::{
+    Chat, CheckoutDiff, Device, Harness, Model, Session, SidebarPreferences, Skill, Space,
+};
 
 /// The engine methods used here (`crates/rpc/src/lib.rs` `methods`).
 pub mod methods {
@@ -31,6 +33,7 @@ pub mod methods {
     pub const WATCH_SESSIONS: &str = "WatchSessions";
     pub const WATCH_SIDEBAR_PREFERENCES: &str = "WatchSidebarPreferences";
     pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
+    pub const GET_CHECKOUT_DIFF: &str = "GetCheckoutDiff";
     pub const LIST_HARNESSES: &str = "ListHarnesses";
     pub const LIST_MODELS: &str = "ListModels";
     pub const LIST_REFS: &str = "ListRefs";
@@ -50,6 +53,9 @@ const UPLOAD_CHUNK_BYTES: usize = 192 * 1024;
 /// How long a snapshot or transcript may take. The engine answers in
 /// milliseconds unless it's still starting.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `GetCheckoutDiff`'s error for a chat with no turn snapshot in that checkout.
+const NO_TURN: &str = "no turn recorded";
 
 /// The engine's IPC port when `ZERON_IPC_PORT` isn't set.
 pub const DEFAULT_IPC_PORT: u16 = 27654;
@@ -185,6 +191,19 @@ impl Zeron {
             if let Some(entries) = transcript::from_frame(&frame) {
                 return entries.context("WatchDocMessages: unexpected transcript");
             }
+        }
+    }
+
+    /// What chat `chat_id`'s latest turn changed in the checkout at `cwd`,
+    /// as the Changes pane's "Latest turn" scope shows it. `None` when Zeron
+    /// recorded no turn of the chat there: none ran since Zeron started, or it
+    /// ran in another checkout or on another device.
+    pub async fn turn_diff(&self, cwd: &str, chat_id: &str) -> Result<Option<CheckoutDiff>> {
+        let params = json!({ "cwd": cwd, "mode": "turn", "chatId": chat_id });
+        match self.call(methods::GET_CHECKOUT_DIFF, params).await {
+            Ok(value) => parse(methods::GET_CHECKOUT_DIFF, value).map(Some),
+            Err(e) if ipc::engine_says(&e, NO_TURN) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
