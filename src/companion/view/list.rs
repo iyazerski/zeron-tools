@@ -3,10 +3,10 @@
 
 use chrono::Utc;
 use rune::{El, TextStyle, Tx, col, icon, row, text};
-use rune_kit::{IconButton, IconButtonVariant, Kit, Spinner, TextInput};
+use rune_kit::{IconButton, IconButtonVariant, Kit, TextInput};
 
 use super::icons;
-use super::widgets::{dot, engine_note, faint, head, head_titles, hide_button, tile, tones};
+use super::widgets::{busy, dot, engine_note, faint, head, head_titles, hide_button, tile, tones};
 use crate::companion::app::State;
 use crate::companion::data::Chat;
 use crate::companion::labels::{ago, harness_name};
@@ -73,7 +73,7 @@ pub fn view(s: &State, k: &Kit) -> El {
                 .w_full()
                 .py(24.0)
                 .justify_center()
-                .child(Spinner::new().build(k)),
+                .child(busy(18.0, k)),
         ),
         Some(chats) => body.children(rows(s, k, chats)),
     };
@@ -188,7 +188,7 @@ fn section(k: &Kit, key: &str, items: &[&Chat], collapsed: bool) -> El {
                 .color(k.c.text_faint),
         );
     if live {
-        head = head.child(Spinner::new().size(10.0).build(k));
+        head = head.child(busy(10.0, k));
     }
     let chevron = icon(&icons::CHEV_DOWN, 14.0)
         .color(k.c.icon_faint)
@@ -211,11 +211,8 @@ fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
     let idle = matches!(status, ChatStatus::Idle | ChatStatus::Unknown);
     let unseen = idle && s.prefs.unseen(c);
     let corner = match status {
-        ChatStatus::Working | ChatStatus::StaleWorking => row()
-            .gap(5.0)
-            .center_y()
-            .child(Spinner::new().size(10.0).build(k))
-            .child(
+        ChatStatus::Working | ChatStatus::StaleWorking => {
+            row().gap(5.0).center_y().child(busy(10.0, k)).child(
                 text(if status == ChatStatus::StaleWorking {
                     "Offline?"
                 } else {
@@ -223,7 +220,8 @@ fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
                 })
                 .font(k.ty.small)
                 .color(t.working),
-            ),
+            )
+        }
         ChatStatus::AwaitingInput => labelled(k, dot(t.input), "Input", t.input),
         ChatStatus::Errored => labelled(k, dot(t.failed), "Failed", t.failed),
         ChatStatus::Idle | ChatStatus::Unknown if unseen => {

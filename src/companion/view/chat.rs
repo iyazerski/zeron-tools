@@ -5,12 +5,12 @@ use rune::{El, ScrollSpec, Span, TextStyle, Tx, col, icon, rich, row, text};
 use rune_kit::markdown::MarkdownStyle;
 use rune_kit::{
     Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Kit, Markdown, Menu,
-    MenuItem, Spinner, TextInput,
+    MenuItem, TextInput,
 };
 
 use super::{code, icons};
 
-use super::widgets::{dot, engine_note, head, head_titles, hide_button, tones};
+use super::widgets::{busy, dot, engine_note, head, head_titles, hide_button, tones};
 use crate::companion::app::{ChatPage, Existing, Overlay, QuestionForm, State, Target};
 use crate::companion::data::{Message, MessageStatus, Part, Role};
 use crate::companion::labels::{tool_summary, tool_verb};
@@ -205,7 +205,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
                 .w_full()
                 .py(32.0)
                 .justify_center()
-                .child(Spinner::new().build(k)),
+                .child(busy(18.0, k)),
         ];
     };
     let working = page.chat.as_ref().is_some_and(|c| c.is_working());
@@ -251,7 +251,7 @@ fn transcript(page: &Existing, k: &Kit) -> Vec<El> {
                 .key("working")
                 .gap(8.0)
                 .center_y()
-                .child(Spinner::new().size(12.0).build(k))
+                .child(busy(12.0, k))
                 .child(text("Working").font(k.ty.ui).color(k.c.text_muted))
                 .child(
                     text(secs.map(|s| format!("{s}s")).unwrap_or_default())
@@ -387,7 +387,7 @@ fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
     let toggle = key.to_owned();
     let mut head = row().w_full().gap(6.0).center_y();
     if live {
-        head = head.child(Spinner::new().size(11.0).build(k));
+        head = head.child(busy(11.0, k));
     }
     head = head
         .child(
@@ -430,7 +430,7 @@ fn tool_group(page: &Existing, k: &Kit, key: &str, lines: &[String]) -> El {
             .border_sides([0.0, 0.0, 0.0, 1.0], k.c.border_muted);
         for tool in &tools {
             let lead = match tool.state {
-                ToolState::Running => Spinner::new().size(11.0).build(k),
+                ToolState::Running => busy(11.0, k),
                 _ => icon(icons::tool(tool.kind), 12.0).color(if tool.state == ToolState::Failed {
                     t.failed
                 } else {

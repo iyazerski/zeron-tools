@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use rune::color::hex;
-use rune::{Color, El, TextStyle, col, el, icon, row, text};
+use rune::{Color, Cycle, El, TextStyle, col, el, icon, row, text};
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Kit};
 use zeron_relay_proto::Engine;
 
@@ -104,6 +104,39 @@ pub fn tile(k: &Kit, project: Option<&Project>, size: f32) -> El {
 
 pub fn dot(color: Color) -> El {
     el().size(7.0, 7.0).radius(3.5).fill(color)
+}
+
+/// Seconds each of `busy`'s dots stays lit.
+const BUSY_STEP: f32 = 0.4;
+/// Each dot's opacity over a `busy` loop: lit for its third, dim for the rest.
+const BUSY_STOPS: &[(f32, f32)] = &[(0.0, 1.0), (0.333, 1.0), (0.334, 0.3), (1.0, 0.3)];
+
+/// An in-progress mark in a `size`-point square: three dots lit in turn.
+/// It steps instead of fading, so while only it moves the window redraws
+/// twice a step rather than at rune-kit `Spinner`'s 60 frames a second.
+pub fn busy(size: f32, k: &Kit) -> El {
+    let side = size / 3.6;
+    let dots = (0..3).map(|i| {
+        el().key(format!("busy{i}"))
+            .size(side, side)
+            .radius(side / 2.0)
+            .fill(k.c.std_text)
+            .a11y_hidden()
+            .cycle(Cycle {
+                period: 3.0 * BUSY_STEP,
+                phase: i as f32 / 3.0,
+                stops: BUSY_STOPS,
+                still: 0.6,
+                fps: 2.0 / BUSY_STEP,
+            })
+    });
+    row()
+        .role("progressbar")
+        .label("Loading")
+        .size(size, size)
+        .gap(side * 0.3)
+        .center_y()
+        .children(dots)
 }
 
 /// A faint one-line label.
