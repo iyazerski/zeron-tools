@@ -330,7 +330,6 @@ impl State {
 
     pub fn back(&mut self) {
         self.leave_page();
-        self.page = Page::List;
         self.list.poll.expire();
         self.load_due();
     }
@@ -345,15 +344,18 @@ impl State {
         self.page = Page::Chat(Box::new(ChatPage::new(self.nav, target, composer)));
     }
 
-    /// Keep the page's unsent text for when it opens again.
+    /// Close the open page for the list, keeping its unsent text for when it
+    /// opens again.
     fn leave_page(&mut self) {
-        let Page::Chat(page) = &self.page else { return };
+        let Page::Chat(mut page) = std::mem::replace(&mut self.page, Page::List) else {
+            return;
+        };
         let key = page.target.key();
         if page.composer.text.trim().is_empty() {
             self.drafts.remove(key);
         } else {
-            self.drafts
-                .insert(key.to_owned(), page.composer.text.clone());
+            let text = std::mem::take(&mut page.composer.text);
+            self.drafts.insert(key.to_owned(), text);
         }
     }
 }

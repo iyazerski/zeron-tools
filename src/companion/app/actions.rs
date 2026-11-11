@@ -166,7 +166,7 @@ impl State {
             Ok(paths) => paths,
             Err(why) => return self.fail(why, ""),
         };
-        let text = with_images(&with_skill_refs(&typed, page.skills.list.ready()), &paths);
+        let text = with_images(with_skill_refs(&typed, page.skills.list.ready()), &paths);
         let nav = page.nav;
         let Target::Existing(chat) = &mut page.target else {
             self.create(text);

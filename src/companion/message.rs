@@ -66,11 +66,11 @@ const IMAGES_HEAD: &str = "\n\nAttached images (local files — open them to vie
 
 /// The message Zeron's composer sends for `text` with images saved at
 /// `paths`: a `zeron-image` reference per image, then their paths.
-pub fn with_images(text: &str, paths: &[String]) -> String {
+pub fn with_images(mut out: String, paths: &[String]) -> String {
     if paths.is_empty() {
-        return text.to_owned();
+        return out;
     }
-    let mut out = text.trim_end().to_owned();
+    out.truncate(out.trim_end().len());
     for n in 1..=paths.len() {
         let gap = if out.is_empty() { "" } else { " " };
         out.push_str(&format!("{gap}[Image {n}](zeron-image:{n})"));
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn images_attach_like_the_desktop() {
         let paths = ["/u/a-Image_1.png".to_owned(), "/u/b-Image_2.png".to_owned()];
-        let sent = with_images("see ", &paths);
+        let sent = with_images("see ".into(), &paths);
         // As Zeron's composer sends it (seen in a live transcript).
         assert_eq!(
             sent,
@@ -282,10 +282,10 @@ mod tests {
             )
         );
         assert_eq!(
-            with_images("", &paths[..1]).lines().next(),
+            with_images(String::new(), &paths[..1]).lines().next(),
             Some("[Image 1](zeron-image:1)")
         );
-        assert_eq!(with_images("hi", &[]), "hi");
+        assert_eq!(with_images("hi".into(), &[]), "hi");
         assert_eq!(split_images("hi"), ("hi", vec![]));
     }
 
