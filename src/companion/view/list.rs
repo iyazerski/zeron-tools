@@ -1,19 +1,22 @@
 //! The chat list, as the phone shows it: chats grouped by project, most
-//! recently active first, with a search over titles, projects and previews.
+//! recently active first, with a search over titles, projects and previews
+//! and a filter by status.
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
 use rune::{El, TextStyle, Tx, col, icon, row, text};
-use rune_kit::{IconButton, IconButtonVariant, Kit, TextInput};
+use rune_kit::{IconButton, IconButtonVariant, Kit, SegmentedControl, TextInput};
 
 use super::icons;
 use super::widgets::{busy, dot, engine_note, faint, head, head_titles, hide_button, tile, tones};
-use crate::companion::app::State;
+use crate::companion::app::{ListFilter, State};
 use crate::companion::data::Chat;
 use crate::companion::labels::{ago, harness_name};
 use crate::connect::ChatStatus;
 
 /// The search field's height; its ends are fully round, as on the phone.
 const SEARCH_HEIGHT: f32 = 32.0;
+/// How long ago a chat may have been active to count as recent.
+const RECENT: TimeDelta = TimeDelta::minutes(15);
 
 pub fn view(s: &State, k: &Kit) -> El {
     let header = head("list-head")
@@ -60,6 +63,14 @@ pub fn view(s: &State, k: &Kit) -> El {
         .radius(SEARCH_HEIGHT / 2.0)
         .pl(4.0)
         .key("search");
+    let labels = ListFilter::ALL.map(ListFilter::label);
+    let picked = ListFilter::ALL.iter().position(|f| *f == s.list.filter);
+    let filter = SegmentedControl::new(&labels, picked)
+        .label("Show")
+        .width(None)
+        .on_pick(|s: &mut State, i, _: &mut Tx| s.list.filter = ListFilter::ALL[i])
+        .build(k)
+        .key("filter");
     let mut body = col().key("rows").w_full().px(8.0).pb(12.0).gap(1.0);
     if let Some(note) = engine_note(s, k) {
         body = body.child(note.mb(8.0));
@@ -82,6 +93,7 @@ pub fn view(s: &State, k: &Kit) -> El {
         .h_full()
         .child(header)
         .child(row().w_full().px(12.0).pb(8.0).child(search))
+        .child(row().w_full().px(12.0).pb(8.0).child(filter))
         .child(
             col()
                 .key("list")
@@ -103,15 +115,30 @@ fn empty(k: &Kit, why: &str) -> El {
         .child(text(why).font(k.ty.ui).color(k.c.text_muted).wrap())
 }
 
-/// The chats the search matches, in list order.
+/// The chats the search and the filter keep, in list order.
 fn filtered(s: &State) -> Vec<&Chat> {
     let q = s.list.query.text.trim().to_lowercase();
+    let now = Utc::now();
     s.list
         .chats
         .iter()
         .flatten()
-        .filter(|c| q.is_empty() || matches(c, &q))
+        .filter(|c| keeps(s, c, now) && (q.is_empty() || matches(c, &q)))
         .collect()
+}
+
+fn keeps(s: &State, c: &Chat, now: DateTime<Utc>) -> bool {
+    match s.list.filter {
+        ListFilter::All => true,
+        ListFilter::Working => c.is_working(),
+        ListFilter::Done => is_done(s, c),
+        ListFilter::Recent => now - c.active_at() <= RECENT,
+    }
+}
+
+/// Whether `c` finished a turn since it was last opened.
+fn is_done(s: &State, c: &Chat) -> bool {
+    matches!(c.status, ChatStatus::Idle | ChatStatus::Unknown) && s.prefs.unseen(c)
 }
 
 fn matches(c: &Chat, q: &str) -> bool {
@@ -126,11 +153,9 @@ fn matches(c: &Chat, q: &str) -> bool {
 
 fn rows(s: &State, k: &Kit, chats: &[Chat]) -> Vec<El> {
     let q = s.list.query.text.trim();
+    let shown = filtered(s);
     if !q.is_empty() {
-        let hits: Vec<El> = filtered(s)
-            .into_iter()
-            .map(|c| chat_row(s, k, c, true))
-            .collect();
+        let hits: Vec<El> = shown.into_iter().map(|c| chat_row(s, k, c, true)).collect();
         return if hits.is_empty() {
             vec![empty(k, "No chats match your search")]
         } else {
@@ -140,9 +165,18 @@ fn rows(s: &State, k: &Kit, chats: &[Chat]) -> Vec<El> {
     if chats.is_empty() {
         return vec![empty(k, "No chats yet")];
     }
+    if shown.is_empty() {
+        let why = match s.list.filter {
+            ListFilter::All => "No chats yet",
+            ListFilter::Working => "No chat is working",
+            ListFilter::Done => "No finished chats to look at",
+            ListFilter::Recent => "No chats active in the last 15 minutes",
+        };
+        return vec![empty(k, why)];
+    }
     // Projects, most recently active first, like the sidebar.
     let mut groups: Vec<(String, Vec<&Chat>)> = Vec::new();
-    for c in chats {
+    for c in shown {
         let key = c
             .project
             .as_ref()
@@ -208,8 +242,7 @@ fn section(k: &Kit, key: &str, items: &[&Chat], collapsed: bool) -> El {
 fn chat_row(s: &State, k: &Kit, c: &Chat, with_project: bool) -> El {
     let t = tones(k);
     let status = c.status;
-    let idle = matches!(status, ChatStatus::Idle | ChatStatus::Unknown);
-    let unseen = idle && s.prefs.unseen(c);
+    let unseen = is_done(s, c);
     let corner = match status {
         ChatStatus::Working | ChatStatus::StaleWorking => {
             row().gap(5.0).center_y().child(busy(10.0, k)).child(
