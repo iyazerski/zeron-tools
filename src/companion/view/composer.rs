@@ -5,11 +5,10 @@
 use rune::{El, Image, Key, KeyEvent, SurfaceFit, Tx, auto_grow, col, icon, row, text, text_input};
 use rune_kit::{
     Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Kit, PopupItem, PopupList,
-    Spinner,
 };
 
 use super::icons;
-use super::widgets::tile;
+use super::widgets::{busy, tile};
 use crate::companion::app::{
     Catalog, ChatPage, Config, LEVELS_KEPT, Overlay, Pick, Sheet, SkillList, State, Upload, Voice,
 };
@@ -132,7 +131,7 @@ fn recorder(page: &ChatPage, k: &Kit) -> Option<El> {
     let line = row().key("recorder").w_full().h(19.0).gap(10.0).center_y();
     if matches!(page.voice, Voice::Polishing) {
         return Some(
-            line.child(Spinner::new().size(12.0).build(k)).child(
+            line.child(busy(12.0, k)).child(
                 text("Cleaning up…")
                     .font(k.ty.text_small)
                     .color(k.c.text_muted),
@@ -184,7 +183,7 @@ fn attachments(page: &ChatPage, k: &Kit) -> El {
                             .size(56.0, 56.0)
                             .absolute(0.0, 0.0)
                             .center()
-                            .child(Spinner::new().size(14.0).build(k)),
+                            .child(busy(14.0, k)),
                     );
                 }
                 Upload::Failed(e) => tile = tile.border(1.5, k.c.danger.fg).help(e.clone()),
@@ -605,7 +604,7 @@ fn model_body(s: &State, page: &ChatPage, k: &Kit) -> El {
                 .w_full()
                 .py(24.0)
                 .justify_center()
-                .child(Spinner::new().build(k));
+                .child(busy(18.0, k));
         }
     };
     let mut body = col().w_full().gap(6.0);
