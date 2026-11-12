@@ -34,7 +34,7 @@ jobs:
       NAMESPACE: ${{ vars.KUBE_NAMESPACE || 'default' }}
       PUBLIC_HOST: ${{ vars.RELAY_PUBLIC_HOST || 'zeron.iyazerski.dev' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 
@@ -45,7 +45,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: relay/Dockerfile

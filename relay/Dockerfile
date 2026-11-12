@@ -2,7 +2,7 @@
 #   docker build -f relay/Dockerfile .
 # The build stage runs natively and cross-compiles with zig, so building an
 # amd64 image on an arm64 Mac (or the reverse) needs no emulation.
-FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.23 AS build
+FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.24 AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY . .
