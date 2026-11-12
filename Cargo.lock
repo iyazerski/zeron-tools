@@ -7172,6 +7172,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite 0.30.0",
+ "unicode-segmentation",
  "uuid",
  "which",
  "zeron-json-file",

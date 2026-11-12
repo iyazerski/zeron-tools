@@ -376,8 +376,14 @@ impl State {
                     self.polish(nav, d.heard);
                 }
             }
+            // What was heard before the failure goes in as heard, rather than being lost.
             Heard::Failed(why) => {
-                page.voice = Voice::Idle;
+                let Voice::Listening(d) = std::mem::replace(&mut page.voice, Voice::Idle) else {
+                    return;
+                };
+                if !d.heard.trim().is_empty() {
+                    self.add_dictated(nav, &d.heard);
+                }
                 self.fail("Dictation stopped", why);
             }
         }
@@ -404,13 +410,22 @@ impl State {
                         heard
                     }
                 };
-                let Some(page) = s.page_at(nav) else { return };
-                page.voice = Voice::Idle;
-                let text = dictation::join(&page.composer.text, &words);
-                page.composer.replace_text(text);
-                page.composer.focused = true;
+                if let Some(page) = s.page_at(nav) {
+                    page.voice = Voice::Idle;
+                }
+                s.add_dictated(nav, &words);
             },
         );
+    }
+
+    /// Put dictated `words` after the composer's text on page `nav`.
+    fn add_dictated(&mut self, nav: u64, words: &str) {
+        let Some(page) = self.page_at(nav) else {
+            return;
+        };
+        let text = dictation::join(&page.composer.text, words);
+        page.composer.replace_text(text);
+        page.composer.focused = true;
     }
 
     /// Answer the agent's questions with the picked options and typed text.

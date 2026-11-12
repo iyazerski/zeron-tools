@@ -28,6 +28,8 @@ plist = { version = "1", default-features = false, features = ["serde"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Splits dictated text into words to compare transcriptions.
+unicode-segmentation = "1"
 tokio = { version = "1", features = ["fs", "rt-multi-thread", "macros", "net", "process", "sync", "time"] }
 # The relay link and Zeron's IPC.
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
