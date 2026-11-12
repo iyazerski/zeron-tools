@@ -1,11 +1,8 @@
 //! What each of a chat's turns changed: the counts for the buttons under
 //! its turns, and a turn's whole patch for the app's diff page.
 //!
-//! Zeron's "Latest turn" diff compares the latest turn's start with the
-//! files as they are now, and forgets the start once another turn begins.
-//! So a turn's diff is captured as soon as it ends (see [`super::watch`]) and
-//! kept in [`Turns`]; a view of a finished latest turn not kept yet captures
-//! it then.
+//! Zeron forgets a turn's starting snapshot once another turn begins, so a
+//! turn's diff is captured as soon as it ends and kept in [`Turns`].
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -17,10 +14,8 @@ use crate::zeron::transcript::{self, Message, Role};
 use crate::zeron::types::{Chat, Session, SessionStatus, Space};
 use crate::zeron::{Zeron, session_for, space_of};
 
-/// The `turn_changes` arguments.
 #[derive(Debug, Deserialize)]
 pub struct TurnArgs {
-    /// The chat's id or id prefix.
     chat: String,
     /// The id of the user message that started the turn.
     turn: String,
@@ -86,7 +81,6 @@ pub(super) async fn freeze(zeron: &Zeron, turns: &Turns, chat_id: &str) -> Resul
     capture_latest(zeron, turns, &chat).await
 }
 
-/// [`capture`] with the chat's folder, session and transcript read here.
 async fn capture_latest(zeron: &Zeron, turns: &Turns, chat: &Chat) -> Result<()> {
     let (spaces, sessions, entries) =
         tokio::try_join!(zeron.spaces(), zeron.sessions(), zeron.transcript(chat))?;

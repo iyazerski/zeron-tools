@@ -18,7 +18,6 @@ pub struct Draft {
     pub model: Option<String>,
     pub reasoning: Option<String>,
     pub load: Load,
-    /// The first message is creating the chat.
     pub creating: bool,
     saved_project: ProjectPick,
 }
@@ -48,7 +47,6 @@ pub enum Pick {
     Reasoning(String),
 }
 
-/// A harness's models and reasoning levels.
 pub enum Catalog {
     Loading,
     Ready {

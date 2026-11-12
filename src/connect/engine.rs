@@ -1,11 +1,8 @@
 //! Whether this Mac's Zeron can take the phone's calls, and starting it.
 //!
-//! `connect` runs whether or not Zeron is open (at login, as a launch
-//! agent), so it probes the engine's IPC and tells the relay when Zeron
-//! opens or closes. When Zeron comes up (and now and then while it runs) it
-//! also checks that the data this tool reads still parses; if Zeron changed
-//! it, Zeron counts as outdated and calls are refused, rather than failing
-//! one by one. The phone can start Zeron's engine service ([`daemon`]).
+//! It probes the engine's IPC and also checks now and then that the data
+//! this tool reads still parses. If Zeron changed it, Zeron counts as
+//! outdated and calls are refused, rather than failing one by one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,7 +17,6 @@ use crate::zeron::{Zeron, daemon, ipc, methods};
 /// How often to probe while Zeron is closed: short, so it shows up soon
 /// after the phone opens it.
 const PROBE_CLOSED: Duration = Duration::from_secs(3);
-/// How often to probe while it runs.
 const PROBE_RUNNING: Duration = Duration::from_secs(15);
 /// Re-check compatibility this often while Zeron runs: an update restarts
 /// it, but the IPC client may reconnect between two probes.
@@ -31,7 +27,6 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The compatibility check reads a few snapshots; a starting engine may be slow.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Zeron's state as the prober last saw it, and opening Zeron.
 #[derive(Clone)]
 pub struct EngineWatch {
     state: watch::Receiver<Engine>,
@@ -41,24 +36,20 @@ pub struct EngineWatch {
 }
 
 impl EngineWatch {
-    /// Return the state now.
     pub fn now(&self) -> Engine {
         self.state.borrow().clone()
     }
 
-    /// Return a receiver that sees each new state.
     pub fn changes(&self) -> watch::Receiver<Engine> {
         self.state.clone()
     }
 
-    /// Start Zeron's engine service if it's stopped.
     pub async fn open(&self) -> Result<()> {
         daemon::start().await?;
         self.wake.notify_one();
         Ok(())
     }
 
-    /// Return a watch stuck at `state`, with no prober.
     #[cfg(test)]
     pub fn fixed(state: Engine) -> Self {
         Self {
@@ -68,7 +59,6 @@ impl EngineWatch {
     }
 }
 
-/// Probe Zeron forever and publish its state.
 pub fn spawn(zeron: Arc<Zeron>) -> EngineWatch {
     let (tx, rx) = watch::channel(Engine::Closed);
     let wake = Arc::new(Notify::new());
@@ -106,7 +96,6 @@ pub fn spawn(zeron: Arc<Zeron>) -> EngineWatch {
     EngineWatch { state: rx, wake }
 }
 
-/// Sleep for `wait`, or until `wake` wakes the prober.
 async fn sleep(wait: Duration, wake: &Notify) {
     tokio::select! {
         () = tokio::time::sleep(wait) => {}
@@ -114,7 +103,6 @@ async fn sleep(wait: Duration, wake: &Notify) {
     }
 }
 
-/// Probes Zeron, and checks that it's still readable now and then.
 struct Prober {
     zeron: Arc<Zeron>,
     check: Check,
@@ -123,19 +111,15 @@ struct Prober {
 /// When the next compatibility check runs.
 #[derive(Clone, Copy)]
 enum Check {
-    /// On the next probe.
     Due,
     /// After this many more probes of a running Zeron.
     After(u32),
 }
 
 impl Prober {
-    /// Probe once and return Zeron's state, given the `current` one; `None`
-    /// if Zeron hangs, so the state stays.
-    ///
-    /// The compatibility check runs when Zeron comes up, on every probe while
-    /// it's outdated (an update restarts it), and every [`CHECK_EVERY`]
-    /// probes otherwise.
+    /// Probe once and return Zeron's state, or `None` if Zeron hangs. The
+    /// compatibility check runs when Zeron comes up, on every probe while
+    /// it's outdated, and every [`CHECK_EVERY`] probes otherwise.
     async fn next_state(&mut self, current: Engine) -> Option<Engine> {
         let ready = self.zeron.call(methods::ENGINE_READY, json!({}));
         if tokio::time::timeout(PROBE_TIMEOUT, ready)
@@ -215,7 +199,6 @@ pub fn refusal(state: &Engine) -> Option<String> {
     }
 }
 
-/// The log line for a new state.
 fn describe(state: &Engine) -> String {
     match state {
         Engine::Running { running: Some(v) } => format!("Zeron {v} is open"),

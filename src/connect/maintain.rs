@@ -1,7 +1,5 @@
 //! Background upkeep while Zeron runs: archive old chats ([`archive`]) and
-//! title ones Zeron couldn't ([`rename`]), a while after Zeron opens and then on
-//! a fixed interval. Both write through the engine, so Zeron applies the
-//! changes as if made in its window.
+//! title ones Zeron couldn't ([`rename`]).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,10 +15,8 @@ use crate::zeron::Zeron;
 
 /// How long after Zeron opens the first run waits: it may still be syncing.
 const START_DELAY: Duration = Duration::from_secs(60);
-/// The time between runs while Zeron stays open.
 const EVERY: Duration = Duration::from_secs(15 * 60);
 
-/// What to keep up.
 #[derive(Debug)]
 pub struct Upkeep {
     /// Keep this many most recently active chats per project; `None`
@@ -28,12 +24,10 @@ pub struct Upkeep {
     pub keep: Option<usize>,
     /// The model that titles chats Zeron couldn't; `None` doesn't title them.
     pub pi: Option<Pi>,
-    /// Where the archive's memory lives.
     pub memory: PathBuf,
 }
 
 impl Upkeep {
-    /// Whether there is anything to do.
     pub fn has_work(&self) -> bool {
         self.keep.is_some() || self.pi.is_some()
     }

@@ -1,12 +1,8 @@
 //! zeron-relay: a tiny relay between a phone browser and the Zeron apps on
 //! your Macs.
 //!
-//! Each Mac runs `zeron-tools connect`, which dials out to `/connect` and
-//! stays connected ([`hub`]). The phone opens the web app, signs in with a
-//! passkey ([`auth`]), and its calls are routed to the chosen Mac. Macs
-//! report chats that finish, need an answer, or fail; the relay sends those
-//! as Web Push notifications ([`push`]). State is one small JSON file
-//! ([`store`]).
+//! Each Mac dials out to `/connect` ([`hub`]), the phone signs in with a
+//! passkey ([`auth`]), and its calls are routed to the chosen Mac.
 //!
 //! It serves plain HTTP behind a TLS-terminating proxy. API calls must be
 //! JSON POSTs from the app's own origin, with the session cookie
@@ -108,7 +104,6 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     ),
 ];
 
-/// The most characters in a Mac's name.
 const MAX_MACHINE_NAME: usize = 60;
 
 #[derive(Parser)]
@@ -129,7 +124,6 @@ struct Opts {
     setup_token: Option<String>,
 }
 
-/// The state every handler shares.
 #[derive(Clone)]
 struct App {
     store: Arc<Store>,
@@ -239,7 +233,6 @@ async fn check_origin(State(app): State<App>, request: Request, next: Next) -> R
     next.run(request).await
 }
 
-/// Refuse calls without a valid session cookie.
 async fn require_session(State(app): State<App>, request: Request, next: Next) -> Response {
     if signed_in(&app, &CookieJar::from_headers(request.headers())) {
         next.run(request).await
@@ -248,7 +241,6 @@ async fn require_session(State(app): State<App>, request: Request, next: Next) -
     }
 }
 
-/// Whether the request carries a valid session cookie.
 fn signed_in(app: &App, jar: &CookieJar) -> bool {
     auth::session_cookie(jar).is_some_and(|t| app.store.session_valid(t))
 }
@@ -312,7 +304,6 @@ async fn login_finish(
     signed_in_response(jar, result)
 }
 
-/// Set the session cookie on success.
 fn signed_in_response(jar: CookieJar, session: Result<String>) -> Response {
     match session {
         Ok(token) => (auth::set_cookie(jar, token), Json(json!({ "ok": true }))).into_response(),
@@ -329,7 +320,6 @@ async fn logout(State(app): State<App>, jar: CookieJar) -> Response {
     (auth::clear_cookie(jar), Json(json!({ "ok": true }))).into_response()
 }
 
-/// The Macs, with whether each is connected.
 async fn machines(State(app): State<App>, Json(_): Json<Value>) -> Response {
     let list: Vec<Value> = app
         .store
@@ -376,7 +366,6 @@ async fn remove_machine(State(app): State<App>, Json(body): Json<MachineId>) -> 
     done(result)
 }
 
-/// Run a Zeron tool on one Mac.
 async fn call_tool(
     State(app): State<App>,
     Path((machine, tool)): Path<(String, String)>,
@@ -428,7 +417,6 @@ fn payload(machine: &Machine, notice: Notice, several: bool) -> Payload {
     }
 }
 
-/// The VAPID public key the app subscribes with.
 async fn push_key(State(app): State<App>, Json(_): Json<Value>) -> Response {
     Json(json!({ "publicKey": app.push.public_key() })).into_response()
 }
@@ -446,7 +434,6 @@ async fn push_unsubscribe(State(app): State<App>, Json(e): Json<Endpoint>) -> Re
     done(app.push.unsubscribe(&e.endpoint).await)
 }
 
-/// Send a test notification to the calling browser.
 async fn push_test(State(app): State<App>, Json(e): Json<Endpoint>) -> Response {
     let payload = Payload {
         title: "Notifications work".into(),

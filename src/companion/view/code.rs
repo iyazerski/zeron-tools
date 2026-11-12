@@ -48,7 +48,6 @@ const PALETTE: [[(Syntax, &str); 10]; 2] = [
     ],
 ];
 
-/// The palette as colours, parsed once.
 static COLORS: LazyLock<[Vec<(Syntax, Color)>; 2]> = LazyLock::new(|| {
     PALETTE.map(|tones| {
         tones

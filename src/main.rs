@@ -1,9 +1,6 @@
-//! zeron-tools: background services for the running Zeron, set up together
-//! by `install`: `connect` keeps the sidebar short and links Zeron to the
-//! phone, and `companion` shows the chats in a floating window. They talk to
-//! Zeron through its engine's loopback IPC, so they don't depend on Zeron's
-//! code, and `install` runs that engine as a service, so they work without
-//! the app. `update` installs the latest release.
+//! zeron-tools: background services for Zeron. `connect` keeps the sidebar
+//! short and links Zeron to the phone, and `companion` shows the chats in a
+//! floating window. Both talk to Zeron only through its engine's loopback IPC.
 
 mod archive;
 mod companion;
@@ -48,7 +45,6 @@ struct Global {
 }
 
 impl Global {
-    /// The data dir to use: `--data-dir`, else Zeron's default.
     fn data_dir(&self) -> PathBuf {
         self.data_dir.clone().unwrap_or_else(zeron::data_dir)
     }
@@ -149,7 +145,6 @@ impl AgentFlag {
     }
 }
 
-/// What `connect` does besides the relay link.
 #[derive(Args)]
 struct ConnectOpts {
     /// Notify even while someone uses the Mac (by default, notifications
@@ -175,7 +170,6 @@ impl ConnectOpts {
         }
     }
 
-    /// Resolve the upkeep's settings, with its memory in `data_dir`.
     fn upkeep(self, data_dir: &Path) -> Result<Upkeep> {
         Ok(Upkeep {
             keep: (!self.no_archive).then_some(self.keep),
@@ -204,7 +198,6 @@ struct ModelOpts {
 }
 
 impl ModelOpts {
-    /// The model, unless it's off.
     fn resolve(self) -> Result<Option<Pi>> {
         if self.no_rename {
             return Ok(None);
@@ -304,7 +297,6 @@ async fn install(global: &Global, args: InstallArgs) -> Result<()> {
     Ok(())
 }
 
-/// Stop and remove both launch agents.
 fn uninstall() -> Result<()> {
     let mut stopped = false;
     for service in [CONNECT, COMPANION] {
@@ -324,7 +316,6 @@ fn uninstall() -> Result<()> {
     Ok(())
 }
 
-/// Run `connect` until stopped.
 async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     let data_dir = global.data_dir();
     let notify = args.opts.notify();
@@ -350,7 +341,6 @@ async fn run_connect(global: &Global, args: ConnectArgs) -> Result<()> {
     .await
 }
 
-/// Run `companion`: show the window on the shortcut until it quits.
 fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
     // Without pi the window still works; dictation stays as heard.
     let pi = args.model.resolve().unwrap_or_else(|e| {
@@ -367,7 +357,6 @@ fn run_companion(global: &Global, args: CompanionArgs) -> Result<()> {
     })
 }
 
-/// `companion`'s launch agent arguments.
 fn companion_args(global: &Global, shortcut: &str, upkeep: &Upkeep) -> Vec<String> {
     let mut args = global_args(global);
     args.extend(["companion".into(), "--agent".into()]);
@@ -376,8 +365,7 @@ fn companion_args(global: &Global, shortcut: &str, upkeep: &Upkeep) -> Vec<Strin
     args
 }
 
-/// `connect`'s launch agent arguments: this run's options, minus the link
-/// (saved).
+/// `connect`'s launch agent arguments, minus the link, which is saved.
 fn agent_args(global: &Global, notify: NotifyWhen, upkeep: &Upkeep) -> Vec<String> {
     let mut args = global_args(global);
     args.extend(["connect".into(), "--agent".into()]);
@@ -392,7 +380,6 @@ fn agent_args(global: &Global, notify: NotifyWhen, upkeep: &Upkeep) -> Vec<Strin
     args
 }
 
-/// The model options a launch agent repeats.
 fn model_args(pi: Option<&Pi>) -> Vec<String> {
     match pi {
         Some(pi) => vec![
@@ -407,7 +394,6 @@ fn model_args(pi: Option<&Pi>) -> Vec<String> {
     }
 }
 
-/// The global options a launch agent repeats.
 fn global_args(global: &Global) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(dir) = &global.data_dir {

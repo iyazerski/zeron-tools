@@ -57,7 +57,6 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(15);
 /// `GetCheckoutDiff`'s error for a chat with no turn snapshot in that checkout.
 const NO_TURN: &str = "no turn recorded";
 
-/// The engine's IPC port when `ZERON_IPC_PORT` isn't set.
 pub const DEFAULT_IPC_PORT: u16 = 27654;
 
 /// Zeron's data dir: `$ZERON_DATA_DIR`, else `~/.zeron`.
@@ -67,14 +66,12 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| crate::paths::home().join(".zeron"))
 }
 
-/// A client for the running Zeron's engine.
 pub struct Zeron {
     ipc: Ipc,
 }
 
 impl Zeron {
-    /// Return a client for the engine on `port` that uses `data_dir`; it
-    /// dials on first use.
+    /// It dials on first use.
     pub fn new(port: u16, data_dir: &Path) -> Self {
         Self {
             ipc: Ipc::new(format!("ws://127.0.0.1:{port}"), data_dir.join("ipc-token")),
@@ -128,7 +125,6 @@ impl Zeron {
         self.snapshot_as(methods::WATCH_SIDEBAR_PREFERENCES).await
     }
 
-    /// This engine's device id.
     pub async fn local_device_id(&self) -> Result<String> {
         let reply = self.call(methods::LOCAL_DEVICE, json!({})).await?;
         reply
@@ -159,7 +155,6 @@ impl Zeron {
         parse(methods::LIST_MODELS, value)
     }
 
-    /// The skills `harness` offers in `scope`.
     pub async fn skills(&self, harness: &str, scope: SkillScope<'_>) -> Result<Vec<Skill>> {
         let mut params = json!({ "harness": harness });
         match scope {
@@ -212,20 +207,17 @@ impl Zeron {
         self.call(methods::MUTATE, params).await
     }
 
-    /// Move a chat to the Archived shelf, or back to the sidebar.
     pub async fn set_chat_archived(&self, chat_id: &str, archived: bool) -> Result<()> {
         let op = json!({ "op": "setChatArchived", "chatId": chat_id, "archived": archived });
         self.mutate(op).await.map(drop)
     }
 
-    /// Give a chat a new title.
     pub async fn rename_chat(&self, chat_id: &str, title: &str) -> Result<()> {
         let op = json!({ "op": "renameChat", "chatId": chat_id, "title": title });
         self.mutate(op).await.map(drop)
     }
 
-    /// Queue a command (`{kind: "run", …}`) on the chat; its host runs it.
-    /// Returns the command's id.
+    /// Queue a command on the chat for its host to run, and return its id.
     pub async fn queue_command(&self, chat_id: &str, command: Value) -> Result<String> {
         let reply = self
             .call(
@@ -254,7 +246,6 @@ impl Zeron {
         }
     }
 
-    /// The chat with this id or unique id prefix.
     pub async fn chat(&self, key: &str) -> Result<Chat> {
         let mut chats = self.chats().await?;
         let at = find_chat(&chats, key)?;
@@ -262,18 +253,16 @@ impl Zeron {
     }
 }
 
-/// Where to look for skills: besides the global ones, a checkout's own.
+/// Where to look for skills besides the global ones.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillScope<'a> {
     /// The checkout of the chat with this id.
     Chat(&'a str),
     /// The folder of the project (space) with this id.
     Project(&'a str),
-    /// Only the global ones.
     Global,
 }
 
-/// Parse a reply of `method` into `T`.
 fn parse<T: DeserializeOwned>(method: &str, value: Value) -> Result<T> {
     serde_json::from_value(value).with_context(|| format!("{method}: unexpected reply"))
 }
@@ -286,7 +275,7 @@ fn text_field(reply: &Value, name: &str) -> String {
         .to_owned()
 }
 
-/// Where in `chats` the one chat whose id is `key` or starts with it sits.
+/// The index of the one chat whose id is `key` or starts with it.
 fn find_chat(chats: &[Chat], key: &str) -> Result<usize> {
     let key = key.trim();
     if key.is_empty() {
@@ -305,7 +294,6 @@ fn find_chat(chats: &[Chat], key: &str) -> Result<usize> {
     }
 }
 
-/// The project (space) `chat` belongs to, if any.
 pub fn space_of<'a>(chat: &Chat, spaces: &'a [Space]) -> Option<&'a Space> {
     let id = chat.space_id.as_deref()?;
     spaces.iter().find(|s| s.id == id)

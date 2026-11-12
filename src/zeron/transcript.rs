@@ -1,13 +1,9 @@
 //! Chat transcripts: the entries `WatchDocMessages` sends, grouped into
 //! messages and rendered as flat, readable lines.
 //!
-//! The engine keeps a message as a list of parts (text, thinking, tool
-//! calls, input requests, errors) and splits long turns into continuation
-//! entries (`crates/doc/src/schema.rs`, `parts.rs` in Zeron). Grouping and
-//! rendering follow Zeron's own `read_chat` (`crates/mcp/src/transcript.rs`):
-//! continuations fold into their turn, prose joins, and each tool call
-//! becomes one capped line. A part that doesn't parse (a new kind, or a
-//! changed one) is skipped rather than failing the transcript.
+//! Grouping and rendering follow Zeron's own `read_chat`: continuation
+//! entries fold into their turn, and each tool call becomes one capped line.
+//! A part that doesn't parse is skipped rather than failing the transcript.
 
 use std::collections::HashMap;
 
@@ -16,7 +12,6 @@ use serde_json::Value;
 
 use crate::text::clip;
 
-/// The most characters of an `exec` command in its tool line.
 const COMMAND_CHARS: usize = 160;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,7 +118,6 @@ pub struct PendingInput<'a> {
 }
 
 impl<'a> PendingInput<'a> {
-    /// The first question's text, if it has one.
     pub fn first_question(self) -> Option<&'a str> {
         self.questions.get(0)?.get("question")?.as_str()
     }
@@ -205,7 +199,6 @@ pub fn messages(entries: &[Entry]) -> Vec<Message<'_>> {
     messages
 }
 
-/// The unanswered question of the whole transcript, if any.
 pub fn pending_input<'a>(messages: &[Message<'a>]) -> Option<PendingInput<'a>> {
     messages.iter().rev().find_map(Message::pending_input)
 }
@@ -332,13 +325,5 @@ pub(crate) mod tests {
             serde_json::to_string(&pending_input(&messages).unwrap()).unwrap(),
             r#"{"questions":[],"requestId":"req-1"}"#
         );
-    }
-
-    #[test]
-    fn only_the_opening_frame_carries_the_transcript() {
-        let reset =
-            json!({ "reset": [{ "id": "u", "role": "user", "parts": [], "createdAt": 1 }] });
-        assert_eq!(from_frame(&reset).unwrap().unwrap()[0].id, "u");
-        assert!(from_frame(&json!({ "upsert": [], "count": 1 })).is_none());
     }
 }

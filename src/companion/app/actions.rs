@@ -20,7 +20,6 @@ use crate::zeron::types::CheckoutDiff;
 enum ChatAction {
     Stop,
     Archive,
-    /// Answer the agent's questions.
     Respond {
         request_id: String,
         answers: Vec<Value>,
@@ -240,7 +239,6 @@ impl State {
         );
     }
 
-    /// Call a tool on the open chat, and refresh it after.
     fn chat_action(&mut self, action: ChatAction) {
         let Some(page) = self.chat_mut() else { return };
         let nav = page.nav;
@@ -292,7 +290,6 @@ impl State {
         self.chat_action(ChatAction::Archive);
     }
 
-    /// Start dictating into the composer, or stop.
     pub fn dictate(&mut self) {
         let Some(page) = self.chat_mut() else { return };
         page.composer.focused = true;

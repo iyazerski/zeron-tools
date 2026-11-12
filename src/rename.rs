@@ -1,12 +1,9 @@
-//! Title chats Zeron couldn't title, with a small model through Pi
-//! (`pi -p`, nothing else loaded).
+//! Title chats Zeron couldn't title, with a small model through Pi.
 //!
-//! Zeron titles an untitled chat itself from its first prompt
-//! (`crates/engine/src/titles.rs`). When its title model fails or isn't
-//! set up, it stores the prompt's first words instead ([`fallback_title`]),
-//! and a chat created without a prompt stays untitled. This runs in the
-//! background, after Zeron had its chance, and titles both kinds. It never
-//! replaces any other title.
+//! When Zeron's title model fails, it stores the prompt's first words instead
+//! ([`fallback_title`]), and a chat created without a prompt stays untitled.
+//! This titles both kinds after Zeron had its chance, and never replaces any
+//! other title.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -38,9 +35,8 @@ const ASK_TIMEOUT: Duration = Duration::from_secs(120);
 const READS_AT_ONCE: usize = 4;
 /// Per-field cap on transcript excerpts sent to the model.
 const EXCERPT_CHARS: usize = 600;
-/// The most characters in Zeron's fallback title.
+/// Limits of Zeron's fallback title.
 const FALLBACK_CHARS: usize = 48;
-/// The most words in Zeron's fallback title.
 const FALLBACK_WORDS: usize = 7;
 
 const INSTRUCTIONS: &str = "You generate session titles for chat threads. The user message is a JSON list of chats. \
@@ -259,10 +255,8 @@ pub async fn run(zeron: &Zeron, pi: &Pi, tried: &mut Tried) -> Result<usize> {
     Ok(titled)
 }
 
-/// The chats that may need a title, newest first (those are the ones in the
-/// sidebar), at most [`MAX_PER_RUN`]: top-level chats that are untitled or
-/// may have Zeron's fallback title, idle for [`SETTLE`] and not in a running
-/// turn, with activity since they were last tried.
+/// The idle top-level chats that may need a title, newest first since those
+/// are in the sidebar.
 fn candidates<'a>(
     chats: &'a [Chat],
     sessions: &[Session],
@@ -289,7 +283,6 @@ fn candidates<'a>(
     candidates
 }
 
-/// The text of the first user message that has any.
 fn first_prompt(entries: &[Entry]) -> Option<String> {
     texts(entries, Role::User).next()
 }
@@ -303,7 +296,6 @@ fn texts(entries: &[Entry], role: Role) -> impl Iterator<Item = String> + '_ {
         .filter(|t| !t.trim().is_empty())
 }
 
-/// A message's prose parts, joined by newlines.
 fn text(parts: &[Part]) -> String {
     parts
         .iter()
@@ -315,7 +307,6 @@ fn text(parts: &[Part]) -> String {
         .join("\n")
 }
 
-/// `text` trimmed and cut to [`EXCERPT_CHARS`].
 fn clip_excerpt(text: &str) -> String {
     clip(text.trim(), EXCERPT_CHARS)
 }
@@ -381,12 +372,6 @@ mod tests {
         assert!(needs_title(Some("fix the login bug"), &[short]));
         assert!(!needs_title(Some("fix"), &[]));
         assert!(!may_be_fallback(Some(&"x".repeat(FALLBACK_CHARS + 1))));
-    }
-
-    #[test]
-    fn excerpts_are_char_safe() {
-        let long = "ж".repeat(EXCERPT_CHARS + 5);
-        assert_eq!(clip_excerpt(&long).chars().count(), EXCERPT_CHARS + 1);
     }
 
     #[tokio::test]

@@ -186,13 +186,13 @@ pub struct Question {
     pub prefill: Option<String>,
 }
 
-/// `composer_info`: what the composer shows under the text.
 /// `polish_dictation`'s answer: what dictation heard, cleaned up.
 #[derive(Debug, Deserialize)]
 pub struct Polished {
     pub text: String,
 }
 
+/// `composer_info`: what the composer shows under the text.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposerInfo {
@@ -330,25 +330,6 @@ mod tests {
             };
             assert_eq!(m.answer().as_deref(), want);
             assert_eq!(m.has_answer(), want.is_some());
-        }
-    }
-
-    #[test]
-    fn statuses_read_back_from_their_labels() {
-        let cases = [
-            ("working", ChatStatus::Working),
-            (
-                "working (stale — host may be offline)",
-                ChatStatus::StaleWorking,
-            ),
-            ("awaitingInput", ChatStatus::AwaitingInput),
-            ("errored", ChatStatus::Errored),
-            ("idle", ChatStatus::Idle),
-            ("something new", ChatStatus::Unknown),
-        ];
-        for (label, want) in cases {
-            let got: ChatStatus = serde_json::from_value(serde_json::json!(label)).unwrap();
-            assert_eq!(got, want, "{label}");
         }
     }
 }

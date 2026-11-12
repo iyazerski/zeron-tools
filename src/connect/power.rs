@@ -5,7 +5,6 @@ use std::time::Duration;
 use tokio::sync::watch;
 use zeron_relay_proto::{Battery, BatteryState};
 
-/// How often to read the battery. The charge moves slowly.
 const READ_EVERY: Duration = Duration::from_secs(60);
 /// A read gets this long, so a stuck `pmset` keeps the last state.
 const PMSET_TIMEOUT: Duration = Duration::from_secs(5);

@@ -34,7 +34,6 @@ const CONTACT: &str = "https://github.com/iyazerski/zeron-tools";
 const VAPID_LIFETIME_SECS: u64 = 12 * 3600;
 /// How long one request to a push service may take.
 const PUSH_TIMEOUT: Duration = Duration::from_secs(15);
-/// The subscription's authentication secret's length.
 const AUTH_SECRET_LEN: usize = 16;
 
 /// A browser's push subscription, as `PushSubscription.toJSON()` gives it.
@@ -63,7 +62,6 @@ pub struct Payload {
     pub chat: Option<String>,
 }
 
-/// What a notification is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
@@ -150,7 +148,6 @@ impl Push {
         .await
     }
 
-    /// Forget the subscription for `endpoint`.
     pub async fn unsubscribe(&self, endpoint: &str) -> Result<()> {
         self.update(|subs| subs.retain(|s| s.endpoint != endpoint))
             .await
@@ -167,7 +164,6 @@ impl Push {
         Ok(())
     }
 
-    /// Send `payload` to the subscription for `endpoint`.
     pub async fn send_to(&self, endpoint: &str, payload: &Payload) -> Result<()> {
         let sub = self
             .subscriptions
@@ -243,7 +239,6 @@ impl Push {
     }
 }
 
-/// Decode a subscription's P-256 public key and auth secret.
 fn decode_keys(keys: &SubscriptionKeys) -> Result<(PublicKey, Auth)> {
     // Browsers send unpadded base64url; tolerate padding anyway.
     let decode = |s: &str| B64.decode(s.trim_end_matches('='));
@@ -269,7 +264,6 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    /// Subscriptions whose keys can't encrypt are refused up front.
     #[tokio::test]
     async fn subscribing_checks_the_browser_keys() {
         let dir = tempfile::tempdir().unwrap();

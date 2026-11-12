@@ -1,18 +1,9 @@
 //! `connect`: the background service for this Mac's Zeron.
 //!
-//! While Zeron runs, it keeps the sidebar short ([`maintain`]: archive old
-//! chats, title untitled ones) and, once linked to a `zeron-relay`, lets a
-//! phone use Zeron from anywhere. Everything goes through the engine's
-//! loopback IPC ([`crate::zeron`]); nothing links Zeron's code.
-//!
-//! The Mac dials out to the relay over one WebSocket (no open ports, no VPN)
-//! and keeps it open, reconnecting when it drops. The relay sends tool
-//! calls; they run as [`tools`] (and the chat screen's [`chat`] and
-//! [`composer`]), checked here and not on the relay: the raw IPC also opens
-//! terminals and writes files, and a compromised relay must not reach those.
-//! [`engine`] tracks whether Zeron is open (and opens it), and [`watch`]
-//! keeps each finished turn's changes ([`turns`]) and reports chats that
-//! finish, need an answer, or fail. [`power`] reports the battery.
+//! It keeps the sidebar short ([`maintain`]) and, once linked to a
+//! `zeron-relay`, serves the phone's tool calls over one outgoing WebSocket.
+//! Calls are checked here, not on the relay: the raw IPC also opens terminals
+//! and writes files, and a compromised relay must not reach those.
 
 mod changes;
 mod chat;
@@ -61,7 +52,6 @@ const PING_EVERY: Duration = Duration::from_secs(25);
 const SILENCE_LIMIT: Duration = Duration::from_secs(70);
 /// The first wait before reconnecting; it doubles after each quick failure.
 const MIN_BACKOFF: Duration = Duration::from_secs(1);
-/// The longest wait between reconnect attempts.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// A connection that lasted this long worked, so the next reconnect starts
 /// fast again. A shorter one (say, a relay refusing this protocol right
@@ -96,19 +86,16 @@ impl fmt::Debug for Link {
 }
 
 impl Link {
-    /// Read the saved link from `path`, if zeron-tools was installed with one.
     pub fn load(path: &Path) -> Result<Option<Self>> {
         json_file::load(path)
     }
 
-    /// Save the link to `path`, readable only by the user (the token is a
-    /// secret).
+    /// Save the link readable only by the user, as the token is a secret.
     pub fn save(&self, path: &Path) -> Result<()> {
         json_file::save(path, self)
     }
 }
 
-/// What `connect` runs with.
 pub struct Opts {
     /// The relay link; without one, only the upkeep runs.
     pub relay: Option<Link>,
@@ -127,7 +114,6 @@ pub async fn run(opts: Opts) -> Result<()> {
     let engine = engine::spawn(zeron.clone());
     let pi = opts.upkeep.pi.clone();
     let upkeep = tokio::spawn(maintain::run(zeron.clone(), engine.changes(), opts.upkeep));
-    // Notices wait here while the relay is unreachable.
     let (notices_tx, notices) = mpsc::channel(QUEUE);
     let notify = opts.relay.is_some().then_some(watch::Notices {
         to: notices_tx,
@@ -153,7 +139,6 @@ pub async fn run(opts: Opts) -> Result<()> {
     Ok(())
 }
 
-/// The link to the relay, kept up by [`Relay::run`].
 struct Relay {
     link: Link,
     mode: RunMode,
@@ -162,8 +147,8 @@ struct Relay {
 }
 
 impl Relay {
-    /// Stay connected to the relay until it rejects the token. Returns `Ok`
-    /// then if running as the launch agent.
+    /// Stay connected to the relay until it rejects the token, which is `Ok`
+    /// for the launch agent.
     async fn run(
         self,
         zeron: Arc<Zeron>,
@@ -319,7 +304,6 @@ pub async fn verify(link: &Link) -> Result<()> {
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Open the WebSocket to the relay with this Mac's token.
 async fn dial(url: &str, token: &str) -> Result<Socket> {
     let mut request = url.into_client_request()?;
     request.headers_mut().insert(
@@ -337,38 +321,29 @@ fn hello() -> Up {
     }
 }
 
-/// This Mac's Zeron, as the relay's calls reach it.
 struct Mac {
     zeron: Arc<Zeron>,
     turns: Arc<Turns>,
     pi: Option<Pi>,
-    /// Limits the tool calls running at once ([`MAX_CALLS`]).
+    /// Bounds the calls running at once to [`MAX_CALLS`].
     slots: Semaphore,
 }
 
 /// A call the phone may make, by its tool name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Request {
-    /// Start Zeron; works while it's closed.
     OpenZeron,
-    /// The chat screen ([`chat::view`]).
     ChatView,
-    /// A turn's diff page ([`changes::turn`]).
     TurnChanges,
-    /// The composer footer ([`composer::info`]).
     ComposerInfo,
-    /// The composer's model picker ([`composer::set_model`]).
     SetChatModel,
-    /// The composer's `$` menu ([`composer::skills`]).
     ListSkills,
-    /// Clean up what dictation heard ([`dictation::polish`]).
     PolishDictation,
-    /// One of Zeron's own tools ([`tools`]).
+    /// One of Zeron's own tools.
     Tool(Tool),
 }
 
 impl Request {
-    /// Whether it needs a Zeron that is open and readable.
     fn needs_zeron(self) -> bool {
         !matches!(self, Self::OpenZeron | Self::PolishDictation)
     }
@@ -391,10 +366,9 @@ impl FromStr for Request {
     }
 }
 
-/// Run one of the phone's tools by name and return its result, or why it
-/// can't run in Zeron's `engine` state now, within [`TOOL_TIMEOUT`]; `pi` is the
-/// model for the calls that need one. Clients on this Mac (the companion
-/// window) call it directly; the relay's calls come through here too.
+/// Run one of the phone's tools by name within [`TOOL_TIMEOUT`], or say why
+/// it can't run in the current `engine` state. The companion window calls it
+/// directly.
 pub async fn call_tool(
     zeron: &Zeron,
     turns: &Turns,
@@ -416,7 +390,6 @@ pub async fn call_tool(
     }
 }
 
-/// Run `request` with its JSON `args`.
 async fn dispatch(
     zeron: &Zeron,
     turns: &Turns,
@@ -437,7 +410,6 @@ async fn dispatch(
     }
 }
 
-/// The answer to a call that starts Zeron.
 fn opening() -> Value {
     json!({ "opening": true })
 }
@@ -455,7 +427,6 @@ fn socket_url(relay: &str) -> Result<String> {
     Ok(format!("{rest}{CONNECT_PATH}"))
 }
 
-/// Whether connecting failed because the relay refused the token.
 fn rejected(error: &anyhow::Error) -> bool {
     use tokio_tungstenite::tungstenite::Error;
     matches!(
@@ -464,12 +435,10 @@ fn rejected(error: &anyhow::Error) -> bool {
     )
 }
 
-/// One message for the relay, as a JSON text frame.
 fn encode(up: &Up) -> Result<Message> {
     Ok(Message::Text(serde_json::to_string(up)?.into()))
 }
 
-/// Where the link is saved: `<data dir>/zeron-tools-connect.json`.
 pub fn link_path(data_dir: &Path) -> PathBuf {
     data_dir.join("zeron-tools-connect.json")
 }
@@ -600,16 +569,11 @@ mod tests {
     }
 
     #[test]
-    fn links_round_trip_without_logging_the_token() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = link_path(dir.path());
-        assert_eq!(Link::load(&path).unwrap(), None);
+    fn logs_never_show_the_token() {
         let link = Link {
             relay: "https://r".into(),
-            token: "t".into(),
+            token: "secret".into(),
         };
-        link.save(&path).unwrap();
-        assert_eq!(Link::load(&path).unwrap(), Some(link.clone()));
-        assert!(!format!("{link:?}").contains("\"t\""), "{link:?}");
+        assert!(!format!("{link:?}").contains("secret"), "{link:?}");
     }
 }

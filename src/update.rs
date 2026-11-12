@@ -89,7 +89,6 @@ fn install(tag: &str, staging: &Path, exe: &Path) -> Result<()> {
         .with_context(|| format!("replacing {}", exe.display()))
 }
 
-/// Run `command` and return its trimmed stdout, or fail with `what` and its stderr.
 fn run_tool(command: &mut Command, what: &str) -> Result<String> {
     let out = command
         .output()

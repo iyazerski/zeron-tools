@@ -25,7 +25,6 @@ const TONES_LIGHT: [&str; 8] = [
 /// subtitle. Both pages use it, so the header buttons sit in the same place.
 const HEAD_TITLES_HEIGHT: f32 = 39.0;
 
-/// A page header's row, with the padding both pages share.
 pub fn head(key: &'static str) -> El {
     row()
         .key(key)
@@ -57,7 +56,6 @@ pub fn hide_button(k: &Kit) -> El {
         .build(k)
 }
 
-/// The project tones as colours, dark then light, parsed once.
 static TONES: LazyLock<[[Color; 8]; 2]> = LazyLock::new(|| {
     [TONES_DARK, TONES_LIGHT]
         .map(|tones| tones.map(|t| hex(t).unwrap_or_else(|| panic!("bad tone {t}"))))
@@ -139,7 +137,6 @@ pub fn busy(size: f32, k: &Kit) -> El {
         .children(dots)
 }
 
-/// A faint one-line label.
 pub fn faint(k: &Kit, s: impl Into<String>) -> El {
     text(s)
         .font(k.ty.text_small)

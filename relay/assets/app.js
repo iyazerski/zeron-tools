@@ -1,6 +1,6 @@
 // Zeron Remote: use the Zeron apps on your Macs from a phone.
 // Plain JS, no build. The relay routes /api/call/<mac>/<tool> to a Mac's
-// Zeron tools (list_chats, read_chat, send_message, ...). The look follows
+// Zeron tools (list_chats, chat_view, send_message, ...). The look follows
 // Zeron's own mobile app (apps/ios/Zeron), which follows the desktop.
 "use strict";
 

@@ -1,7 +1,5 @@
-//! `companion`: a small floating window with the phone app's chats for the
-//! Zeron running on this Mac. A global shortcut shows and hides it; it talks
-//! to Zeron's engine through the same tools the phone uses, so it always
-//! shows what Zeron shows.
+//! `companion`: a small floating window with the phone app's chats, shown on
+//! a global shortcut. It calls the same tools the phone uses.
 
 mod api;
 mod app;
@@ -43,13 +41,10 @@ fn top_right(displays: &[rune::Display]) -> Option<(i32, i32)> {
     Some((right - px(SIZE.0 + 24.0), display.position.1 + px(56.0)))
 }
 
-/// What `companion` runs with.
 pub struct Opts<'a> {
     pub data_dir: &'a Path,
     pub ipc_port: u16,
-    /// The global shortcut that shows and hides the window.
     pub shortcut: &'a str,
-    /// Show the window at launch instead of waiting for the shortcut.
     pub show: bool,
     pub mode: RunMode,
     /// The model that cleans up dictation; without it, words stay as heard.

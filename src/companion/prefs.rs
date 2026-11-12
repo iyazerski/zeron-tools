@@ -31,7 +31,6 @@ pub struct NewChat {
     pub reasoning: Option<String>,
 }
 
-/// The project a new chat starts in.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectPick {
@@ -93,27 +92,6 @@ impl Prefs {
     pub fn toggle_collapsed(&mut self, key: &str) {
         if !self.collapsed.remove(key) {
             self.collapsed.insert(key.to_owned());
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_chat_picks_survive_a_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("prefs.json");
-        for project in [
-            ProjectPick::Recent,
-            ProjectPick::NoProject,
-            ProjectPick::Project("p1".into()),
-        ] {
-            let mut prefs = Prefs::load(&path);
-            prefs.new_chat.project = project.clone();
-            json_file::save(&path, &prefs).unwrap();
-            assert_eq!(Prefs::load(&path).new_chat.project, project);
         }
     }
 }

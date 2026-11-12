@@ -21,7 +21,6 @@ use zeron_json_file as json_file;
 /// How long a sign-in lasts.
 pub const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 
-/// The saved file's contents.
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Data {
     /// The WebAuthn user handle; one user, made on first start.
@@ -50,7 +49,6 @@ struct MachineRecord {
     token_hash: String,
 }
 
-/// A Mac as the app shows it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Machine {
     pub id: String,
@@ -76,7 +74,6 @@ pub struct Store {
 }
 
 impl Store {
-    /// Load the state from `<dir>/state.json`, or start empty.
     pub fn open(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = dir.join("state.json");
@@ -95,22 +92,18 @@ impl Store {
         Ok(store)
     }
 
-    /// The WebAuthn user handle.
     pub fn user(&self) -> Uuid {
         self.user
     }
 
-    /// The saved passkeys.
     pub fn passkeys(&self) -> Vec<Passkey> {
         self.lock().passkeys.clone()
     }
 
-    /// Whether a passkey is saved.
     pub fn has_passkey(&self) -> bool {
         !self.lock().passkeys.is_empty()
     }
 
-    /// The saved passkeys' credential ids.
     pub fn credential_ids(&self) -> Vec<CredentialID> {
         self.lock()
             .passkeys
@@ -160,18 +153,15 @@ impl Store {
             .any(|s| s.hash == hash && s.expires > now)
     }
 
-    /// End the session with this cookie value.
     pub fn end_session(&self, token: &str) -> Result<()> {
         let hash = hash(token);
         self.update(|data| data.sessions.retain(|s| s.hash != hash))
     }
 
-    /// The added Macs.
     pub fn machines(&self) -> Vec<Machine> {
         self.lock().machines.iter().map(Machine::from).collect()
     }
 
-    /// How many Macs are added.
     pub fn machine_count(&self) -> usize {
         self.lock().machines.len()
     }
@@ -198,12 +188,10 @@ impl Store {
         self.update(|data| data.machines.retain(|m| m.id != id))
     }
 
-    /// Whether the Mac `id` is still added.
     pub fn has_machine(&self, id: &str) -> bool {
         self.lock().machines.iter().any(|m| m.id == id)
     }
 
-    /// The Mac a connection token belongs to.
     pub fn machine_for_token(&self, token: &str) -> Option<Machine> {
         let hash = hash(token);
         self.lock()
@@ -257,7 +245,6 @@ pub fn blocking<R>(work: impl FnOnce() -> R) -> R {
     }
 }
 
-/// Now, in Unix seconds.
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

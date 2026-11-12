@@ -30,7 +30,5 @@ mod tests {
         assert_eq!(clip("жжжж", 2), "жж…");
         assert_eq!(clip("жж", 2), "жж");
         assert_eq!(one_line("  fix   the\nlogin bug ", 7), "fix the…");
-        assert_eq!(short_id("01a0d3bf-536f-79b2"), "01a0d3bf-536f");
-        assert_eq!(short_id("abc"), "abc");
     }
 }

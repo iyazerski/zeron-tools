@@ -1,13 +1,8 @@
 //! Archive older chats so the sidebar lists only recent ones.
 //!
 //! Zeron's sidebar draws a row for every unarchived top-level chat, with no
-//! paging (`crates/ui/src/state.rs::visible_chats`), while archived chats
-//! live on a paged shelf that can be hidden. Archiving all but the most
-//! recent chats of each project keeps the list short. Archived chats stay
-//! searchable and resumable.
-//!
-//! This runs again and again in the background, so it remembers what it
-//! archived: a chat you restored stays restored until it has new activity.
+//! paging. This runs again and again, so it remembers what it archived: a
+//! chat you restored stays restored until it has new activity.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -28,7 +23,6 @@ pub struct Memory {
 }
 
 impl Memory {
-    /// An empty memory, saved to `path`.
     pub fn empty(path: &Path) -> Self {
         Self {
             path: path.to_owned(),
@@ -36,7 +30,6 @@ impl Memory {
         }
     }
 
-    /// Read the memory saved at `path`; a missing file is an empty memory.
     pub fn load(path: &Path) -> Result<Self> {
         Ok(Self {
             path: path.to_owned(),
@@ -49,7 +42,6 @@ impl Memory {
         self.archived.get(&chat.id) == Some(&chat.last_activity())
     }
 
-    /// Remember that this tool archived `chat` as it is now.
     fn remember(&mut self, chat: &Chat) {
         self.archived.insert(chat.id.clone(), chat.last_activity());
     }

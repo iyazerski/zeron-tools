@@ -79,7 +79,6 @@ pub enum ListFilter {
 }
 
 impl ListFilter {
-    /// The filters in the order the list offers them.
     pub const ALL: [Self; 4] = [Self::All, Self::Working, Self::Done, Self::Recent];
 
     pub fn label(self) -> &'static str {
@@ -105,7 +104,6 @@ pub enum ToastKind {
     Failure,
 }
 
-/// When some data last loaded, and whether a load runs now.
 #[derive(Default)]
 struct Poll {
     loading: bool,
@@ -113,7 +111,6 @@ struct Poll {
 }
 
 impl Poll {
-    /// Whether to load again: nothing runs, and the last load is `every` old.
     fn due(&self, every: Duration) -> bool {
         !self.loading && self.last.is_none_or(|t| t.elapsed() >= every)
     }
@@ -127,7 +124,6 @@ impl Poll {
         self.last = Some(Instant::now());
     }
 
-    /// Load again at the next tick.
     fn expire(&mut self) {
         self.last = None;
     }
@@ -164,7 +160,6 @@ impl State {
         }
     }
 
-    /// The composer's text, for its field's edits.
     pub fn composer_field(&mut self) -> &mut TextEdit {
         match &mut self.page {
             Page::Chat(page) => &mut page.composer,
@@ -172,7 +167,6 @@ impl State {
         }
     }
 
-    /// The typed answer to question `index`, for its field's edits.
     pub fn answer_field(&mut self, index: usize) -> &mut TextEdit {
         match &mut self.page {
             Page::Chat(page) => match &mut page.target {
@@ -186,7 +180,6 @@ impl State {
         }
     }
 
-    /// The open changes page's diff, for the diff view.
     pub fn diff(&self) -> &DiffState {
         match self
             .chat()
@@ -198,7 +191,6 @@ impl State {
         }
     }
 
-    /// The open changes page's diff, for the diff view's edits.
     pub fn diff_mut(&mut self) -> &mut DiffState {
         let changes = match &mut self.page {
             Page::Chat(page) => page.existing_mut().and_then(|c| c.changes.as_mut()),
@@ -210,12 +202,10 @@ impl State {
         }
     }
 
-    /// The page `nav` named, if it's still the one shown.
     pub fn page_at(&mut self, nav: u64) -> Option<&mut ChatPage> {
         self.chat_mut().filter(|p| p.nav == nav)
     }
 
-    /// The existing chat `nav` named, if it's still the one shown.
     fn existing_at(&mut self, nav: u64) -> Option<&mut Existing> {
         self.page_at(nav)?.existing_mut()
     }
@@ -224,12 +214,10 @@ impl State {
         self.api.save_prefs(&self.prefs);
     }
 
-    /// Show a short note.
     pub fn notify(&mut self, title: &str) {
         self.show_toast(ToastKind::Note, title, String::new());
     }
 
-    /// Show what failed, and why.
     pub fn fail(&mut self, title: &str, why: impl Into<String>) {
         self.show_toast(ToastKind::Failure, title, why.into());
     }
@@ -259,7 +247,6 @@ impl State {
         self.load_due();
     }
 
-    /// Hide the window, and stop listening for dictation.
     pub fn hide(&mut self) {
         self.stop_dictating();
         self.api.app().hide();
@@ -285,7 +272,7 @@ impl State {
         }
     }
 
-    /// Start what's due and expire the toast and copy checks; true when the view must redraw.
+    /// Start what's due and expire timed state; true when the view must redraw.
     pub fn tick(&mut self, _: &mut Tx) -> bool {
         let mut changed = false;
         if self
@@ -337,7 +324,6 @@ impl State {
         }
     }
 
-    /// Load the transcript of the chat `nav` named whole, now.
     fn reload_at(&mut self, nav: u64) {
         if let Some(chat) = self.existing_at(nav) {
             chat.reload();
@@ -406,8 +392,6 @@ impl State {
         self.page = Page::Chat(Box::new(ChatPage::new(self.nav, target, composer)));
     }
 
-    /// Close the open page for the list, keeping its unsent text for when it
-    /// opens again.
     fn leave_page(&mut self) {
         let Page::Chat(mut page) = std::mem::replace(&mut self.page, Page::List) else {
             return;

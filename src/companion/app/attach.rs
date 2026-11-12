@@ -80,7 +80,6 @@ impl State {
         });
     }
 
-    /// Put back the images of a message that didn't send.
     pub fn reattach(&mut self, nav: u64, paths: Vec<String>) {
         for path in paths {
             let Some(page) = self.page_at(nav) else {
@@ -192,7 +191,6 @@ fn is_image(path: &Path) -> bool {
 }
 
 impl ChatPage {
-    /// Whether every attached image is saved, so the message can go.
     pub fn uploads_done(&self) -> bool {
         self.attached
             .iter()

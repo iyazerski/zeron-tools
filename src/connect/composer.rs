@@ -1,9 +1,6 @@
 //! What the desktop composer shows around a chat's message box, for the
-//! phone: the checkout and branch, how full the context window is, and the
-//! model and reasoning, which the phone can change like the desktop picker
-//! (`crates/ui/src/pickers.rs` `update_chat_config`). A new chat's composer
-//! shows the footer of the project it will run in. Typing `$` lists the
-//! agent's skills, as the desktop composer does.
+//! phone: checkout and branch, context usage, model and reasoning, and the
+//! agent's skills for the `$` menu.
 
 use std::time::Duration;
 
@@ -55,9 +52,7 @@ pub async fn info(zeron: &Zeron, args: InfoArgs) -> Result<Value> {
 }
 
 /// The footer for a new chat in `project`: like the desktop's, the project
-/// folder's checkout on its checked-out branch, and nothing without a
-/// project or outside git. The phone records `branch` on the chat it
-/// creates, as the desktop does.
+/// folder's checked-out branch, and nothing outside git.
 async fn draft_info(zeron: &Zeron, project: Option<&str>) -> Result<Value> {
     let spaces = zeron.spaces().await?;
     let space = project

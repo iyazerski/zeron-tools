@@ -22,7 +22,6 @@ const NO_SPEECH: isize = 1110;
 /// Where System Settings lets the user change their answer.
 const SETTINGS: &str = "Allow zeron-tools in System Settings ▸ Privacy & Security";
 
-/// What a session reports.
 pub enum Heard {
     /// Everything heard since the session started, as text.
     Words(String),
@@ -63,7 +62,6 @@ pub fn authorize(done: impl FnOnce(Allowed) + Send + 'static) {
     }
 }
 
-/// Ask for the microphone, then finish `done`.
 fn microphone(done: Once) {
     // SAFETY: AVFoundation defines the audio media type for the app's life.
     let Some(audio) = (unsafe { AVMediaTypeAudio }) else {
@@ -255,7 +253,6 @@ pub fn join(before: &str, after: &str) -> String {
     }
 }
 
-/// Why dictation can't run, if it can't.
 type Allowed = Result<(), String>;
 type Callback = Box<dyn FnOnce(Allowed) + Send>;
 
@@ -269,7 +266,6 @@ impl Once {
         Self(Arc::new(Mutex::new(Some(Box::new(f)))))
     }
 
-    /// Run the callback, if it hasn't run yet.
     fn call(&self, allowed: Allowed) {
         let f = self
             .0

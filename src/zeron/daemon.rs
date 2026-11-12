@@ -1,9 +1,6 @@
 //! Zeron's engine as a launchd service of its own, through Zeron's `daemon`
-//! command, so it runs without the app: it starts at login, restarts after
-//! a crash, and once the app updates itself, the engine restarts into the
-//! new version as soon as no agent works (`crates/update` `SupersededRestart`).
-//! The app, when opened, connects to it instead of starting its own engine
-//! (`crates/ui/src/state.rs` `attach_to_daemon`).
+//! command, so it runs without the app. The app, when opened, connects to it
+//! instead of starting its own engine.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,16 +13,13 @@ use super::{Zeron, methods};
 
 /// The service's launchd label, as Zeron's `daemon` command names it.
 const LABEL: &str = "sh.zeron.app";
-/// The app's bundle id, to quit it.
 const APP_ID: &str = "sh.zeron.app";
-/// The engine executable in the app bundle.
 const ENGINE: &str = "Zeron.app/Contents/MacOS/Zeron Engine";
 /// Quits an app by bundle id, force-quitting it if it hangs.
 const QUIT_SCRIPT: &str = include_str!("quit.js");
 /// How long the app's engine may take to drain and let go of the data dir.
 const STOP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Whether the service is installed.
 pub fn installed() -> bool {
     plist_path().exists()
 }
@@ -71,7 +65,6 @@ pub async fn install(zeron: &Zeron, data_dir: &Path, port: u16) -> Result<()> {
     .await
 }
 
-/// Start the service if it's stopped.
 pub async fn start() -> Result<()> {
     require_installed()?;
     daemon(&["start"], &[]).await
@@ -114,7 +107,6 @@ async fn daemon(args: &[&str], env: &[(&str, String)]) -> Result<()> {
     Ok(())
 }
 
-/// The installed app's engine executable.
 fn engine_binary() -> Result<PathBuf> {
     [
         PathBuf::from("/Applications"),
@@ -132,7 +124,6 @@ fn plist_path() -> PathBuf {
         .join(format!("{LABEL}.plist"))
 }
 
-/// Quit the app, force-quitting it if it hangs.
 async fn quit_app() -> Result<()> {
     let out = tokio::process::Command::new("/usr/bin/osascript")
         .args(["-l", "JavaScript", "-e", QUIT_SCRIPT, APP_ID])

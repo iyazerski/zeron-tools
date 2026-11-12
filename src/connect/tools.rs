@@ -1,10 +1,8 @@
 //! The Zeron tools the phone app calls, run against the engine's IPC.
 //!
-//! They mirror Zeron's own MCP tools of the same names
-//! (`crates/mcp/src/tools.rs`) and answer in the same shapes, cut to what
-//! the app uses: no waiting on turns (the app polls), no other devices, and
-//! new chats are always standalone. The raw IPC also opens terminals and
-//! writes files; only the [`Tool`]s are reachable from the phone.
+//! They mirror Zeron's MCP tools of the same names and answer in the same
+//! shapes, cut to what the app uses. Only the [`Tool`]s are reachable from
+//! the phone.
 
 use std::fmt;
 use std::str::FromStr;
@@ -78,7 +76,6 @@ impl fmt::Display for Unavailable {
 
 impl std::error::Error for Unavailable {}
 
-/// Run `tool` with its JSON `args`.
 pub async fn call(zeron: &Zeron, tool: Tool, args: Value) -> Result<Value> {
     match tool {
         Tool::ListChats => list_chats(zeron, parse_args(args)?).await,
@@ -93,7 +90,6 @@ pub async fn call(zeron: &Zeron, tool: Tool, args: Value) -> Result<Value> {
     }
 }
 
-/// Parse a call's JSON arguments into the tool's argument struct.
 pub(super) fn parse_args<T: DeserializeOwned>(args: Value) -> Result<T> {
     serde_json::from_value(args).context("invalid arguments")
 }
@@ -272,7 +268,6 @@ async fn create_chat(zeron: &Zeron, args: CreateChatArgs) -> Result<Value> {
     Ok(result)
 }
 
-/// The `createChat` mutation that writes `chat`.
 fn create_op(chat: &Chat) -> Value {
     let mut op = json!({
         "op": "createChat",
@@ -385,7 +380,6 @@ async fn deliver(
     Ok(json!({ "delivery": delivery, "id": id, "chatStatusAtSend": status.label() }))
 }
 
-/// The request of a new turn that sends `text` with the chat's settings.
 fn run_request(
     chat: &Chat,
     space: Option<&Space>,
@@ -515,7 +509,6 @@ pub enum ChatStatus {
 }
 
 impl ChatStatus {
-    /// The status of the chat `session` speaks for, at `now`.
     pub(super) fn of(session: Option<&Session>, now: DateTime<Utc>) -> Self {
         let Some(session) = session else {
             return Self::Idle;

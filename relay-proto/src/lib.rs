@@ -45,7 +45,6 @@ pub enum Up {
     Power { battery: Option<Battery> },
 }
 
-/// A Mac's battery charge and whether it's plugged in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Battery {
@@ -60,7 +59,6 @@ pub enum BatteryState {
     Charging,
     /// On power, but not charging (full, or holding its charge).
     Plugged,
-    /// Running on the battery.
     Unplugged,
 }
 
@@ -108,7 +106,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// The wire shapes both sides rely on.
     #[test]
     fn messages_keep_their_wire_shape() {
         let reply = Up::Reply {

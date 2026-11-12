@@ -3,8 +3,8 @@
 //! the latest turn started from, so a turn is captured when it ends and
 //! saved under the user message that started it.
 //!
-//! Both the Companion and `connect` write here; a write replaces the file
-//! whole, so the two capturing one turn at once only repeat the work.
+//! Both the Companion and `connect` write here. A write replaces the file
+//! whole, so two capturing one turn at once only repeat the work.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -49,7 +49,6 @@ pub struct Turns {
 }
 
 impl Turns {
-    /// The store under Zeron's `data_dir`.
     pub fn new(data_dir: &Path) -> Self {
         Self {
             dir: data_dir.join("zeron-tools-turns"),
@@ -57,19 +56,16 @@ impl Turns {
         }
     }
 
-    /// The diff kept for chat `chat`'s turn `turn`, if any.
     pub async fn get(&self, chat: &str, turn: &str) -> Result<Option<CheckoutDiff>> {
         let path = self.path(chat, turn)?;
         blocking(move || json_file::load(&path)).await
     }
 
-    /// Whether a diff is kept for chat `chat`'s turn `turn`.
     pub async fn has(&self, chat: &str, turn: &str) -> Result<bool> {
         let path = self.path(chat, turn)?;
         blocking(move || Ok(path.exists())).await
     }
 
-    /// The counts of chat `chat`'s kept turns, by turn.
     pub async fn counts(&self, chat: &str) -> Result<HashMap<String, Counts>> {
         let dir = self.dir.join(id(chat)?);
         let kept: Vec<(String, PathBuf)> = blocking(move || {

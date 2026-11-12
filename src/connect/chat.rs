@@ -1,10 +1,6 @@
-//! The chat screen's state in one call: the chat (like `list_chats` rows)
-//! and its latest messages (like Zeron's `read_chat`), from one read of the
-//! transcript.
-//!
-//! The phone polls this about once a second while a turn runs. Unlike
-//! `read_chat`, each message keeps its prose, tool calls, and errors in
-//! transcript order, as the desktop shows them.
+//! The chat screen's state in one call: the chat and its latest messages.
+//! Unlike Zeron's `read_chat`, each message keeps its prose, tool calls, and
+//! errors in transcript order, as the desktop shows them.
 
 use anyhow::Result;
 use chrono::Utc;
@@ -21,25 +17,16 @@ use crate::zeron::{Zeron, session_for};
 const DEFAULT_LIMIT: usize = 40;
 const MAX_LIMIT: usize = 500;
 
-/// The `chat_view` arguments.
 #[derive(Debug, Deserialize)]
 pub struct ViewArgs {
-    /// The chat's id or id prefix.
     chat: String,
-    /// How many of the latest messages to return.
     limit: Option<usize>,
     /// The `version` the caller already shows.
     known: Option<String>,
 }
 
-/// Return `{chat, version, read}` for the chat.
-///
-/// `version` changes when the transcript moves (its length, last activity,
-/// or status) or `limit` changes. `read` holds the last `limit` messages,
-/// `total`, `olderRemaining`, `pendingInput`, and `turnChanges`, the kept
-/// turns that changed files ([`changes::list`]); it is `null` when the caller passes
-/// the `known` version and the chat isn't working, since then nothing it
-/// shows can have changed.
+/// Return `{chat, version, read}` for the chat. `read` is `null` when the
+/// caller already shows this `version` and the chat isn't working.
 pub async fn view(zeron: &Zeron, turns: &Turns, args: ViewArgs) -> Result<Value> {
     let chat = zeron.chat(&args.chat).await?;
     let limit = args.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -118,7 +105,6 @@ fn window(all: &[transcript::Message], limit: usize) -> Value {
     })
 }
 
-/// A message's parts, in transcript order.
 fn parts<'a>(all: impl Iterator<Item = &'a Part>) -> Vec<Shown<'a>> {
     let mut shown = Vec::new();
     for part in all {

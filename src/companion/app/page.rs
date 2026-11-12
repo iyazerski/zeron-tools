@@ -54,7 +54,6 @@ pub enum Voice {
 }
 
 impl Voice {
-    /// The dictation listening now, if one is.
     pub fn listening(&self) -> Option<&Dictating> {
         match self {
             Self::Listening(d) => Some(d),
@@ -63,7 +62,6 @@ impl Voice {
     }
 }
 
-/// Dictation into the composer.
 pub struct Dictating {
     pub id: u64,
     pub session: Listening,
@@ -85,7 +83,6 @@ pub enum Target {
     Existing(Existing),
 }
 
-/// A created chat and its transcript.
 pub struct Existing {
     pub id: String,
     pub chat: Option<Chat>,
@@ -113,7 +110,6 @@ pub struct Existing {
     pub changes_of: String,
 }
 
-/// The latest turn's diff page.
 pub enum Changes {
     Loading,
     Ready {
@@ -124,11 +120,9 @@ pub enum Changes {
     Failed(String),
 }
 
-/// What's open over the page.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
     Closed,
-    /// The chat's menu.
     Menu,
     Sheet(Sheet),
 }
@@ -159,7 +153,6 @@ pub enum SkillList {
 }
 
 impl SkillList {
-    /// The loaded skills; none while loading or after a failure.
     pub fn ready(&self) -> &[Skill] {
         match self {
             Self::Ready(skills) => skills,
@@ -168,7 +161,6 @@ impl SkillList {
     }
 }
 
-/// The answers being given to the agent's questions.
 pub struct QuestionForm {
     pub input: PendingInput,
     pub picked: Vec<BTreeSet<String>>,
@@ -222,14 +214,12 @@ impl ChatPage {
         }
     }
 
-    /// Whether the chat's agent is running a turn.
     pub fn is_working(&self) -> bool {
         self.existing()
             .and_then(|c| c.chat.as_ref())
             .is_some_and(Chat::is_working)
     }
 
-    /// A fresh id for an attached image.
     pub(super) fn attached_id(&mut self) -> u64 {
         self.next_attached += 1;
         self.next_attached
@@ -311,7 +301,6 @@ impl Existing {
         self.poll.expire();
     }
 
-    /// Show `PAGE` more earlier messages.
     pub(super) fn load_earlier(&mut self) {
         self.limit += PAGE;
         self.reload();

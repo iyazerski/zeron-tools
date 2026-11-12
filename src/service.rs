@@ -11,7 +11,6 @@ use serde::Serialize;
 pub const CONNECT: Service = Service("connect");
 pub const COMPANION: Service = Service("companion");
 
-/// A zeron-tools command that can run in the background, by its name.
 #[derive(Debug, Clone, Copy)]
 pub struct Service(&'static str);
 
@@ -144,7 +143,6 @@ impl Service {
             .with_context(|| format!("locking {}", path.display()))
     }
 
-    /// The agent's launchd job.
     fn target(self) -> String {
         format!("{}/{}", domain(), self.label())
     }

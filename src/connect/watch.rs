@@ -1,10 +1,6 @@
 //! Follow chat statuses: capture each turn's changes as it ends, and report
 //! chats that finish, need an answer, or fail, so the relay can notify the
 //! phone.
-//!
-//! It follows the engine's `WatchSessions` stream and reports a status
-//! change. By default it stays quiet while the Mac is in use, since then
-//! you're at the Mac, not on the phone.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -29,10 +25,8 @@ const AWAY_AFTER: Duration = Duration::from_secs(120);
 const RETRY: Duration = Duration::from_secs(5);
 /// How long building one notice (reading its chat) may take.
 const NOTICE_TIMEOUT: Duration = Duration::from_secs(15);
-/// The most characters in a notice's body.
 const BODY_CHARS: usize = 240;
 
-/// When to report chats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyWhen {
     /// Only while nobody uses the Mac: at it, you see the chat yourself.
@@ -42,7 +36,6 @@ pub enum NotifyWhen {
 }
 
 impl NotifyWhen {
-    /// Whether a notice may go out now.
     fn allows_now(self) -> bool {
         match self {
             Self::Always => true,
@@ -51,7 +44,6 @@ impl NotifyWhen {
     }
 }
 
-/// Where notices go, and when they may.
 pub struct Notices {
     pub to: mpsc::Sender<Notice>,
     pub when: NotifyWhen,
@@ -80,7 +72,6 @@ pub async fn run(
     }
 }
 
-/// Follow one `WatchSessions` stream until it ends.
 async fn watch_once(
     zeron: &Arc<Zeron>,
     turns: &Arc<Turns>,
@@ -120,8 +111,6 @@ async fn watch_once(
 /// Sessions by chat and device id.
 type Sessions = HashMap<(String, String), Session>;
 
-/// The notices the move from `previous` to `current` sessions deserves, as
-/// chat ids and kinds.
 fn changes(previous: &Sessions, current: &Sessions) -> Vec<(String, NoticeKind)> {
     current
         .iter()

@@ -15,7 +15,6 @@ use rune_kit::{Toast, ToastRegion};
 
 use super::app::{ChatPage, Overlay, Page, State, ToastKind};
 
-/// The window's corner radius.
 pub const CORNER: f32 = 14.0;
 
 pub fn view(s: &State, cx: &mut Cx<State>) -> El {

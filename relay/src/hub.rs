@@ -32,7 +32,6 @@ const CALL_QUEUE: usize = 64;
 /// Calls waiting for a Mac's reply, by call id.
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
 
-/// One Mac's live connection.
 struct Link {
     /// Tells this connection apart from a newer one for the same Mac.
     conn: u64,
@@ -63,7 +62,6 @@ pub struct Hub {
 }
 
 impl Hub {
-    /// Whether `machine` is connected, and what it reported.
     pub fn status(&self, machine: &str) -> Status {
         match self.lock().get(machine) {
             Some(link) => Status {
@@ -76,7 +74,6 @@ impl Hub {
         }
     }
 
-    /// Run `tool` on `machine` and return its result.
     pub async fn call(&self, machine: &str, tool: String, args: Value) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (calls, pending) = {
@@ -109,7 +106,6 @@ impl Hub {
             .unwrap_or_else(|_| Err("this Mac didn't answer in time".into()))
     }
 
-    /// Disconnect `machine`, if it's connected (after it was removed).
     pub fn drop_machine(&self, machine: &str) {
         self.lock().remove(machine);
     }
@@ -210,7 +206,6 @@ impl Hub {
         result
     }
 
-    /// Handle one message from connection `conn` of `machine`.
     fn receive(
         &self,
         machine: &Machine,
@@ -341,7 +336,6 @@ mod tests {
         socket
     }
 
-    /// A call waiting on a Mac fails as soon as its connection drops.
     #[tokio::test]
     async fn calls_fail_at_once_when_the_mac_disconnects() {
         let hub = Arc::new(Hub::default());
@@ -369,7 +363,6 @@ mod tests {
         assert!(!hub.status("m").online);
     }
 
-    /// A Mac removed after its token was checked doesn't come online.
     #[tokio::test]
     async fn a_mac_removed_while_connecting_is_turned_away() {
         let hub = Arc::new(Hub::default());

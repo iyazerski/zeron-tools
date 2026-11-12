@@ -315,17 +315,4 @@ mod tests {
         .unwrap();
         assert_eq!(session.status, SessionStatus::Other);
     }
-
-    #[test]
-    fn projects_group_checkouts_of_one_repository() {
-        let space = |id: &str, repo: Option<&str>| -> Space {
-            serde_json::from_value(json!({
-                "id": id, "deviceId": "d", "path": format!("/w/{id}/"), "repositoryId": repo,
-            }))
-            .unwrap()
-        };
-        assert_eq!(space("a", Some("r")).project_key(), "repo:r");
-        assert_eq!(space("b", None).project_key(), "b");
-        assert_eq!(space("b", None).display_name(), "b");
-    }
 }

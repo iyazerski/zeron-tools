@@ -48,7 +48,6 @@ pub struct Ipc {
     conn: Mutex<Option<Arc<Conn>>>,
 }
 
-/// Why a call or stream failed.
 #[derive(Debug)]
 enum CallError {
     /// The connection closed before the request went out; a new one may work.
@@ -62,7 +61,6 @@ enum CallError {
 }
 
 impl CallError {
-    /// The error to report for a failed `method`.
     fn into_error(self, method: &str) -> anyhow::Error {
         match self {
             Self::NotSent => anyhow!("{method}: the connection to Zeron closed"),
@@ -95,8 +93,7 @@ impl fmt::Display for EngineError {
 impl std::error::Error for EngineError {}
 
 impl Ipc {
-    /// Return a client for `url` that authenticates with the token in
-    /// `token`; nothing connects until the first call.
+    /// Nothing connects until the first call.
     pub fn new(url: String, token: PathBuf) -> Self {
         Self {
             url,
@@ -130,7 +127,6 @@ impl Ipc {
         }
     }
 
-    /// The open connection, dialing a new one if there is none or it closed.
     async fn conn(&self) -> Result<Arc<Conn>> {
         let mut slot = self.conn.lock().await;
         if let Some(conn) = slot.as_ref().filter(|c| !c.out.is_closed()) {
@@ -165,7 +161,6 @@ struct Conn {
     next: AtomicU64,
 }
 
-/// A frame for the engine, with the call it carries, if any.
 struct Outgoing {
     call: Option<u64>,
     text: String,
@@ -184,7 +179,6 @@ struct Pending {
     streams: HashMap<u64, StreamSlot>,
 }
 
-/// Where a stream's items go, and the flag that says it fell behind.
 struct StreamSlot {
     tx: mpsc::Sender<Result<Value, CallError>>,
     lagged: Arc<AtomicBool>,
@@ -244,7 +238,6 @@ impl Conn {
         rx.await.unwrap_or(Err(CallError::Lost))
     }
 
-    /// Start a stream; `None` if the connection is closed.
     fn subscribe(self: &Arc<Self>, method: &str, params: &Value) -> Option<Subscription> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(STREAM_BUFFER);
@@ -291,7 +284,6 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    /// Return the next item, or `None` once the stream ended.
     pub async fn next(&mut self) -> Result<Option<Value>> {
         match self.rx.recv().await {
             Some(item) => item.map(Some).map_err(|e| e.into_error(&self.method)),
@@ -320,7 +312,6 @@ async fn pump(
     pending: Arc<StdMutex<Pending>>,
 ) {
     let (mut sink, mut stream) = socket.split();
-    // The call whose frame failed to go out, if one did.
     let mut unsent = None;
     loop {
         tokio::select! {
@@ -370,7 +361,6 @@ async fn pump(
     }
 }
 
-/// An engine frame for the call or stream `id`.
 #[derive(Deserialize)]
 struct ServerFrame {
     id: u64,
@@ -457,7 +447,6 @@ mod tests {
 
     const TOKEN: &str = "the-token";
 
-    /// Write `token` as an engine would and return its dir and file.
     fn token_file(token: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ipc-token");
@@ -465,12 +454,6 @@ mod tests {
         (dir, path)
     }
 
-    /// Serve one connection like the engine, refusing a handshake without
-    /// `TOKEN` as its bearer: `Echo` answers its params, `Null` answers
-    /// `null`, `Count` streams 1, 2 and ends, `Forever` streams until
-    /// cancelled (then reports it with a `Cancelled` call), `Flood` streams
-    /// more than a stream buffers, `Hang` never answers, `Die` drops the
-    /// connection, and anything else is an unknown method.
     #[expect(
         clippy::result_large_err,
         reason = "tungstenite's handshake callback fixes the error type"
@@ -485,6 +468,8 @@ mod tests {
         Err(refusal)
     }
 
+    /// Serve one connection like the engine, with methods for each case the
+    /// tests cover. `Forever` streams until cancelled, which `Cancelled` reports.
     async fn engine() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
