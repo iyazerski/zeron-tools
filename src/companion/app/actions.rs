@@ -73,6 +73,7 @@ impl State {
                         }
                     }
                     chat.read = Some(read);
+                    chat.file_links.borrow_mut().clear();
                     chat.version = Some(view.version);
                     s.load_thumbs();
                 }
@@ -447,6 +448,26 @@ impl State {
             request_id,
             answers,
         });
+    }
+
+    /// Open a file or folder the transcript names in its default app.
+    pub fn open_path(&mut self, path: String) {
+        self.api.run(
+            move |_| async move {
+                tokio::process::Command::new("open")
+                    .arg(path)
+                    .output()
+                    .await
+            },
+            |s, out, _| match out {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => s.fail(
+                    "Couldn't open the file",
+                    String::from_utf8_lossy(&out.stderr).trim(),
+                ),
+                Err(e) => s.fail("Couldn't open the file", e.to_string()),
+            },
+        );
     }
 
     pub fn open_zeron(&mut self) {

@@ -18,6 +18,8 @@ pub struct Chat {
     pub model: Option<String>,
     pub reasoning: Option<String>,
     pub project: Option<Project>,
+    /// The folder the chat's agent works in.
+    pub cwd: Option<String>,
     pub last_message_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]

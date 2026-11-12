@@ -22,8 +22,8 @@ use super::prefs::Prefs;
 pub use self::attach::Upload;
 pub use self::draft::{Catalog, Config, Draft, Load, Pick};
 pub use self::page::{
-    Changes, ChatPage, Existing, LEVELS_KEPT, Overlay, QuestionForm, Sheet, SkillList, Target,
-    Voice,
+    Changes, ChatPage, Existing, FileLinks, LEVELS_KEPT, Overlay, QuestionForm, Sheet, SkillList,
+    Target, Voice,
 };
 
 /// How often the list refreshes while shown, as on the phone.
@@ -95,7 +95,14 @@ pub struct Toast {
     pub title: String,
     pub body: String,
     pub kind: ToastKind,
-    until: Instant,
+    time: ToastTime,
+}
+
+/// A toast's time left on screen, held while the window is hidden.
+#[derive(Clone, Copy)]
+enum ToastTime {
+    Until(Instant),
+    Held(Duration),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -227,8 +234,24 @@ impl State {
             title: title.to_owned(),
             body,
             kind,
-            until: Instant::now() + TOAST_FOR,
+            time: if self.api.app().is_visible() {
+                ToastTime::Until(Instant::now() + TOAST_FOR)
+            } else {
+                ToastTime::Held(TOAST_FOR)
+            },
         });
+    }
+
+    pub fn visibility_changed(&mut self, shown: bool) {
+        let Some(toast) = &mut self.toast else { return };
+        let now = Instant::now();
+        toast.time = match toast.time {
+            ToastTime::Until(until) if !shown => {
+                ToastTime::Held(until.saturating_duration_since(now))
+            }
+            ToastTime::Held(left) if shown => ToastTime::Until(now + left),
+            time => time,
+        };
     }
 
     /// Show or hide the window; it opens where it was left.
@@ -278,7 +301,7 @@ impl State {
         if self
             .toast
             .as_ref()
-            .is_some_and(|t| Instant::now() >= t.until)
+            .is_some_and(|t| matches!(t.time, ToastTime::Until(until) if Instant::now() >= until))
         {
             self.toast = None;
             changed = true;

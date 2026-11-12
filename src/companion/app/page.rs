@@ -1,7 +1,9 @@
 //! A chat's page: an existing chat, or a new one until its first message
 //! creates it, under the composer they share.
 
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use rune::{Image, TextEdit};
@@ -94,6 +96,7 @@ pub struct Existing {
     pub question: Option<QuestionForm>,
     /// The transcript's images by path, decoded once.
     pub thumbs: HashMap<String, Option<Image>>,
+    pub file_links: FileLinks,
     pub(super) limit: usize,
     /// The transcript version shown; `None` to load it whole.
     pub(super) version: Option<String>,
@@ -109,6 +112,10 @@ pub struct Existing {
     /// The turn the changes page shows: the user message that started it.
     pub changes_of: String,
 }
+
+/// The file each inline code names, by its text, looked up once per transcript
+/// version. The view fills it, as Rune's Markdown asks for links while it draws.
+pub type FileLinks = Rc<RefCell<HashMap<String, Option<String>>>>;
 
 pub enum Changes {
     Loading,
@@ -283,6 +290,7 @@ impl Existing {
             open_groups: HashSet::new(),
             question: None,
             thumbs: HashMap::new(),
+            file_links: FileLinks::default(),
             limit: PAGE,
             version: None,
             poll: Poll::default(),

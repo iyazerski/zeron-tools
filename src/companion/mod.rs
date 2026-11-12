@@ -92,7 +92,8 @@ pub fn run(opts: Opts) -> Result<()> {
                 prefs,
             )
         })
-        .global_shortcut(opts.shortcut, |s, _| s.toggle_window());
+        .global_shortcut(opts.shortcut, |s, _| s.toggle_window())
+        .on_visibility(|s, shown, _| s.visibility_changed(shown));
     eprintln!("companion is running; {} shows it", opts.shortcut);
     rune::run_windows_with_args(RunOptions { accessory: true }, [], move |displays| {
         let options = WindowOptions {

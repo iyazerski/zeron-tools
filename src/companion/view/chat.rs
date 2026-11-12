@@ -337,15 +337,31 @@ fn assistant(page: &Existing, k: &Kit, style: &MarkdownStyle, m: &Message, strea
             Part::Text { text } => {
                 let soft = breaks::breakable(text);
                 let shown = soft.as_deref().unwrap_or(text);
-                let md = Markdown::new(shown.to_owned())
+                let links = page
+                    .chat
+                    .as_ref()
+                    .and_then(|c| c.cwd.as_deref())
+                    .map(|cwd| code::file_links(cwd, &page.file_links));
+                let link = |code: &str| links.as_ref().and_then(|f| f(code));
+                let mut md = Markdown::new(shown.to_owned())
                     .style(style.clone())
-                    .highlights(code::inline_code_marks(k, shown))
+                    .highlights(code::inline_code_marks(k, shown, link))
                     .streaming(streaming && i + 1 == m.parts.len())
                     .selectable(true)
                     // The source with break points would paste broken links.
                     .copy_source(soft.is_none())
-                    .on_link_tx(|_: &mut State, url: &str, tx: &mut Tx| drop(tx.open_url(url)))
-                    .build(k);
+                    .on_link_tx(|s: &mut State, url: &str, tx: &mut Tx| {
+                        // Code links are paths; Rune opens web links only.
+                        if url.starts_with('/') {
+                            s.open_path(url.to_owned());
+                        } else {
+                            drop(tx.open_url(url));
+                        }
+                    });
+                if let Some(links) = links {
+                    md = md.code_link(k.c.text_accent, links);
+                }
+                let md = md.build(k);
                 match soft {
                     Some(_) => col()
                         .w_full()

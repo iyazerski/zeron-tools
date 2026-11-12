@@ -4,6 +4,7 @@
 //! colours.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use pulldown_cmark::{Event, Options, Parser};
@@ -11,6 +12,10 @@ use rune::Color;
 use rune::color::hex;
 use rune_kit::Kit;
 use rune_kit::markdown::{Highlight, MarkdownStyle, Syntax};
+
+use super::breaks::ZWSP;
+use crate::companion::app::FileLinks;
+use crate::paths::home;
 
 /// The Markdown options Rune's Markdown parses with, so source ranges found
 /// here match its own.
@@ -69,12 +74,67 @@ pub fn markdown_style(k: &Kit) -> MarkdownStyle {
 }
 
 /// Colour the inline code of Markdown `src`, as [`rune_kit::Markdown::highlights`] takes it.
-pub fn inline_code_marks(k: &Kit, src: &str) -> Vec<(Range<usize>, Highlight)> {
+/// Code that `link` makes a link keeps the link's colour.
+pub fn inline_code_marks(
+    k: &Kit,
+    src: &str,
+    link: impl Fn(&str) -> Option<String>,
+) -> Vec<(Range<usize>, Highlight)> {
     let color = palette(k)[0].1;
     inline_code(src)
         .into_iter()
+        .filter(|r| link(src[r.clone()].trim_matches('`').trim()).is_none())
         .map(|r| (r, Highlight::new().bg(Color::TRANSPARENT).fg(color)))
         .collect()
+}
+
+/// Link inline code that names a file or folder in `cwd` to its path, as the
+/// desktop links paths that exist. `found` keeps each answer.
+pub fn file_links(
+    cwd: &str,
+    found: &FileLinks,
+) -> impl Fn(&str) -> Option<String> + Clone + 'static {
+    let cwd = expand_home(cwd);
+    let found = found.clone();
+    move |code| {
+        found
+            .borrow_mut()
+            .entry(code.to_owned())
+            .or_insert_with(|| file_link(code, &cwd))
+            .clone()
+    }
+}
+
+/// The absolute path of the file or folder `code` names in `cwd`, if it exists.
+/// `src/main.rs:42:7` names `src/main.rs`.
+fn file_link(code: &str, cwd: &Path) -> Option<String> {
+    let code = code.replace(ZWSP, "");
+    let mut path = code.as_str();
+    for _ in 0..2 {
+        if let Some((head, n)) = path.rsplit_once(':')
+            && !n.is_empty()
+            && n.bytes().all(|b| b.is_ascii_digit())
+        {
+            path = head;
+        }
+    }
+    // Skip code that can't be a path before asking the disk.
+    let pathlike = (path.contains('/') || path.contains('.'))
+        && path.contains(char::is_alphanumeric)
+        && !path.contains(char::is_whitespace)
+        && !path.contains("://");
+    if !pathlike {
+        return None;
+    }
+    let full = cwd.join(expand_home(path));
+    full.exists().then(|| full.to_string_lossy().into_owned())
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/") {
+        Some(rest) => home().join(rest),
+        None => PathBuf::from(path),
+    }
 }
 
 fn palette(k: &Kit) -> &'static [(Syntax, Color)] {
@@ -112,6 +172,31 @@ mod tests {
         for (src, want) in cases {
             let got: Vec<&str> = inline_code(src).into_iter().map(|r| &src[r]).collect();
             assert_eq!(&got, want, "source {src:?}");
+        }
+    }
+
+    #[test]
+    fn links_code_that_names_an_existing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+        let main = dir.path().join("src/main.rs").display().to_string();
+        let cases: &[(&str, Option<&str>)] = &[
+            ("src/main.rs", Some(&main)),
+            ("src/main.rs:42:7", Some(&main)),
+            ("src/\u{200B}main.rs", Some(&main)),
+            (&main, Some(&main)),
+            ("src/lib.rs", None),
+            ("cargo test", None),
+            ("main", None),
+            ("https://x.dev/src", None),
+        ];
+        for (code, want) in cases {
+            assert_eq!(
+                file_link(code, dir.path()).as_deref(),
+                *want,
+                "code {code:?}"
+            );
         }
     }
 }
