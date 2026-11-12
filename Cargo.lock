@@ -7144,7 +7144,7 @@ dependencies = [
 
 [[package]]
 name = "zeron-tools"
-version = "0.19.9"
+version = "0.19.10"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
